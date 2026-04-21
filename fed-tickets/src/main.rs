@@ -1,4 +1,6 @@
-use fed_tickets::{activities, groups};
+pub mod activities;
+pub mod groups;
+
 use poem::{Route, Server, listener::TcpListener};
 use poem_openapi::OpenApiService;
 
