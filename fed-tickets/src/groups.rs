@@ -1,7 +1,11 @@
 use poem_openapi::{ApiResponse, Object, OpenApi, payload::Json};
 
-#[derive(Copy, Clone, Debug)]
-pub struct Router;
+use crate::context::Context;
+
+#[derive(Clone, Debug)]
+pub struct Router {
+    pub context: Context,
+}
 
 #[derive(Debug, Object)]
 pub struct Group {

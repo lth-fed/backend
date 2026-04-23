@@ -1,7 +1,11 @@
 use poem_openapi::OpenApi;
 
-#[derive(Copy, Clone, Debug)]
-pub struct Router;
+use crate::context::Context;
+
+#[derive(Clone, Debug)]
+pub struct Router {
+    pub context: Context,
+}
 
 #[OpenApi]
 impl Router {
