@@ -10,28 +10,32 @@ create table groups (
     description jsonb not null,
     logo_id uuid not null references images(id),
     type group_type not null,
-    deleted boolean not null
+    deleted boolean not null,
+    unique (name, parent_id)
 );
 
 -- members from which other groups can ask to join this group?
 create table groups_ask_to_join (
     id uuid primary key,
     target_id uuid not null references groups(id),
-    joiner_id uuid not null references groups(id)
+    joiner_id uuid not null references groups(id),
+    unique (target_id, joiner_id)
 );
 
 -- needs to be validate in backend that user is allowed before creating this
 create table group_member_requests (
     id uuid primary key,
     member_id uuid not null references users(id),
-    group_id uuid not null references groups(id)
+    group_id uuid not null references groups(id),
+    unique (group_id, member_id)
 );
 
 create table group_members (
     id uuid primary key,
     member_id uuid not null references users(id),
     group_id uuid not null references groups(id),
-    is_admin boolean not null
+    is_admin boolean not null,
+    unique (group_id, member_id, is_admin)
 );
 
 create type notification_level as enum ('none', 'personalized', 'all');
@@ -40,5 +44,6 @@ create table group_notifications (
     user_id uuid not null references users(id),
     group_id uuid not null references groups(id),
     --
-    level notification_level not null
+    level notification_level not null,
+    unique (group_id, user_id)
 );
