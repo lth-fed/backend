@@ -9,6 +9,7 @@ create table activities (
     location text not null,
     time tsrange not null,
     image_id uuid not null references images(id),
+    is_hidden boolean not null,
     max_tickets integer not null check (max_tickets > 0) -- default MAX_INT
 );
 
