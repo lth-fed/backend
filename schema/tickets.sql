@@ -8,8 +8,7 @@ create table ticket_kinds (
     --
     name jsonb not null,
     -- in ören
-    price bigint not null check (price >= 0),
-    currency text not null,
+    price money not null check (price >= 0),
     purchasing_available tsrange not null,
     max_tickets integer not null check (max_tickets > 0), -- default MAX_INT
     min_tickets integer not null check (min_tickets > 0), -- default MAX_INT
@@ -50,8 +49,7 @@ create table ticket_addon_options (
     idx integer not null,
     --
     name jsonb not null,
-    price bigint not null check (price >= 0),
-    currency text not null,
+    price money not null check (price >= 0),
     -- for the books, if e.g. 20SEK went to spirits, 15SEK to wine etc.
     -- add price here & category below. The index of the item maps it to it's price / category
 
