@@ -15,7 +15,7 @@ create table activities (
 
 -- co-hosts of event. should not include activities.creator_id
 create table activity_hosts (
-    id uuid primary key,
     activity_id uuid not null references activities(id),
-    group_id uuid not null references groups(id)
+    group_id uuid not null references groups(id),
+    primary key (activity_id, group_id)
 );

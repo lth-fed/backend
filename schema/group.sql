@@ -16,34 +16,30 @@ create table groups (
 
 -- members from which other groups can ask to join this group?
 create table groups_ask_to_join (
-    id uuid primary key,
     target_id uuid not null references groups(id),
     joiner_id uuid not null references groups(id),
-    unique (target_id, joiner_id)
+    primary key (target_id, joiner_id)
 );
 
 -- needs to be validate in backend that user is allowed before creating this
 create table group_member_requests (
-    id uuid primary key,
     member_id uuid not null references users(id),
     group_id uuid not null references groups(id),
-    unique (group_id, member_id)
+    primary key (group_id, member_id)
 );
 
 create table group_members (
-    id uuid primary key,
     member_id uuid not null references users(id),
     group_id uuid not null references groups(id),
     is_admin boolean not null,
-    unique (group_id, member_id, is_admin)
+    primary key (group_id, member_id, is_admin)
 );
 
 create type notification_level as enum ('none', 'personalized', 'all');
 create table group_notifications (
-    id uuid primary key,
     user_id uuid not null references users(id),
     group_id uuid not null references groups(id),
     --
     level notification_level not null,
-    unique (group_id, user_id)
+    primary key (group_id, user_id)
 );

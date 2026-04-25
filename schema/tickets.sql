@@ -25,10 +25,9 @@ create table ticket_kinds (
 );
 -- which groups are allowed to buy this ticket kind
 create table ticket_kind_allowed_groups (
-    id uuid primary key,
     ticket_kind_id uuid not null references ticket_kinds(id),
     group_id uuid not null references groups(id),
-    unique (group_id, ticket_kind_id)
+    primary key (group_id, ticket_kind_id)
 );
 -- these are examples for how this table can be used:
 -- matpref: options tom, has_text_field = true, required= false
