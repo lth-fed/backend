@@ -12,8 +12,6 @@ create table ticket_kinds (
     purchasing_available tsrange not null,
     max_tickets integer not null check (max_tickets > 0), -- default MAX_INT
     min_tickets integer not null check (min_tickets > 0), -- default MAX_INT
-    purchased_tickets integer not null check (purchased_tickets >= 0),
-    reserved_tickets integer not null check (reserved_tickets >= 0),
     -- to disable, make the range empty
     -- to allow transfer without bounds, just set this to a REALLY long interval
     allow_transfer_ticket tsrange not null,
