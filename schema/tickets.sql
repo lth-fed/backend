@@ -79,6 +79,8 @@ create table ticket_queuers (
 -- then pop the user with the best placement & converts it into a reservation & decrements available
 -- tickets (transaction)
 --
+-- I HAVE NOT VALIDATED THAT THINGS WILL BE CONSISTENT IF THERE ARE SEVERAL WORKERS PER TICKET_KIND
+--
 -- If there are no reservations & no available tickets, clear this table and (notify users?) and stop worker
 -- Upon server startup, check if there are any people in this queue, for every ticket_kind, and if there is,
 --     start the worker.
