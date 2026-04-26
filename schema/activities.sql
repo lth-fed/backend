@@ -1,3 +1,14 @@
+-- Any number of these attributes can be null
+create type location as (
+    -- if you want to insert just one string, set it under e.g. "generic" here
+    -- (since the lang code tries to find first the string for the chosen language,
+    -- then english, then swedish, then the first in the table, which would be "generic")
+    name jsonb,
+    directions jsonb,
+    coordinate_wgs84 point,
+    url text
+);
+
 create table activities (
     id uuid primary key,
     -- has to be user with email
@@ -6,7 +17,7 @@ create table activities (
     --
     title jsonb not null,
     description jsonb not null,
-    location text not null,
+    location location not null,
     time tsrange not null,
     image_id uuid not null references images(id),
     is_hidden boolean not null,
