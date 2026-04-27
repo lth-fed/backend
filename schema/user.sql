@@ -8,6 +8,6 @@ create table users (
     -- GDPR remove all accounts older than 2 years after this: this is a GDPR requirement
     latest_refresh timestamp not null,
     -- don't remove name when becoming inactive!
-    is_active boolean not null
+    inactive_since timestamp
     -- constraint no_name_when_deleted check ((not is_active) and name = null or is_active and name != null)
 );
