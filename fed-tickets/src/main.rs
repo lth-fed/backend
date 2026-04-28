@@ -2,16 +2,18 @@ pub mod activities;
 pub mod context;
 pub mod groups;
 
-use color_eyre::eyre::Context;
+use color_eyre::eyre::Context as _;
 use poem::{Route, Server, listener::TcpListener};
 use poem_openapi::OpenApiService;
-use sqlx::migrate::MigrateDatabase;
+use sqlx::migrate::MigrateDatabase as _;
 use sqlx::Postgres;
 use sqlx::postgres::PgPoolOptions;
 
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
-    let _ = dotenvy::dotenv();
+    drop(dotenvy::dotenv());
+
+    tracing_subscriber::fmt().init();
 
     let db_url = std::env::var("DATABASE_URL").wrap_err("DATABASE_URL not set")?;
     if !Postgres::database_exists(&db_url).await? {
