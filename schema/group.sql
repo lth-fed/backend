@@ -1,17 +1,12 @@
-create type group_type as enum ('private', 'exclusive');
 create table groups (
-    id uuid primary key,
-    parent_id uuid references groups(id),
-    -- not source of truth, this is a cached value
-    -- see https://github.com/lth-fed/issues/issues/4#issuecomment-4296352880
-    exclusive_top_parent_id uuid not null references groups(id),
+    admin_path ltree primary key,
+    limit_membership_visibility boolean not null,
     --
     name jsonb not null,
     description jsonb not null,
     logo_id uuid not null references images(id),
     type group_type not null,
     deleted boolean not null,
-    unique (name, parent_id)
 );
 
 -- members from which other groups can ask to join this group?
