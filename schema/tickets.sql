@@ -12,6 +12,10 @@ create table ticket_kinds (
     purchasing_available tsrange not null,
     max_tickets integer not null check (max_tickets > 0), -- default MAX_INT
     min_tickets integer not null check (min_tickets > 0), -- default MAX_INT
+    -- we need this as a lock so we don't make too many
+    -- https://github.com/lth-fed/backend/pull/7#discussion_r3145792223
+    -- not needed for purchased tickets since reserved tickets are converted 1:1 to purchased ones
+    reserved_tickets integer not null check (reserved_tickets >= 0 and reserved_tickets <= max_tickets),
     -- to disable, make the range empty
     -- to allow transfer without bounds, just set this to a REALLY long interval
     allow_transfer_ticket tsrange not null,
