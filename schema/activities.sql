@@ -30,3 +30,9 @@ create table activity_hosts (
     group_id uuid not null references groups(id),
     primary key (activity_id, group_id)
 );
+-- invites to be `activity_hosts`
+create table activity_host_invites (
+    activity_id uuid not null references activities(id),
+    group_id uuid not null references groups(id),
+    primary key (activity_id, group_id)
+);
