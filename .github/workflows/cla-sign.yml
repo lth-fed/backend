@@ -6,7 +6,7 @@ on:
 
 jobs:
   sign:
-    uses: lth-fed/hooks/.github/workflows/cla-sign.yml@main
+    uses: lth-fed/hooks/.github/workflows/cla-sign.yml@callable-workflows
     permissions:
       contents: write
       actions: write

@@ -6,7 +6,7 @@ on:
 
 jobs:
   check-commits:
-    uses: lth-fed/hooks/.github/workflows/commit-convention.yml@main
+    uses: lth-fed/hooks/.github/workflows/commit-convention.yml@callable-workflows
     permissions:
       contents: read
       pull-requests: write

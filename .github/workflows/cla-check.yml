@@ -6,7 +6,7 @@ on:
 
 jobs:
   cla-check:
-    uses: lth-fed/hooks/.github/workflows/cla-check.yml@main
+    uses: lth-fed/hooks/.github/workflows/cla-check.yml@callable-workflows
     permissions:
       contents: read
       pull-requests: write
