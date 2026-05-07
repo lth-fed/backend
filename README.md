@@ -7,3 +7,7 @@ We glue Rust together with Postgres using [SQLx](https://github.com/launchbadge/
 To spin up a local Postgres instance, run `docker compose up -d`. The connection url, `DATABASE_URL`, is specified in `.env` and used by both the backend and the cli. It _should_ work out of the box.
 
 The database will be automatically initialized when you start the backend.
+
+## Auth
+
+The environment variable `TESTING` (at compile time!) can be set to `true` or `yes`, which makes the `User` extractor return `lund-university:aa0000bb-s`.

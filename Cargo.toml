@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["fed-tickets"]
+members = ["fed-auth-verifier","fed-tickets"]
 
 [workspace.lints.rust]
 ambiguous_negative_literals = "deny"
@@ -58,7 +58,7 @@ renamed_function_params = "deny"
 same_name_method = "deny"
 self_named_module_files = "deny"
 semicolon_inside_block = "deny"
-single_char_lifetime_names = "deny"
+#single_char_lifetime_names = "deny"
 str_to_string = "deny"
 tests_outside_test_module = "deny"
 todo = "deny"
