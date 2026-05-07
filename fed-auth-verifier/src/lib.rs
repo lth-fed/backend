@@ -13,7 +13,7 @@ thread_local! {
     static VALIDATION: LazyCell<Validation> = LazyCell::new(|| {
         let mut validation = Validation::new(Algorithm::EdDSA);
         validation.validate_nbf = true;
-        validation.set_audience(&["teknologappen-auth"]);
+        validation.set_audience(&["teknologappen.se"]);
         validation
     });
 }

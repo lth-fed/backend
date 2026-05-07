@@ -6,7 +6,7 @@ create table groups (
     description jsonb not null,
     logo_id uuid not null references images(id),
     type group_type not null,
-    deleted boolean not null,
+    deleted boolean not null
 );
 
 -- members from which other groups can ask to join this group?
