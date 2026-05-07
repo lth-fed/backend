@@ -1,8 +1,11 @@
 pub mod activities;
 pub mod context;
 pub mod groups;
+<<<<<<< HEAD
 pub mod healthcheck;
+=======
 pub mod seed;
+>>>>>>> df4c550 ([DB] (Update) Seed database with primitive user)
 
 use std::path::PathBuf;
 
