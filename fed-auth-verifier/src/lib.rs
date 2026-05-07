@@ -17,7 +17,10 @@ thread_local! {
         validation
     });
 }
-const IS_TESTING: Option<&str> = option_env!("TESTING");
+const TESTING: Option<&str> = option_env!("TESTING");
+fn is_testing() -> bool {
+    matches!(TESTING, Some("true" | "yes" | "1"))
+}
 
 #[derive(Deserialize)]
 struct Claims {
@@ -40,7 +43,7 @@ impl<'a> FromRequest<'a> for User {
         req: &'a poem::Request,
         _body: &mut poem::RequestBody,
     ) -> poem::Result<Self> {
-        if IS_TESTING == Some("true") || IS_TESTING == Some("yes") {
+        if is_testing() {
             return Ok(Self {
                 id: "lund-university:aa0000bb-s".to_owned(),
             });
