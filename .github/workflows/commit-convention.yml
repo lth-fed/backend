@@ -1,12 +1,12 @@
-name: CLA Check
+name: Commit Convention
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
 
 jobs:
-  cla-check:
-    uses: lth-fed/hooks/.github/workflows/cla-check.yml@callable-workflows
+  check-commits:
+    uses: lth-fed/hooks/.github/workflows/commit-convention.yml@callable-workflows
     permissions:
       contents: read
       pull-requests: write
