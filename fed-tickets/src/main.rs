@@ -1,6 +1,7 @@
 pub mod activities;
 pub mod context;
 pub mod groups;
+pub mod healthcheck;
 
 use std::path::PathBuf;
 
@@ -37,7 +38,12 @@ async fn main() -> color_eyre::Result<()> {
             activities::Router {
                 context: context.clone(),
             },
-            groups::Router { context },
+            groups::Router {
+                context: context.clone(),
+            },
+            healthcheck::Router {
+                context: context.clone(),
+            },
         ),
         env!("CARGO_PKG_NAME"),
         env!("CARGO_PKG_VERSION"),
