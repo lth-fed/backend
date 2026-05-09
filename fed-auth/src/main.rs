@@ -1,6 +1,9 @@
 #![allow(clippy::unused_async, reason = "OpenAPI requires async handlers")]
 use std::path::PathBuf;
 
+// just here for when i'll start using samael, wanted to test CI & such:)
+use samael as _;
+
 use base64::Engine as _;
 use color_eyre::{Section as _, eyre::Context as _};
 use ed25519_dalek::pkcs8::{DecodePrivateKey as _, EncodePublicKey as _};
