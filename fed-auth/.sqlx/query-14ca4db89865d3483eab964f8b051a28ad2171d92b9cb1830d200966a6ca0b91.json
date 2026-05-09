@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from auth_refresh_tokens where refresh_token = $1 and domain = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "14ca4db89865d3483eab964f8b051a28ad2171d92b9cb1830d200966a6ca0b91"
+}
