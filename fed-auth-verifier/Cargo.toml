@@ -1,5 +1,6 @@
 [package]
 name = "fed-auth-verifier"
+authors = ["Erik Davidsson <fed@icelk.dev>"]
 version = "0.1.0"
 edition = "2024"
 

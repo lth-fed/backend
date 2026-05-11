@@ -6,19 +6,20 @@ edition = "2024"
 
 [dependencies]
 base64 = "0.22.1"
-color-eyre = "0.6.5"
-dotenvy = "0.15.7"
+color-eyre.workspace = true
+dotenvy.workspace = true
 ed25519-dalek = "2.2.0"
 jsonwebtoken = { version = "10.3.0", default-features = false, features = ["rust_crypto"] }
-poem = "3.1.12"
-poem-openapi = { version = "5.1.16", features = ["swagger-ui", "uuid"] }
+poem.workspace = true
+poem-openapi.workspace = true
 #samael = "0.0.20"
 samael = { git = "https://github.com/njaremko/samael.git", rev = "f879f1942ec1b34b6d3027ce7e4724ad95d15dfa" }
-serde = { version = "1.0.228", features = ["derive"] }
-sqlx = { version = "0.8.6", features = ["postgres", "runtime-tokio", "uuid"] }
-tokio = { version = "1.52.1", features = ["fs", "rt-multi-thread", "macros", "sync"] }
-tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
-uuid = "1.23.1"
+serde.workspace = true
+sqlx.workspace = true
+tokio = { workspace = true, features = ["fs", "rt-multi-thread", "macros", "sync"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
 
 [lints]
 workspace = true

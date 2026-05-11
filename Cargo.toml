@@ -2,6 +2,18 @@
 resolver = "3"
 members = ["fed-auth", "fed-auth-verifier", "fed-tickets"]
 
+[workspace.dependencies]
+color-eyre = "0.6.5"
+dotenvy = "0.15.7"
+poem = "3.1.12"
+poem-openapi = { version = "5.1.16", features = ["swagger-ui", "uuid"] }
+serde = { version = "1.0.228", features = ["derive"] }
+sqlx = { version = "0.8.6", features = ["postgres", "runtime-tokio", "migrate", "time", "uuid"] }
+tokio = { version = "1.52.1" }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+uuid = "1.23.1"
+
 [workspace.lints.rust]
 ambiguous_negative_literals = "deny"
 meta_variable_misuse = "deny"
