@@ -15,6 +15,7 @@ use serde::Serialize;
 use sqlx::migrate::MigrateDatabase as _;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Postgres};
+use tracing::error;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::LevelFilter;
 use uuid::Uuid;
@@ -148,6 +149,9 @@ impl Router {
             .db
             .begin()
             .await
+            .inspect_err(|err| {
+                error!("failed to open DB transaction: {err}");
+            })
             .map_err(|_| RefreshError::Unknown)?;
         let get_query = sqlx::query!(
             "select * from auth_refresh_tokens where refresh_token = $1 and domain = $2",
@@ -178,7 +182,12 @@ impl Router {
         .await
         .map_err(|_| RefreshError::TokenInvalid)?;
 
-        conn.commit().await.map_err(|_| RefreshError::Unknown)?;
+        conn.commit()
+            .await
+            .inspect_err(|err| {
+                error!("failed to commit DB transaction: {err}");
+            })
+            .map_err(|_| RefreshError::Unknown)?;
 
         let claims = Claims {
             sub: get_query.user_id,
@@ -188,6 +197,9 @@ impl Router {
             &claims,
             &self.context.private_key,
         )
+        .inspect_err(|err| {
+            error!("failed to encode JWT: {err}");
+        })
         .map_err(|_| RefreshError::Unknown)?;
 
         Ok(Json(RefreshResponse {
