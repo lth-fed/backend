@@ -31,10 +31,11 @@ create table group_members (
 );
 
 create type notification_level as enum ('none', 'personalized', 'all');
-create table group_notifications (
+create table user_group_settings (
     user_id uuid not null references users(id),
     group_id uuid not null references groups(id),
     --
-    level notification_level not null,
+    notification_level notification_level not null,
+    visible boolean not null,
     primary key (group_id, user_id)
 );
