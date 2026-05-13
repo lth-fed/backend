@@ -18,7 +18,8 @@ create table activities (
     title jsonb not null,
     description jsonb not null,
     location location not null,
-    time tsrange not null,
+    time_start timestamp not null,
+    time_end timestamp not null,
     image_id uuid not null references images(id),
     is_hidden boolean not null,
     max_tickets integer not null check (max_tickets > 0) -- default MAX_INT

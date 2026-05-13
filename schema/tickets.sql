@@ -9,16 +9,19 @@ create table ticket_kinds (
     name jsonb not null,
     -- in ören
     price money not null check (price >= 0),
-    purchasing_available tsrange not null,
+    purchasing_available_start timezone not null,
+    purchasing_available_stop timezone not null,
     max_tickets integer not null check (max_tickets > 0), -- default MAX_INT
     min_tickets integer not null check (min_tickets > 0), -- default MAX_INT
+    check (min_tickets < max_tickets),
     -- we need this as a lock so we don't make too many
     -- https://github.com/lth-fed/backend/pull/7#discussion_r3145792223
     -- not needed for purchased tickets since reserved tickets are converted 1:1 to purchased ones
     reserved_tickets integer not null check (reserved_tickets >= 0 and reserved_tickets <= max_tickets),
     -- to disable, make the range empty
     -- to allow transfer without bounds, just set this to a REALLY long interval
-    allow_transfer_ticket tsrange not null,
+    allow_transfer_ticket_start timezone not null,
+    allow_transfer_ticket_stop timezone not null,
     -- allows tickets to be transferred to users which do not pass the `ticket_kind_allowed_groups` check
     allow_transfer_ticket_bypass_allowed_groups boolean not null,
     -- when this is set nothing is allowed to be changed, except the bookkeeping on table:options & purchasing_available
