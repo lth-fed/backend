@@ -11,10 +11,13 @@ base64.workspace = true
 chacha20 = "0.10.0"
 color-eyre.workspace = true
 dotenvy.workspace = true
+fed-auth-verifier.path = "../fed-auth-verifier"
 poem.workspace = true
 poem-openapi.workspace = true
 rand.workspace = true
 serde.workspace = true
+serde_json = "1.0.149"
+serde_with = "3.20.0"
 sqlx.workspace = true
 tokio = { workspace = true, features = ["full"] }
 tracing.workspace = true
