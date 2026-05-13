@@ -71,7 +71,7 @@ async fn main() -> color_eyre::Result<()> {
     .server("http://localhost:8001/api/v0");
     let ui = api_service.swagger_ui();
 
-    Server::new(TcpListener::bind("localhost:8001"))
+    Server::new(TcpListener::bind("[::]:8001"))
         .run(
             Route::new()
                 .nest("/api/v0", api_service)
