@@ -1,0 +1,33 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select group_path\n        from group_memberships\n        where user_id = $1 and group_path @> $2\n        order by nlevel(group_path) desc\n        limit 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "group_path",
+        "type_info": {
+          "Custom": {
+            "name": "ltree",
+            "kind": "Simple"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        {
+          "Custom": {
+            "name": "ltree",
+            "kind": "Simple"
+          }
+        }
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "9e22dbbfe345184afecbcf5b66533010b266855e6b937e22daaf892f83143684"
+}

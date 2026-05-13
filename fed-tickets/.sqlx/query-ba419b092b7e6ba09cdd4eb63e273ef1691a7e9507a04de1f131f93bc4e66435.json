@@ -1,0 +1,27 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select distinct user_id from group_memberships where group_path <@ $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        {
+          "Custom": {
+            "name": "ltree",
+            "kind": "Simple"
+          }
+        }
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "ba419b092b7e6ba09cdd4eb63e273ef1691a7e9507a04de1f131f93bc4e66435"
+}
