@@ -9,8 +9,8 @@ create table ticket_kinds (
     name jsonb not null,
     -- in ören
     price money not null check (price >= 0),
-    purchasing_available_start timezone not null,
-    purchasing_available_stop timezone not null,
+    purchasing_available_start timestamptz not null,
+    purchasing_available_stop timestamptz not null,
     max_tickets integer not null check (max_tickets > 0), -- default MAX_INT
     min_tickets integer not null check (min_tickets > 0), -- default MAX_INT
     check (min_tickets < max_tickets),
@@ -20,8 +20,8 @@ create table ticket_kinds (
     reserved_tickets integer not null check (reserved_tickets >= 0 and reserved_tickets <= max_tickets),
     -- to disable, make the range empty
     -- to allow transfer without bounds, just set this to a REALLY long interval
-    allow_transfer_ticket_start timezone not null,
-    allow_transfer_ticket_stop timezone not null,
+    allow_transfer_ticket_start timestamptz not null,
+    allow_transfer_ticket_stop timestamptz not null,
     -- allows tickets to be transferred to users which do not pass the `ticket_kind_allowed_groups` check
     allow_transfer_ticket_bypass_allowed_groups boolean not null,
     -- when this is set nothing is allowed to be changed, except the bookkeeping on table:options & purchasing_available
@@ -77,7 +77,7 @@ create table ticket_queuers (
     ticket_id uuid not null references ticket_kinds(id),
     user_id uuid not null references users(id),
     -- remove after 20 minutes, should refresh after 15 minutes
-    started_queueing timestamp not null
+    started_queueing timestamptz not null
 
     -- can't check this since it requires an INNER JOIN on ticket_kinds (BACKEND HAS TO CHECK!)
     -- constraint not_queuing_for_multiple_ticket_types unique (ticket_id->activity_id, user_id)
@@ -106,7 +106,7 @@ create table ticket_reservations (
     user_id uuid not null references users(id),
     -- remove after this!
     -- or if transaction is currently happening and not cancellable wait for max an hour or smth
-    timeout timestamp not null
+    timeout timestamptz not null
 
     -- can't check this since it requires an INNER JOIN on ticket_kinds (BACKEND HAS TO CHECK!)
     --constraint not_reserve_multiple_ticket_kinds unique (ticket_id->activity_id, user_id)
@@ -131,9 +131,9 @@ create table purchased_ticket_addons (
     selected_options integer[] not null,
     selected_text text not null
 );
--- clear if timestamp is more than 1 day old
+-- clear if timestamptz is more than 1 day old
 create table purchased_ticket_validations (
     id uuid primary key,
     purchased_ticket_id uuid not null references purchased_ticket(id),
-    timestamp timestamp not null
+    timestamptz timestamptz not null
 );

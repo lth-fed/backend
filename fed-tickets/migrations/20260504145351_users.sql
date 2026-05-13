@@ -6,8 +6,8 @@ create table users (
     -- same as for name, also remember to salt so the encrypted data isn't the same for all users with the same language
     language bytea not null,
     -- GDPR remove all accounts older than 2 years after this: this is a GDPR requirement
-    latest_refresh timestamp not null,
+    latest_refresh timestamptz not null,
     -- don't remove name when becoming inactive!
-    inactive_since timestamp
+    inactive_since timestamptz
     -- constraint no_name_when_deleted check ((not is_active) and name = null or is_active and name != null)
 );
