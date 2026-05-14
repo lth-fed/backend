@@ -1,23 +1,30 @@
+use chacha20::ChaCha20;
+use chacha20::cipher::KeyIvInit as _;
+use chacha20::cipher::StreamCipher as _;
+use hex::FromHex as _;
 use sqlx::postgres::PgPool;
 use time::OffsetDateTime;
 
 struct User {
-    id: String,
-    name: String,
-    language: String,
-    latest_refresh: OffsetDateTime,
-    creation: OffsetDateTime,
-    inactive_since: Option<OffsetDateTime>,
+    pub id: String,
+    pub name: String,
+    pub language: String,
+    pub latest_refresh: OffsetDateTime,
+    pub creation: OffsetDateTime,
+    pub inactive_since: Option<OffsetDateTime>,
 }
 
 impl User {
     async fn save(&self, db: &PgPool) -> Result<(), sqlx::Error> {
-        let nonce: [u8; 24] = rand::random();
+        let nonce: [u8; 12] = rand::random();
+        let key: [u8; 32] = <[u8; 32]>::from_hex(std::env::var("CHACHA20_KEY").unwrap_or_default())
+            .unwrap_or_default();
+
         let query = sqlx::query!(
             "insert into users (id, name, language, nonce, latest_refresh, creation, inactive_since) values ($1, $2, $3, $4, $5, $6, $7)",
             &self.id,
-            &self.name.as_bytes(),
-            &self.language.as_bytes(),
+            User::endecrypt(&self.name.as_bytes(), &nonce, &key),
+            User::endecrypt(&self.language.as_bytes(), &nonce, &key),
             &nonce,
             &self.latest_refresh,
             &self.creation,
@@ -30,15 +37,29 @@ impl User {
     pub async fn get(db: &PgPool, id: &str) -> Option<Self> {
         let query = sqlx::query!("select * from users where id = ($1)", id);
         let res = query.fetch_one(db).await;
+        // let nonce: [u8; 12] = rand::random();
+        let key: [u8; 32] = <[u8; 32]>::from_hex(std::env::var("CHACHA20_KEY").unwrap_or_default())
+            .unwrap_or_default();
         match res {
-            Ok(val) => Some(User {
-                id: val.id,
-                name: String::from_utf8(val.name).unwrap_or_default(),
-                language: String::from_utf8(val.language).unwrap_or_default(),
-                latest_refresh: val.latest_refresh,
-                creation: val.creation,
-                inactive_since: val.inactive_since,
-            }),
+            Ok(val) => {
+                // let nonce: [u8; 12] = val.nonce;
+                let nonce: [u8; 12] = if let Ok(arr) = val.nonce.try_into() {
+                    arr
+                } else {
+                    eprintln!("Error: expected 12 bytes");
+                    return None;
+                };
+                Some(User {
+                    id: val.id,
+                    name: String::from_utf8(User::endecrypt(&val.name, &nonce, &key))
+                        .unwrap_or_default(),
+                    language: String::from_utf8(User::endecrypt(&val.language, &nonce, &key))
+                        .unwrap_or_default(),
+                    latest_refresh: val.latest_refresh,
+                    creation: val.creation,
+                    inactive_since: val.inactive_since,
+                })
+            }
             Err(err) => {
                 eprintln!("ERROR{err}");
                 None
@@ -56,6 +77,13 @@ impl User {
             inactive_since: Some(OffsetDateTime::now_utc()),
         }
     }
+
+    fn endecrypt(data: &[u8], nonce: &[u8; 12], key: &[u8; 32]) -> Vec<u8> {
+        let mut cipher = ChaCha20::new(key.into(), nonce.into());
+        let mut buffer = data.to_owned();
+        cipher.apply_keystream(&mut buffer);
+        buffer
+    }
 }
 
 pub async fn run(db: &PgPool) {
@@ -64,5 +92,9 @@ pub async fn run(db: &PgPool) {
     if let Err(err) = user.save(db).await {
         eprint!("{err}");
     }
-    User::get(db, id).await;
+    let u2 = User::get(db, id).await;
+    match u2 {
+        Some(val) => println!("{}", val.name),
+        None => println!("Nope"),
+    }
 }

@@ -4,8 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+chacha20 = "0.10.0"
 color-eyre.workspace = true
 dotenvy.workspace = true
+hex = "0.4.3"
 poem.workspace = true
 poem-openapi.workspace = true
 rand = "0.10.1"
