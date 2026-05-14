@@ -12,6 +12,7 @@ use mini_moka::sync::Cache;
 use poem::http::Method;
 use poem::middleware::Cors;
 use poem::{EndpointExt as _, handler};
+use reqwest::StatusCode;
 use samael::metadata::{
     AttributeConsumingService, ContactPerson, ContactType, EntityDescriptor, LocalizedName,
     LocalizedUri, RequestedAttribute,
@@ -30,7 +31,7 @@ use serde::Serialize;
 use sqlx::migrate::MigrateDatabase as _;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Postgres};
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::LevelFilter;
 use uuid::Uuid;
@@ -43,44 +44,32 @@ fn pp_file() -> poem::web::Html<&'static str> {
     poem::web::Html(PRIVACY_POLICY)
 }
 
+#[derive(Clone, Debug)]
+pub struct AuthData {
+    origin: String,
+    callback_url: Option<String>,
+    continue_url: String,
+
+    // TODO: make it a struct of all the user info
+    validated_user: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct Context {
     pub db: PgPool,
+    pub reqwest_client: reqwest::Client,
     pub private_key: EncodingKey,
     pub public_key: Vec<u8>,
     pub service_provider: ServiceProvider,
     pub saml_private_key: openssl::pkey::PKey<openssl::pkey::Private>,
     pub auth_request_id_cache: Cache<String, ()>,
+    pub auth_response_holding: Cache<String, AuthData>,
 }
 
-#[tokio::main]
-async fn main() -> color_eyre::Result<()> {
-    color_eyre::install()?;
-    let _: Result<PathBuf, dotenvy::Error> = dotenvy::dotenv();
-
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::builder()
-                .with_default_directive(LevelFilter::INFO.into())
-                .from_env_lossy(),
-        )
-        .init();
-
-    let key = std::env::var("PRIVATE_KEY").wrap_err("`PRIVATE_KEY` not detected")?;
-    let key = base64::prelude::BASE64_STANDARD
-        .decode(key)
-        .wrap_err("`PRIVATE_KEY` not base64 encoded")?;
-    let ed_key = ed25519_dalek::SigningKey::from_pkcs8_der(&key)
-        .wrap_err("`PRIVATE_KEY` not valid EdDSA key")?;
-    let verifying_key = ed_key.verifying_key();
-    let encoding_key = EncodingKey::from_ed_der(&key);
-
-    let db = setup_db(&std::env::var("DATABASE_URL").wrap_err("`DATABASE_URL` not set")?)
-        .await
-        .wrap_err("Failed to set up the database")
-        .suggestion("Start the database with `docker compose up -d`")?;
-
-    let resp = reqwest::get("https://testidpv4.lu.se/idp/shibboleth")
+async fn get_service_provider()
+-> color_eyre::Result<(ServiceProvider, openssl::pkey::PKey<openssl::pkey::Private>)> {
+    // let resp = reqwest::get("https://testidpv4.lu.se/idp/shibboleth")
+    let resp = reqwest::get("https://mocksaml.com/api/saml/metadata")
         .await?
         .text()
         .await?;
@@ -101,7 +90,7 @@ async fn main() -> color_eyre::Result<()> {
     let saml_cert = samael::crypto::CertificateDer::from(saml_cert);
 
     let sp = ServiceProviderBuilder::default()
-        .entity_id("teknologappen".to_owned())
+        .entity_id("https://auth.teknologappen.se/saml2/".to_owned())
         .key(saml_pk.clone())
         .certificate(saml_cert)
         .allow_idp_initiated(false)
@@ -119,18 +108,63 @@ async fn main() -> color_eyre::Result<()> {
         // doesn't actually exist but is required by samael to exist
         .slo_url("https://auth.teknologappen.se/saml2/slo".to_owned())
         .build()?;
+    Ok((sp, saml_pk))
+}
+fn get_jwt_keys() -> color_eyre::Result<(EncodingKey, Vec<u8>)> {
+    let key = std::env::var("PRIVATE_KEY").wrap_err("`PRIVATE_KEY` not detected")?;
+    let key = base64::prelude::BASE64_STANDARD
+        .decode(key)
+        .wrap_err("`PRIVATE_KEY` not base64 encoded")?;
+    let ed_key = ed25519_dalek::SigningKey::from_pkcs8_der(&key)
+        .wrap_err("`PRIVATE_KEY` not valid EdDSA key")?;
+    let verifying_key = ed_key.verifying_key();
+    let encoding_key = EncodingKey::from_ed_der(&key);
+    let public_key = verifying_key
+        .to_public_key_der()
+        .wrap_err("internal error: failed to encode verifying key to DER")?
+        .into_vec();
+    Ok((encoding_key, public_key))
+}
+fn get_cookie(refresh_token: Uuid) -> String {
+    format!(
+        "teknologappen-auth-refresh-token={refresh_token}; HttpOnly; SameSite=None; Secure; Max-Age=31536000"
+    )
+}
+
+#[tokio::main]
+async fn main() -> color_eyre::Result<()> {
+    color_eyre::install()?;
+    let _: Result<PathBuf, dotenvy::Error> = dotenvy::dotenv();
+
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::builder()
+                .with_default_directive(LevelFilter::INFO.into())
+                .from_env_lossy(),
+        )
+        .init();
+
+    let (private_key, public_key) = get_jwt_keys()?;
+
+    let db = setup_db(&std::env::var("DATABASE_URL").wrap_err("`DATABASE_URL` not set")?)
+        .await
+        .wrap_err("Failed to set up the database")
+        .suggestion("Start the database with `docker compose up -d`")?;
+
+    let (sp, saml_pk) = get_service_provider().await?;
 
     let context = Context {
         db,
-        private_key: encoding_key,
-        public_key: verifying_key
-            .to_public_key_der()
-            .wrap_err("internal error: failed to encode verifying key to DER")?
-            .into_vec(),
+        reqwest_client: reqwest::Client::new(),
+        private_key,
+        public_key,
         service_provider: sp,
         saml_private_key: saml_pk,
         // keep them for 30 minutes
         auth_request_id_cache: Cache::builder()
+            .time_to_live(std::time::Duration::from_mins(30))
+            .build(),
+        auth_response_holding: Cache::builder()
             .time_to_live(std::time::Duration::from_mins(30))
             .build(),
     };
@@ -197,16 +231,16 @@ async fn setup_db(db_url: &str) -> color_eyre::Result<PgPool> {
 struct Refresh {
     /// The refresh token.
     refresh_token: Uuid,
-    /// The domain for which this token is for.
-    domain: String,
 }
 #[derive(Object)]
 struct RefreshResponse {
-    refresh_token: Uuid,
     access_token: String,
 }
 #[derive(ApiResponse)]
 enum RefreshError {
+    /// No origin, the request must be CORS.
+    #[oai(status = 400)]
+    NoOrigin,
     /// Returns when the user either doesn't have a token or the token is invalid.
     #[oai(status = 401)]
     TokenInvalid,
@@ -217,6 +251,12 @@ enum RefreshError {
 #[derive(Serialize)]
 struct Claims {
     sub: String,
+}
+#[derive(Serialize)]
+struct CallbackClaims {
+    sub: String,
+    full_name: String,
+    mail: String,
 }
 
 #[derive(Clone)]
@@ -238,7 +278,16 @@ impl MainRouter {
     }
     /// Get JWT access token and a new refresh token.
     #[oai(path = "/refresh", method = "post")]
-    async fn refresh(&self, body: Json<Refresh>) -> Result<Json<RefreshResponse>, RefreshError> {
+    async fn refresh(
+        &self,
+        headers: &poem::http::HeaderMap,
+        body: Json<Refresh>,
+    ) -> Result<Response<Json<RefreshResponse>>, RefreshError> {
+        let origin = headers
+            .get("origin")
+            .and_then(|header| header.to_str().ok())
+            .ok_or(RefreshError::NoOrigin)?;
+
         let mut conn = self
             .db
             .begin()
@@ -250,7 +299,7 @@ impl MainRouter {
         let get_query = sqlx::query!(
             "select * from auth_refresh_tokens where refresh_token = $1 and domain = $2",
             body.0.refresh_token,
-            body.0.domain
+            origin,
         )
         .fetch_one(&mut *conn)
         .await
@@ -259,11 +308,11 @@ impl MainRouter {
         sqlx::query!(
             "delete from auth_refresh_tokens where refresh_token = $1 and domain = $2",
             body.0.refresh_token,
-            body.0.domain
+            origin,
         )
         .execute(&mut *conn)
         .await
-        .map_err(|_| RefreshError::TokenInvalid)?;
+        .map_err(|_| RefreshError::Unknown)?;
 
         let new_refresh = Uuid::new_v4();
         sqlx::query!(
@@ -274,7 +323,7 @@ impl MainRouter {
         )
         .execute(&mut *conn)
         .await
-        .map_err(|_| RefreshError::TokenInvalid)?;
+        .map_err(|_| RefreshError::Unknown)?;
 
         conn.commit()
             .await
@@ -296,10 +345,8 @@ impl MainRouter {
         })
         .map_err(|_| RefreshError::Unknown)?;
 
-        Ok(Json(RefreshResponse {
-            refresh_token: new_refresh,
-            access_token,
-        }))
+        Ok(Response::new(Json(RefreshResponse { access_token }))
+            .header("set-cookie", get_cookie(new_refresh)))
     }
 }
 #[derive(ApiResponse, Debug, Clone, Copy)]
@@ -316,9 +363,33 @@ pub enum AcsResponseError {
     /// Invalid ACS response.
     #[oai(status = 400)]
     InvalidAcsResponse,
+    /// SAML response took too long.
+    #[oai(status = 400)]
+    CacheFlushed,
 }
 #[derive(ApiResponse, Debug, Clone, Copy)]
-pub enum RedirectError {
+pub enum ConfirmResponseError {
+    /// Confirmation took too long.
+    #[oai(status = 400)]
+    CacheFlushed,
+    /// Authentication is not valid!
+    #[oai(status = 400)]
+    AuthNotValid,
+    /// Unknown internal error.
+    #[oai(status = 500)]
+    Unknown,
+    /// Database error.
+    #[oai(status = 500)]
+    DbError,
+    /// Callback post request failed. See server logs.
+    #[oai(status = 503)]
+    CallbackFailed,
+}
+#[derive(ApiResponse, Debug, Clone, Copy)]
+pub enum RedirectResponseError {
+    /// The client must send origin, i.e. this must be a CORS request. It must also be UTF-8.
+    #[oai(status = 400)]
+    InvalidOrigin,
     /// Unknown internal server error in URL creation.
     /// See logs.
     #[oai(status = 500)]
@@ -367,6 +438,32 @@ fn add_metadata(metadata: &mut EntityDescriptor) -> Result<(), MetadataResponseE
         error!("Failed to get sp sso descriptor");
         return Err(MetadataResponseError::MetadataInvalid);
     };
+    metadata.contact_person = Some(vec![
+        ContactPerson {
+            contact_type: Some(ContactType::Technical.value().to_owned()),
+            company: Some("E-sektionen inom TLTH".to_owned()),
+            given_name: Some("Informationschef".to_owned()),
+            sur_name: None,
+            email_addresses: Some(vec!["informationschef@esek.se".to_owned()]),
+            telephone_numbers: None,
+        },
+        ContactPerson {
+            contact_type: Some(ContactType::Support.value().to_owned()),
+            company: Some("E-sektionen inom TLTH".to_owned()),
+            given_name: Some("Informationschef".to_owned()),
+            sur_name: None,
+            email_addresses: Some(vec!["informationschef@esek.se".to_owned()]),
+            telephone_numbers: None,
+        },
+        ContactPerson {
+            contact_type: Some(ContactType::Administrative.value().to_owned()),
+            company: Some("E-sektionen inom TLTH".to_owned()),
+            given_name: Some("Informationschef".to_owned()),
+            sur_name: None,
+            email_addresses: Some(vec!["informationschef@esek.se".to_owned()]),
+            telephone_numbers: None,
+        },
+    ]);
     let attribute_name_format = "urn:oasis:names:tc:SAML:2.0:attrname-format:uri";
     sp_desc.attribute_consuming_services = Some(vec![AttributeConsumingService {
         index: 1,
@@ -412,6 +509,11 @@ fn add_metadata(metadata: &mut EntityDescriptor) -> Result<(), MetadataResponseE
 fn add_metadata_extensions(meta: &mut xmltree::Element) -> Result<usize, MetadataResponseError> {
     // the xmlns are needed for parsing, they are removed later. Copied from an example SP
     // metadata: https://metadata.qa.swamid.se/?rawXML=1361
+    let security_contact_person = r#"<md:ContactPerson contactType="other" remd:contactType="http://refeds.org/metadata/contactType/security" xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" xmlns:remd="http://refeds.org/metadata">
+    <md:Company>E-sektionen inom TLTH</md:Company>
+    <md:GivenName>Informationschef</md:GivenName>
+    <md:EmailAddress>informationschef@esek.se</md:EmailAddress>
+</md:ContactPerson>"#;
     let descriptor_extensions = r#"<md:Extensions xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" xmlns:mdattr="urn:oasis:names:tc:SAML:metadata:attribute" xmlns:samla="urn:oasis:names:tc:SAML:2.0:assertion" xmlns:mdrpi="urn:oasis:names:tc:SAML:metadata:rpi" xmlns:mdui="urn:oasis:names:tc:SAML:metadata:ui" xmlns:ds="http://www.w3.org/2000/09/xmldsig#" xmlns:remd="http://refeds.org/metadata">
     <mdattr:EntityAttributes>
         <samla:Attribute Name="http://macedir.org/entity-category" NameFormat="urn:oasis:names:tc:SAML:2.0:attrname-format:uri">
@@ -434,6 +536,9 @@ fn add_metadata_extensions(meta: &mut xmltree::Element) -> Result<usize, Metadat
         <mdui:PrivacyStatementURL xml:lang="sv">https://auth.teknologappen.se/privacy-statement/</mdui:PrivacyStatementURL>
     </mdui:UIInfo>
 </md:Extensions>"#;
+    let mut sec_meta = xmltree::Element::parse(Cursor::new(security_contact_person))
+        .inspect_err(|err| error!("Failed to parse metadata: {err}"))
+        .map_err(|_| MetadataResponseError::MetadataInvalid)?;
     let mut desc_meta = xmltree::Element::parse(Cursor::new(descriptor_extensions))
         .inspect_err(|err| error!("Failed to parse metadata: {err}"))
         .map_err(|_| MetadataResponseError::MetadataInvalid)?;
@@ -441,8 +546,10 @@ fn add_metadata_extensions(meta: &mut xmltree::Element) -> Result<usize, Metadat
         .inspect_err(|err| error!("Failed to parse metadata: {err}"))
         .map_err(|_| MetadataResponseError::MetadataInvalid)?;
     meta.namespaces = desc_meta.namespaces.take();
+    sec_meta.namespaces = None;
     spsso_meta.namespaces = None;
 
+    meta.children.push(XMLNode::Element(sec_meta));
     meta.children.push(XMLNode::Element(desc_meta));
 
     let Some(spsso) = meta.get_mut_child("SPSSODescriptor") else {
@@ -452,6 +559,16 @@ fn add_metadata_extensions(meta: &mut xmltree::Element) -> Result<usize, Metadat
     spsso.children.push(XMLNode::Element(spsso_meta));
 
     Ok(descriptor_extensions.len() + spsso_extensions.len())
+}
+#[derive(Object)]
+pub struct ConfirmRequest {
+    accepted: bool,
+    id: String,
+}
+#[derive(Object)]
+pub struct RedirectBody {
+    continue_url: String,
+    callback_url: Option<String>,
 }
 #[OpenApi(prefix_path = "/saml2")]
 impl SamlRouter {
@@ -492,7 +609,10 @@ impl SamlRouter {
     /// Get JWT access token and a new refresh token.
     #[oai(path = "/acs", method = "post")]
     #[allow(clippy::panic, reason = "yes")]
-    async fn acs(&self, body: Form<HashMap<String, String>>) -> Result<(), AcsResponseError> {
+    async fn acs(
+        &self,
+        body: Form<HashMap<String, String>>,
+    ) -> Result<Response<()>, AcsResponseError> {
         // we'd want the library to take an iterator instead of &[&str]
         let ids: Vec<_> = self
             .auth_request_id_cache
@@ -509,50 +629,194 @@ impl SamlRouter {
             .parse_base64_response(saml_response, Some(&ids))
             .inspect_err(|err| error!("Invalid ACS response: {err}"))
             .map_err(|_| AcsResponseError::InvalidAcsResponse)?;
-        // stil-id
+        let Some(request_id) = ass
+            .subject
+            .as_ref()
+            .and_then(|sub| sub.subject_confirmations.as_ref())
+            .and_then(|confs| confs.first())
+            .and_then(|conf| conf.subject_confirmation_data.as_ref())
+            .and_then(|conf_data| conf_data.in_response_to.as_ref())
+        else {
+            return Err(AcsResponseError::InvalidAcsResponse);
+        };
+        println!("check auth_response_holding {}", ass.id);
+        println!("{request_id:?}");
+        let Some(mut data) = self.auth_response_holding.get(request_id) else {
+            return Err(AcsResponseError::CacheFlushed);
+        };
+        println!("{ass:#?}");
+        data.validated_user = ass
+            .subject
+            .clone()
+            .and_then(|sub| sub.name_id)
+            .map(|name_id| name_id.value);
+        self.auth_response_holding
+            .insert(request_id.clone(), data.clone());
+        // stil-id:
         // ass.subject.unwrap().name_id.unwrap().value;
         //
-        // - tappen hemsidan: användare vill logga in med auth
-        // - skickar till lu_redirect med body av continue url & callback (put that & save origin header in relay state)
-        //   - origin & callback host must match
-        // - login sker
-        // - auth får tillbaka token & relay state
-        // - auth sparar (token, origin, continue, callback) ett tag med ett ID
+        // - [ ] tappen hemsidan: användare vill logga in med auth
+        // - [x] skickar till lu_redirect med body av continue url & callback (put that & save origin header in cache)
+        //   `curl -d '{ "continue_url": "https://icelk.dev?wow" }' https://auth.teknologappen.se/saml2/lu-redirect -H 'origin: icelk.dev' -H "content-type: application/json"`
+        //   gå till hemsidan!
+        //   - [x] origin & callback host must match
+        // - [x] login sker
+        // - [x] auth får tillbaka token
+        // - [x] auth sparar (token, origin, continue, callback) ett tag med ett ID
         // - visar en sida för användaren om hur den vill dela sina uppgifter (redirect från post sidan med ?id=...)
+        //   `curl -d '{ "accepted": true, "id": "<id>" }' https://auth.teknologappen.se/saml2/confirm-datasharing -H "content-type: application/json`
         // - om nej, redirect back / postMessage, no ID
-        // - om ja, redirect back / postMessage, query params ID, make request set http only cookie & callback to server
+        // - [x] om ja, make request set http only cookie & callback to server, it returns redirect url & status redirect back / postMessage
+        // `curl -vd '{ "domain": "icelk.dev", "refresh_token": "<...>" }' https://auth.teknologappen.se/api/v0/refresh -H "content-type: application/json"`
         //
         // - komponenter:
         // - auth hemsida: loginsätt
         // - auth hemsida: godkänna
-        // - lu_redirect auth spara (token, origin-url, continue url) & redirect till godkänna sida
-        // - ny endpoint! set cookie: id -> set-cookie, remove ID from DB
+        // - [x] acs auth spara (token, origin-url, continue url) & redirect till godkänna sida
+        // - [x] ny endpoint! set cookie: id -> set-cookie, remove ID from DB
+        // - backend endpoint! callback med ny användare
         // - tappen client lib (refresh tokens in requests (middleware), start this whole process
         //   (lu_redirect with redirect or iframe), handle ID (both query & postMessage))
         //
         // todo:
         // - mail about testing towards swam id
         println!("{ass:#?}");
-        Ok(())
+        Ok(Response::new(())
+            .status(StatusCode::TEMPORARY_REDIRECT)
+            .header(
+                "location",
+                format!(
+                    "/confirm-datasharing/?id={}&origin={}",
+                    request_id, data.origin
+                ),
+            ))
+    }
+    #[oai(path = "/confirm-datasharing", method = "post")]
+    async fn confirm_datasharing(
+        &self,
+        body: Json<ConfirmRequest>,
+    ) -> Result<Response<PlainText<String>>, ConfirmResponseError> {
+        let Some(data) = self.auth_response_holding.get(&body.id) else {
+            warn!(
+                "Tried to confirm datasharing with an ID which is not in the database ({})",
+                body.id
+            );
+            return Err(ConfirmResponseError::CacheFlushed);
+        };
+        let Some(sub) = data.validated_user else {
+            warn!(
+                "Tried to confirm datasharing for a request which was not validated by LU ({})",
+                body.id
+            );
+            return Err(ConfirmResponseError::AuthNotValid);
+        };
+
+        let mut response = Response::new(PlainText(format!(
+            "{}{}validated={}",
+            data.continue_url,
+            if data.continue_url.contains('?') {
+                '&'
+            } else {
+                '?'
+            },
+            body.accepted
+        )));
+        if body.accepted {
+            if let Some(cb_url) = &data.callback_url {
+                let claims = CallbackClaims {
+                    sub: sub.clone(),
+                    mail: String::new(),
+                    full_name: "Erika Davidssona".into(),
+                };
+                let token = jsonwebtoken::encode(
+                    &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::EdDSA),
+                    &claims,
+                    &self.private_key,
+                )
+                .inspect_err(|err| error!("could not create callback token: {err}"))
+                .map_err(|_| ConfirmResponseError::Unknown)?;
+                self.reqwest_client
+                    .post(cb_url)
+                    .body(token)
+                    .send()
+                    .await
+                    .inspect_err(|err| error!("auth callback POST failed: {err}"))
+                    .map_err(|_| ConfirmResponseError::CallbackFailed)?;
+            }
+
+            let refresh_token = Uuid::new_v4();
+            println!(
+                "insert into auth_refresh_tokens values ({}, {}, {})",
+                sub, data.origin, refresh_token
+            );
+            let res = sqlx::query!(
+                "insert into auth_refresh_tokens values ($1, $2, $3)",
+                sub,
+                data.origin,
+                refresh_token
+            )
+            .execute(&self.db)
+            .await
+            .inspect_err(|err| error!("Error inserting refresh token into DB: {err}"))
+            .map_err(|_| ConfirmResponseError::DbError)?;
+            println!("inserted into db: {res:?}");
+            response = response.header("set-cookie", get_cookie(refresh_token));
+        }
+
+        println!("Invalidate {}", body.id);
+        self.auth_response_holding.invalidate(&body.id);
+        let res = sqlx::query!("select * from auth_refresh_tokens",)
+            .fetch_all(&self.db)
+            .await
+            .inspect_err(|err| error!("Error querying: {err}"))
+            .map_err(|_| ConfirmResponseError::DbError)?;
+        println!("{res:?}");
+        Ok(response)
     }
     /// Get URL to redirect user to to authenticate by LU SSO
     #[oai(path = "/lu-redirect", method = "post")]
-    async fn lu_redirect(&self) -> Result<PlainText<String>, RedirectError> {
+    async fn lu_redirect(
+        &self,
+        headers: &poem::http::HeaderMap,
+        body: Json<RedirectBody>,
+    ) -> Result<PlainText<String>, RedirectResponseError> {
+        let origin = headers
+            .get("origin")
+            .and_then(|header| header.to_str().ok())
+            .ok_or(RedirectResponseError::InvalidOrigin)?;
         let req = self
             .service_provider
-            .make_authentication_request("https://testidpv4.lu.se/idp/profile/SAML2/Redirect/SSO")
+            // .make_authentication_request("https://testidpv4.lu.se/idp/profile/SAML2/Redirect/SSO")
+            .make_authentication_request("https://mocksaml.com/api/saml/sso")
             .inspect_err(|err| error!("Failed to make LU SSO request {err}"))
-            .map_err(|_| RedirectError::Unknown)?;
-        self.auth_request_id_cache.insert(req.id.clone(), ());
-        debug!("Added ID {} to auth request id cache", req.id);
+            .map_err(|_| RedirectResponseError::Unknown)?;
+        if let Some(cb_url) = &body.callback_url {
+            let cb_url: poem::http::Uri = cb_url
+                .parse()
+                .map_err(|_| RedirectResponseError::InvalidOrigin)?;
+            if Some(origin) != cb_url.host() {
+                return Err(RedirectResponseError::InvalidOrigin);
+            }
+        }
+        let data = AuthData {
+            origin: origin.to_owned(),
+            callback_url: body.callback_url.clone(),
+            continue_url: body.continue_url.clone(),
+
+            validated_user: None,
+        };
         let redirect = req
             .signed_redirect("", &self.saml_private_key)
             .inspect_err(|err| error!("Failed to make LU SSO redirect {err}"))
-            .map_err(|_| RedirectError::Unknown)?
+            .map_err(|_| RedirectResponseError::Unknown)?
             .ok_or_else(|| {
                 error!("Failed to create LU SSO link");
-                RedirectError::Unknown
+                RedirectResponseError::Unknown
             })?;
+        self.auth_request_id_cache.insert(req.id.clone(), ());
+        self.auth_response_holding.insert(req.id.clone(), data);
+        debug!("Added ID {} to auth request id cache", req.id);
+
         Ok(PlainText(redirect.to_string()))
     }
 }
