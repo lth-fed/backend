@@ -15,6 +15,7 @@ openssl = "0.10.79"
 poem.workspace = true
 poem-openapi.workspace = true
 reqwest.workspace = true
+rust-embed.workspace = true
 #samael = "0.0.20"
 samael = { git = "https://github.com/njaremko/samael.git", rev = "f879f1942ec1b34b6d3027ce7e4724ad95d15dfa" }
 serde.workspace = true
@@ -26,7 +27,7 @@ uuid.workspace = true
 # we need an xml library where we can change the structure and add stuff, while preserving all the data.
 # this seemed to be the only one to preserve e.g. prefixes (the `md` in `<md:Extensions>`).
 # tested: quick-xml, serde-xml-rs
-xmltree = "0.12.0"
+xmltree = { version = "0.12.0", features = ["attribute-order"] }
 
 [lints]
 workspace = true
