@@ -1,33 +1,42 @@
 use sqlx::postgres::PgPool;
 use time::OffsetDateTime;
 
-pub async fn run(db: &PgPool) {
-    let id = "id";
-    let name = "name";
-    let language = "lang";
-    let latest_refresh = OffsetDateTime::now_utc();
-    if let Err(err) = user(db, id, name, language, latest_refresh).await {
-        eprint!("{err}");
+struct User {
+    id: String,
+    name: String,
+    language: String,
+    latest_refresh: OffsetDateTime,
+    inactive_since: OffsetDateTime,
+}
+
+impl User {
+    async fn save(&self, db: &PgPool) -> Result<(), sqlx::Error> {
+        let query = sqlx::query!(
+            "insert into users (id, name, language, latest_refresh, inactive_since) values ($1, $2, $3, $4, $5)",
+            self.id,
+            self.name.as_bytes(),
+            self.language.as_bytes(),
+            self.latest_refresh,
+            self.inactive_since,
+        );
+        query.execute(db).await?;
+        Ok(())
+    }
+
+    pub fn new(id: &str, name: &str, language: &str) -> Self {
+        User {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            language: language.to_owned(),
+            latest_refresh: OffsetDateTime::now_utc(),
+            inactive_since: OffsetDateTime::now_utc(),
+        }
     }
 }
 
-/// # Errors
-/// Test.
-async fn user(
-    db: &PgPool,
-    id: &str,
-    name: &str,
-    language: &str,
-    latest_refresh: OffsetDateTime,
-) -> Result<(), sqlx::Error> {
-    let create_user = sqlx::query!(
-        "insert into users (id, name, language, latest_refresh) values ($1, $2, $3, $4)",
-        id,
-        name.as_bytes(),
-        language.as_bytes(),
-        latest_refresh
-    );
-
-    create_user.execute(db).await?;
-    Ok(())
+pub async fn run(db: &PgPool) {
+    let user = User::new("id4", "name", "swedish");
+    if let Err(err) = user.save(db).await {
+        eprint!("{err}");
+    }
 }
