@@ -6,7 +6,7 @@ use poem::http::StatusCode;
 use poem_openapi::{ApiResponse, Object};
 use serde::Deserialize;
 
-const AUTH_KEY_URL: &str = "https://auth.teknologappen.se/api/verify-key.der";
+const AUTH_KEY_URL: &str = "https://auth.teknologappen.se/api/v0/verify-key.der";
 
 thread_local! {
     static AUTH_KEY: RefCell<Option<jsonwebtoken::DecodingKey>> = const { RefCell::new(None) };
