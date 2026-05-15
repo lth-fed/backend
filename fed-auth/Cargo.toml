@@ -9,11 +9,14 @@ base64 = "0.22.1"
 color-eyre.workspace = true
 dotenvy.workspace = true
 ed25519-dalek = "2.2.0"
+fed-auth-verifier = { version = "0.1.0", path = "../fed-auth-verifier" }
 jsonwebtoken.workspace = true
+lettre.workspace = true
 mini-moka = "0.10.3"
 openssl = "0.10.79"
 poem.workspace = true
 poem-openapi.workspace = true
+rand.workspace = true
 reqwest.workspace = true
 rust-embed.workspace = true
 #samael = "0.0.20"

@@ -1,3 +1,16 @@
+//! - [x] tappen hemsidan: användare vill logga in med auth
+//! - [x] skickar till providers/lu med body av continue url & callback (put that & save origin header in cache)
+//!   `curl -d '{ "continue_url": "https://icelk.dev?wow" }' https://auth.teknologappen.se/api/v0/providers/lu -H 'origin: icelk.dev' -H "content-type: application/json"`
+//!   gå till hemsidan!
+//!   - [x] origin & callback host must match
+//! - [x] login sker
+//! - [x] auth får tillbaka token
+//! - [x] auth sparar (token, origin, continue, callback) ett tag med ett ID
+//! - visar en sida för användaren om hur den vill dela sina uppgifter (redirect från post sidan med ?id=...)
+//!   `curl -d '{ "accepted": true, "id": "<id>" }' https://auth.teknologappen.se/api/v0/confirm-datasharing -H "content-type: application/json`
+//! - om nej, redirect back / postMessage, no ID
+//! - [x] om ja, make request set http only cookie & callback to server, it returns redirect url & status redirect back / postMessage
+//!   `curl -vd '{ "domain": "icelk.dev", "refresh_token": "<...>" }' https://auth.teknologappen.se/api/v0/refresh -H "content-type: application/json"`
 #![allow(clippy::unused_async, reason = "OpenAPI requires async handlers")]
 #![allow(
     missing_debug_implementations,
@@ -9,6 +22,8 @@ use std::io::Cursor;
 use std::ops::Deref;
 use std::path::PathBuf;
 
+use fed_auth_verifier::User;
+use lettre::AsyncTransport as _;
 use mini_moka::sync::Cache;
 use poem::EndpointExt as _;
 use poem::endpoint::EmbeddedFilesEndpoint;
@@ -24,7 +39,7 @@ use samael::service_provider::{ServiceProvider, ServiceProviderBuilder};
 
 use base64::Engine as _;
 use color_eyre::{Section as _, eyre::Context as _};
-use ed25519_dalek::pkcs8::{DecodePrivateKey as _, EncodePublicKey as _};
+use ed25519_dalek::pkcs8::DecodePrivateKey as _;
 use jsonwebtoken::EncodingKey;
 use poem::{Route, Server, listener::TcpListener};
 use poem_openapi::payload::{Binary, Form, Json, PlainText, Response};
@@ -47,9 +62,20 @@ struct Website;
 const _INDEX: &str = include_str!("../../../frontend/auth/build/index.html");
 
 const REFRESH_TOKEN_COOKIE: &str = "teknologappen-auth-refresh-token";
+const ALLOWED_DOMAINS: &[&str] = &[
+    "https://teknologappen.se",
+    "https://auth.esek.se",
+    "https://fsektionen.se",
+    "https://auth.dsek.se",
+];
+
+fn random_id() -> String {
+    // hex-formatted random string
+    format!("{:X}", rand::random::<u128>())
+}
 
 #[derive(Clone, Debug)]
-pub struct AuthData {
+struct AuthData {
     origin: String,
     callback_url: Option<String>,
     continue_url: String,
@@ -57,7 +83,7 @@ pub struct AuthData {
     validated_user: Option<UserData>,
 }
 #[derive(Serialize, Clone, Debug)]
-pub struct JwtData<T> {
+struct JwtData<T> {
     exp: u64,
     nbf: u64,
     aud: String,
@@ -77,15 +103,20 @@ impl<T> JwtData<T> {
 }
 
 #[derive(Clone)]
-pub struct Context {
-    pub db: PgPool,
-    pub reqwest_client: reqwest::Client,
-    pub private_key: EncodingKey,
-    pub public_key: Vec<u8>,
-    pub service_provider: ServiceProvider,
-    pub saml_private_key: openssl::pkey::PKey<openssl::pkey::Private>,
-    pub auth_request_id_cache: Cache<String, ()>,
-    pub auth_response_holding: Cache<String, AuthData>,
+struct Context {
+    db: PgPool,
+    reqwest_client: reqwest::Client,
+    email: Option<(
+        lettre::Address,
+        lettre::AsyncSmtpTransport<lettre::Tokio1Executor>,
+    )>,
+    private_key: EncodingKey,
+    public_key: Vec<u8>,
+    service_provider: ServiceProvider,
+    saml_private_key: openssl::pkey::PKey<openssl::pkey::Private>,
+    saml2_request_id_cache: Cache<String, ()>,
+    auth_response_holding: Cache<String, AuthData>,
+    email_token_holding: Cache<String, EmailLoginBody>,
 }
 
 async fn get_service_provider()
@@ -141,10 +172,7 @@ fn get_jwt_keys() -> color_eyre::Result<(EncodingKey, Vec<u8>)> {
         .wrap_err("`PRIVATE_KEY` not valid EdDSA key")?;
     let verifying_key = ed_key.verifying_key();
     let encoding_key = EncodingKey::from_ed_der(&key);
-    let public_key = verifying_key
-        .to_public_key_der()
-        .wrap_err("internal error: failed to encode verifying key to DER")?
-        .into_vec();
+    let public_key = verifying_key.as_bytes().to_vec();
     Ok((encoding_key, public_key))
 }
 fn get_cookie(refresh_token: Uuid) -> Cookie {
@@ -179,18 +207,44 @@ async fn main() -> color_eyre::Result<()> {
 
     let (sp, saml_pk) = get_service_provider().await?;
 
+    let email = if let Ok(url) = std::env::var("SMTP_URL") {
+        let user = std::env::var("SMTP_USER").wrap_err("`SMTP_USER` not set")?;
+        let password = std::env::var("SMTP_PASSWORD").wrap_err("`SMTP_PASSWORD` not set")?;
+
+        let credentials =
+            lettre::transport::smtp::authentication::Credentials::new(user.clone(), password);
+        let transport = lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::relay(&url)
+            .wrap_err("SMTP setup failed")?
+            .credentials(credentials)
+            .authentication(vec![
+                lettre::transport::smtp::authentication::Mechanism::Plain,
+            ])
+            .build();
+        Some((
+            user.parse()
+                .wrap_err("`SMTP_USER` is not a valid email address")?,
+            transport,
+        ))
+    } else {
+        None
+    };
+
     let context = Context {
         db,
         reqwest_client: reqwest::Client::new(),
+        email,
         private_key,
         public_key,
         service_provider: sp,
         saml_private_key: saml_pk,
         // keep them for 30 minutes
-        auth_request_id_cache: Cache::builder()
+        saml2_request_id_cache: Cache::builder()
             .time_to_live(std::time::Duration::from_mins(30))
             .build(),
         auth_response_holding: Cache::builder()
+            .time_to_live(std::time::Duration::from_mins(30))
+            .build(),
+        email_token_holding: Cache::builder()
             .time_to_live(std::time::Duration::from_mins(30))
             .build(),
     };
@@ -221,6 +275,7 @@ async fn main() -> color_eyre::Result<()> {
         .allow_method(Method::GET)
         .allow_method(Method::POST)
         .allow_header("content-type")
+        .allow_header("authorization")
         .allow_credentials(true);
 
     Server::new(TcpListener::bind("[::]:8001"))
@@ -286,12 +341,87 @@ struct UserData {
     /// User ID.
     sub: String,
     full_name: String,
-    mail: String,
+    email: String,
+}
+#[derive(ApiResponse, Debug, Clone, Copy)]
+pub enum ConfirmResponseError {
+    /// Confirmation took too long.
+    #[oai(status = 400)]
+    CacheFlushed,
+    /// Authentication is not valid!
+    #[oai(status = 400)]
+    AuthNotValid,
+    /// Unknown internal error.
+    #[oai(status = 500)]
+    Unknown,
+    /// Database error.
+    #[oai(status = 500)]
+    DbError,
+    /// Callback post request failed. See server logs.
+    #[oai(status = 503)]
+    CallbackFailed,
+}
+#[derive(ApiResponse, Debug, Clone, Copy)]
+pub enum RedirectResponseError {
+    /// The client must send origin, i.e. this must be a CORS request. It must also be UTF-8.
+    #[oai(status = 400)]
+    InvalidOrigin,
+    /// Unknown internal server error in URL creation.
+    /// See logs.
+    #[oai(status = 500)]
+    Unknown,
+}
+#[derive(Object)]
+pub struct ConfirmRequest {
+    accepted: bool,
+    id: String,
+}
+#[derive(Object)]
+pub struct RedirectBody {
+    continue_url: String,
+    callback_url: Option<String>,
+}
+#[derive(Object, Clone)]
+struct EmailLoginBody {
+    email: String,
+    name: String,
+    id: String,
+}
+#[derive(Object)]
+struct EmailApproveBody {
+    token: String,
+}
+#[derive(ApiResponse, Debug, Clone, Copy)]
+enum EmailLoginResponseError {
+    /// The client took too long.
+    #[oai(status = 401)]
+    Timeout,
+    /// Invalid e-mail address.
+    #[oai(status = 400)]
+    InvalidEmail,
+    /// Invalid name.
+    #[oai(status = 400)]
+    InvalidName,
+    /// Error sending email.
+    #[oai(status = 500)]
+    EmailError,
+}
+#[derive(Object, Clone)]
+struct TestLoginBody {
+    stil_id: String,
+    name: String,
+    id: String,
+}
+#[derive(ApiResponse, Debug, Clone, Copy)]
+enum TestLoginResponseError {
+    /// No such login ID.
+    #[oai(status = 401)]
+    InvalidId,
 }
 
 #[derive(Clone)]
-pub struct MainRouter {
-    pub context: Context,
+struct MainRouter {
+    context: Context,
 }
 impl Deref for MainRouter {
     type Target = Context;
@@ -386,12 +516,20 @@ impl MainRouter {
 
         Ok(Json(RefreshResponse { access_token }))
     }
+    /// Removes the refresh token.
+    #[oai(path = "/logout", method = "post")]
+    async fn logout(&self, cookies: &CookieJar) {
+        cookies.remove(REFRESH_TOKEN_COOKIE);
+    }
+    /// Verifies that your access token is correct.
+    #[oai(path = "/verify-access-token", method = "post")]
+    async fn verify_access_token(&self, _user: User) {}
     #[oai(path = "/confirm-datasharing", method = "post")]
     async fn confirm_datasharing(
         &self,
         body: Json<ConfirmRequest>,
         cookies: &CookieJar,
-    ) -> Result<Response<PlainText<String>>, ConfirmResponseError> {
+    ) -> Result<PlainText<String>, ConfirmResponseError> {
         let Some(data) = self.auth_response_holding.get(&body.id) else {
             warn!(
                 "Tried to confirm datasharing with an ID which is not in the database ({})",
@@ -399,9 +537,20 @@ impl MainRouter {
             );
             return Err(ConfirmResponseError::CacheFlushed);
         };
+        if !ALLOWED_DOMAINS.contains(&data.origin.as_str()) {
+            return Ok(PlainText(format!(
+                "{}{}validated=false",
+                data.continue_url,
+                if data.continue_url.contains('?') {
+                    '&'
+                } else {
+                    '?'
+                },
+            )));
+        }
         let Some(user_data) = data.validated_user else {
             warn!(
-                "Tried to confirm datasharing for a request which was not validated by LU ({})",
+                "Tried to confirm datasharing for a request which was not validated ({})",
                 body.id
             );
             return Err(ConfirmResponseError::AuthNotValid);
@@ -440,7 +589,7 @@ impl MainRouter {
         }
 
         self.auth_response_holding.invalidate(&body.id);
-        Ok(Response::new(PlainText(format!(
+        Ok(PlainText(format!(
             "{}{}validated={}",
             data.continue_url,
             if data.continue_url.contains('?') {
@@ -449,25 +598,19 @@ impl MainRouter {
                 '?'
             },
             body.accepted
-        ))))
+        )))
     }
-    /// Get URL to redirect user to to authenticate by LU SSO
-    #[oai(path = "/providers/lu", method = "post")]
-    async fn lu(
+
+    #[allow(clippy::unused_self, reason = "makes the developer experience nicer")]
+    fn check_redirect_provider<'a>(
         &self,
-        headers: &poem::http::HeaderMap,
-        body: Json<RedirectBody>,
-    ) -> Result<PlainText<String>, RedirectResponseError> {
+        headers: &'a poem::http::HeaderMap,
+        body: &Json<RedirectBody>,
+    ) -> Result<&'a str, RedirectResponseError> {
         let origin = headers
             .get("origin")
             .and_then(|header| header.to_str().ok())
             .ok_or(RedirectResponseError::InvalidOrigin)?;
-        let req = self
-            .service_provider
-            // .make_authentication_request("https://testidpv4.lu.se/idp/profile/SAML2/Redirect/SSO")
-            .make_authentication_request("https://mocksaml.com/api/saml/sso")
-            .inspect_err(|err| error!("Failed to make LU SSO request {err}"))
-            .map_err(|_| RedirectResponseError::Unknown)?;
         if let Some(cb_url) = &body.callback_url {
             let cb_url: poem::http::Uri = cb_url
                 .parse()
@@ -476,6 +619,15 @@ impl MainRouter {
                 return Err(RedirectResponseError::InvalidOrigin);
             }
         }
+        Ok(origin)
+    }
+    fn redirect_provider(
+        &self,
+        body: &Json<RedirectBody>,
+        id: &str,
+        origin: &str,
+        url: String,
+    ) -> PlainText<String> {
         let data = AuthData {
             origin: origin.to_owned(),
             callback_url: body.callback_url.clone(),
@@ -483,6 +635,25 @@ impl MainRouter {
 
             validated_user: None,
         };
+        self.auth_response_holding.insert(id.to_owned(), data);
+
+        PlainText(url)
+    }
+    /// Get URL to redirect user to to authenticate by LU SSO
+    #[oai(path = "/providers/lu", method = "post")]
+    async fn lu(
+        &self,
+        headers: &poem::http::HeaderMap,
+        body: Json<RedirectBody>,
+    ) -> Result<PlainText<String>, RedirectResponseError> {
+        let origin = self.check_redirect_provider(headers, &body)?;
+
+        let req = self
+            .service_provider
+            // .make_authentication_request("https://testidpv4.lu.se/idp/profile/SAML2/Redirect/SSO")
+            .make_authentication_request("https://mocksaml.com/api/saml/sso")
+            .inspect_err(|err| error!("Failed to make LU SSO request {err}"))
+            .map_err(|_| RedirectResponseError::Unknown)?;
         let redirect = req
             .signed_redirect("", &self.saml_private_key)
             .inspect_err(|err| error!("Failed to make LU SSO redirect {err}"))
@@ -491,21 +662,140 @@ impl MainRouter {
                 error!("Failed to create LU SSO link");
                 RedirectResponseError::Unknown
             })?;
-        self.auth_request_id_cache.insert(req.id.clone(), ());
-        self.auth_response_holding.insert(req.id.clone(), data);
+        self.saml2_request_id_cache.insert(req.id.clone(), ());
         debug!("Added ID {} to auth request id cache", req.id);
 
-        Ok(PlainText(redirect.to_string()))
+        Ok(self.redirect_provider(&body, &req.id, origin, redirect.to_string()))
+    }
+    #[oai(path = "/providers/email", method = "post")]
+    async fn email(
+        &self,
+        headers: &poem::http::HeaderMap,
+        body: Json<RedirectBody>,
+    ) -> Result<PlainText<String>, RedirectResponseError> {
+        let origin = self.check_redirect_provider(headers, &body)?;
+        let id = random_id();
+        let redirect = format!("https://auth.teknologappen.se/providers/email/?id={id}");
+
+        Ok(self.redirect_provider(&body, &id, origin, redirect))
+    }
+    #[oai(path = "/providers/test", method = "post")]
+    async fn test_provider(
+        &self,
+        headers: &poem::http::HeaderMap,
+        body: Json<RedirectBody>,
+    ) -> Result<PlainText<String>, RedirectResponseError> {
+        let origin = self.check_redirect_provider(headers, &body)?;
+        let id = random_id();
+        let redirect = format!("https://auth.teknologappen.se/providers/test/?id={id}");
+
+        Ok(self.redirect_provider(&body, &id, origin, redirect))
+    }
+    /// Corresponds to the login happening at the `IdP` in `SAML2`.
+    #[oai(path = "/providers/email/login", method = "post")]
+    async fn email_login(&self, body: Json<EmailLoginBody>) -> Result<(), EmailLoginResponseError> {
+        if !self.auth_response_holding.contains_key(&body.id) {
+            return Err(EmailLoginResponseError::Timeout);
+        }
+        if !body.name.contains(' ') || body.name.len() < 5 {
+            return Err(EmailLoginResponseError::InvalidName);
+        }
+        let token = random_id();
+        // having this as format_args made the await point for lettre fail because format_args is
+        // not Send??
+        let link = format!("https://auth.teknologappen.se/providers/email/approve/?token={token}");
+        if let Some((from, email)) = &self.email {
+            let html = format!(
+                "<p>Någon har försökt logga in med denna e-post adress. Om detta inte var du bör du slänga detta mailet. Tryck på länken för att logga in.</p><p><a href='{link}'>{link}</a>"
+            );
+            let message = lettre::Message::builder()
+                .from(lettre::message::Mailbox::new(
+                    Some("Teknologappens inloggningstjänst".to_owned()),
+                    from.clone(),
+                ))
+                .to(body
+                    .email
+                    .parse::<lettre::Address>()
+                    .map_err(|_| EmailLoginResponseError::InvalidEmail)?
+                    .into())
+                .subject("Logga in med teknologappens inloggningstjänst")
+                .header(lettre::message::header::ContentType::TEXT_HTML)
+                .body(html)
+                .inspect_err(|err| error!("Error when formatting a mail: {err}"))
+                .map_err(|_| EmailLoginResponseError::EmailError)?;
+            email
+                .send(message)
+                .await
+                .inspect_err(|err| error!("failed to send email: {err}"))
+                .map_err(|_| EmailLoginResponseError::EmailError)?;
+        } else {
+            println!(
+                "Someone tried to log in with the email {}. Click the link below to continue.",
+                body.email
+            );
+            println!("{link}");
+        }
+
+        self.email_token_holding.insert(token, (*body).clone());
+
+        Ok(())
+    }
+    /// Corresponds to acs in saml
+    #[oai(path = "/providers/email/approve", method = "post")]
+    async fn mail_approve(
+        &self,
+        body: Json<EmailApproveBody>,
+    ) -> Result<PlainText<String>, EmailLoginResponseError> {
+        let Some(login_data) = self.email_token_holding.get(&body.token) else {
+            return Err(EmailLoginResponseError::Timeout);
+        };
+        let Some(mut data) = self.auth_response_holding.get(&login_data.id) else {
+            return Err(EmailLoginResponseError::Timeout);
+        };
+        data.validated_user = Some(UserData {
+            sub: format!("mail:{}", login_data.email),
+            full_name: login_data.name,
+            email: login_data.email,
+        });
+        self.auth_response_holding
+            .insert(login_data.id.clone(), data.clone());
+
+        Ok(PlainText(format!(
+            "/confirm-datasharing/?id={}&origin={}",
+            login_data.id, data.origin
+        )))
+    }
+    /// Corresponds to acs in saml
+    #[oai(path = "/providers/test/approve", method = "post")]
+    async fn test_approve(
+        &self,
+        body: Json<TestLoginBody>,
+    ) -> Result<PlainText<String>, TestLoginResponseError> {
+        let Some(mut data) = self.auth_response_holding.get(&body.id) else {
+            return Err(TestLoginResponseError::InvalidId);
+        };
+        data.validated_user = Some(UserData {
+            sub: format!("test:{}", body.stil_id),
+            full_name: body.name.clone(),
+            email: format!("{}@student.lu.se", body.stil_id),
+        });
+        self.auth_response_holding
+            .insert(body.id.clone(), data.clone());
+
+        Ok(PlainText(format!(
+            "/confirm-datasharing/?id={}&origin={}",
+            body.id, data.origin
+        )))
     }
 }
 #[derive(ApiResponse, Debug, Clone, Copy)]
-pub enum MetadataResponseError {
+enum MetadataResponseError {
     /// Unable to produce correct metadata, invalid configuration.
     #[oai(status = 500)]
     MetadataInvalid,
 }
 #[derive(ApiResponse, Debug, Clone, Copy)]
-pub enum AcsResponseError {
+enum AcsResponseError {
     /// No `SAMLResponse` prop.
     #[oai(status = 400)]
     NoSamlResponse,
@@ -516,37 +806,9 @@ pub enum AcsResponseError {
     #[oai(status = 400)]
     CacheFlushed,
 }
-#[derive(ApiResponse, Debug, Clone, Copy)]
-pub enum ConfirmResponseError {
-    /// Confirmation took too long.
-    #[oai(status = 400)]
-    CacheFlushed,
-    /// Authentication is not valid!
-    #[oai(status = 400)]
-    AuthNotValid,
-    /// Unknown internal error.
-    #[oai(status = 500)]
-    Unknown,
-    /// Database error.
-    #[oai(status = 500)]
-    DbError,
-    /// Callback post request failed. See server logs.
-    #[oai(status = 503)]
-    CallbackFailed,
-}
-#[derive(ApiResponse, Debug, Clone, Copy)]
-pub enum RedirectResponseError {
-    /// The client must send origin, i.e. this must be a CORS request. It must also be UTF-8.
-    #[oai(status = 400)]
-    InvalidOrigin,
-    /// Unknown internal server error in URL creation.
-    /// See logs.
-    #[oai(status = 500)]
-    Unknown,
-}
 #[derive(Clone)]
-pub struct SamlRouter {
-    pub context: Context,
+struct SamlRouter {
+    context: Context,
 }
 impl Deref for SamlRouter {
     type Target = Context;
@@ -709,16 +971,6 @@ fn add_metadata_extensions(meta: &mut xmltree::Element) -> Result<usize, Metadat
 
     Ok(descriptor_extensions.len() + spsso_extensions.len())
 }
-#[derive(Object)]
-pub struct ConfirmRequest {
-    accepted: bool,
-    id: String,
-}
-#[derive(Object)]
-pub struct RedirectBody {
-    continue_url: String,
-    callback_url: Option<String>,
-}
 #[OpenApi]
 impl SamlRouter {
     /// Returns the SAML2 metadata.
@@ -764,7 +1016,7 @@ impl SamlRouter {
     ) -> Result<Response<()>, AcsResponseError> {
         // we'd want the library to take an iterator instead of &[&str]
         let ids: Vec<_> = self
-            .auth_request_id_cache
+            .saml2_request_id_cache
             .iter()
             .map(|entry| entry.key().to_owned())
             .collect();
@@ -798,42 +1050,11 @@ impl SamlRouter {
             .and_then(|sub| sub.name_id.as_ref())
             .map(|name_id| UserData {
                 sub: format!("lund-university:{}", name_id.value.clone()),
-                mail: String::new(),
+                email: String::new(),
                 full_name: "Erika Davidssona".to_owned(),
             });
         self.auth_response_holding
             .insert(request_id.clone(), data.clone());
-        // stil-id:
-        // ass.subject.unwrap().name_id.unwrap().value;
-        //
-        // - [x] tappen hemsidan: användare vill logga in med auth
-        // - [x] skickar till providers/lu med body av continue url & callback (put that & save origin header in cache)
-        //   `curl -d '{ "continue_url": "https://icelk.dev?wow" }' https://auth.teknologappen.se/api/v0/providers/lu -H 'origin: icelk.dev' -H "content-type: application/json"`
-        //   gå till hemsidan!
-        //   - [x] origin & callback host must match
-        // - [x] login sker
-        // - [x] auth får tillbaka token
-        // - [x] auth sparar (token, origin, continue, callback) ett tag med ett ID
-        // - visar en sida för användaren om hur den vill dela sina uppgifter (redirect från post sidan med ?id=...)
-        //   `curl -d '{ "accepted": true, "id": "<id>" }' https://auth.teknologappen.se/api/v0/confirm-datasharing -H "content-type: application/json`
-        // - om nej, redirect back / postMessage, no ID
-        // - [x] om ja, make request set http only cookie & callback to server, it returns redirect url & status redirect back / postMessage
-        // `curl -vd '{ "domain": "icelk.dev", "refresh_token": "<...>" }' https://auth.teknologappen.se/api/v0/refresh -H "content-type: application/json"`
-        //
-        // - mail: post to /api/v0/providers/mail
-        // - go to that page (which contains in it's query the return address & callback address)
-        // - enter mail & name: POST
-        // - (cache with senders, which this waits for)
-        // - goes to confirm-datasharing (redirect url in post body with ID)
-        //
-        // - komponenter:
-        // - auth hemsida: loginsätt
-        // - [x] auth hemsida: godkänna
-        // - [x] acs auth spara (token, origin-url, continue url) & redirect till godkänna sida
-        // - [x] ny endpoint! set cookie: id -> set-cookie, remove ID from DB
-        // - [x] backend endpoint! callback med ny användare
-        // - [x] tappen client lib (refresh tokens in requests (middleware), start this whole process
-        //   (providers/lu with redirect or iframe), handle ID (both query & postMessage))
         Ok(Response::new(()).status(StatusCode::SEE_OTHER).header(
             "location",
             format!(
