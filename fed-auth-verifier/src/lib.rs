@@ -18,7 +18,7 @@ thread_local! {
         validation
     });
 }
-async fn assure_validation_token() -> Result<(), StatusCode> {
+async fn assure_verification_key() -> Result<(), StatusCode> {
     if AUTH_KEY.with_borrow(Option::is_none) {
         let resp = reqwest::get(AUTH_KEY_URL)
             .await
@@ -76,7 +76,7 @@ impl<'a> FromRequest<'a> for User {
         let token = authorization
             .strip_prefix("Bearer ")
             .ok_or(StatusCode::UNAUTHORIZED)?;
-        assure_validation_token().await?;
+        assure_verification_key().await?;
         let data: jsonwebtoken::TokenData<Claims> = AUTH_KEY
             .with_borrow(|key| {
                 let Some(key) = key else {
@@ -105,9 +105,9 @@ pub enum CallbackResponseError {
 }
 #[derive(Debug, Object, Deserialize)]
 pub struct CallbackData {
-    sub: String,
-    mail: String,
-    full_name: String,
+    pub sub: String,
+    pub email: String,
+    pub full_name: String,
 }
 
 /// $cb can use the try operator `?` for returning [`CallbackResponseError`].
@@ -149,7 +149,7 @@ macro_rules! auth_callback_router {
             /// The auth server will post here when a user loggs in.
             #[oai(path = $url, method = "post")]
             async fn callback(&self, body: PlainText<String>) -> Result<(), CallbackResponseError> {
-                assure_validation_token()
+                assure_verification_key()
                     .await
                     .map_err(|_| CallbackResponseError::Unknown)?;
                 let $data: CallbackData = AUTH_KEY
