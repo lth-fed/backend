@@ -175,14 +175,19 @@ fn get_jwt_keys() -> color_eyre::Result<(EncodingKey, Vec<u8>)> {
     let public_key = verifying_key.as_bytes().to_vec();
     Ok((encoding_key, public_key))
 }
-fn get_cookie(refresh_token: Uuid) -> Cookie {
-    let mut cookie = Cookie::new_with_str(REFRESH_TOKEN_COOKIE, refresh_token);
+fn set_cookie_attrs(mut cookie: Cookie, days: u64) -> Cookie {
     cookie.set_http_only(true);
     cookie.set_same_site(SameSite::None);
     cookie.set_secure(true);
-    cookie.set_max_age(std::time::Duration::from_hours(24 * 365));
+    cookie.set_max_age(std::time::Duration::from_hours(24 * days));
     cookie.set_path("/");
     cookie
+}
+fn get_cookie(refresh_token: Uuid) -> Cookie {
+    set_cookie_attrs(Cookie::new_with_str(REFRESH_TOKEN_COOKIE, refresh_token), 365)
+}
+fn get_remove_cookie() -> Cookie {
+    set_cookie_attrs(Cookie::new_with_str(REFRESH_TOKEN_COOKIE, ""), 0)
 }
 
 #[tokio::main]
@@ -518,8 +523,27 @@ impl MainRouter {
     }
     /// Removes the refresh token.
     #[oai(path = "/logout", method = "post")]
-    async fn logout(&self, cookies: &CookieJar) {
-        cookies.remove(REFRESH_TOKEN_COOKIE);
+    async fn logout(&self, cookies: &CookieJar, headers: &poem::http::HeaderMap) {
+        let origin = headers
+            .get("origin")
+            .and_then(|header| header.to_str().ok());
+        if let (Some(origin), Some(refresh_token)) = (
+            origin,
+            cookies
+                .get(REFRESH_TOKEN_COOKIE)
+                .and_then(|cookie| cookie.value_str().parse::<Uuid>().ok()),
+        ) {
+            // We don't care if the user was actually logged in!
+            // So just try to remove it
+            let _: Result<_, _> = sqlx::query!(
+                "delete from auth_refresh_tokens where refresh_token = $1 and domain = $2",
+                refresh_token,
+                origin,
+            )
+            .execute(&self.db)
+            .await;
+        }
+        cookies.add(get_remove_cookie());
     }
     /// Verifies that your access token is correct.
     #[oai(path = "/verify-access-token", method = "post")]
