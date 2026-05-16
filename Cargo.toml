@@ -31,8 +31,11 @@ trivial_casts = "deny"
 unit-bindings = "deny"
 unnameable_types = "deny"
 unsafe_code = "forbid"
-unused_crate_dependencies = "warn"
-unused_extern_crates = "warn"
+# doesn't work, let's say I have a library which uses all these and then a main.rs which uses that
+# library, I get an error!
+# See: https://doc.rust-lang.org/beta/nightly-rustc/rustc_lint_defs/builtin/static.UNUSED_CRATE_DEPENDENCIES.html#explanation
+# unused_crate_dependencies = "warn"
+# unused_extern_crates = "warn"
 unused_import_braces = "warn"
 unused_lifetimes = "warn"
 unused_macro_rules = "warn"

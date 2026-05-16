@@ -4,6 +4,10 @@ authors = ["Erik Davidsson <fed@icelk.dev>"]
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "fed-auth"
+path = "src/main.rs"
+
 [dependencies]
 base64 = "0.22.1"
 color-eyre.workspace = true
@@ -31,6 +35,9 @@ uuid.workspace = true
 # this seemed to be the only one to preserve e.g. prefixes (the `md` in `<md:Extensions>`).
 # tested: quick-xml, serde-xml-rs
 xmltree = { version = "0.12.0", features = ["attribute-order"] }
+
+[dev-dependencies]
+poem = { workspace = true, features = ["test"] }
 
 [lints]
 workspace = true
