@@ -353,6 +353,21 @@ struct UserData {
     email: String,
 }
 #[derive(ApiResponse, Debug, Clone, Copy)]
+pub enum RedirectResponseError {
+    /// The client must send origin, i.e. this must be a CORS request. It must also be UTF-8.
+    #[oai(status = 400)]
+    InvalidOrigin,
+    /// Unknown internal server error in URL creation.
+    /// See logs.
+    #[oai(status = 500)]
+    Unknown,
+}
+#[derive(Object)]
+pub struct ConfirmRequest {
+    accepted: bool,
+    id: String,
+}
+#[derive(ApiResponse, Debug, Clone, Copy)]
 pub enum ConfirmResponseError {
     /// Confirmation took too long.
     #[oai(status = 400)]
@@ -372,21 +387,6 @@ pub enum ConfirmResponseError {
     /// Callback post request failed. See server logs.
     #[oai(status = 503)]
     CallbackFailed,
-}
-#[derive(ApiResponse, Debug, Clone, Copy)]
-pub enum RedirectResponseError {
-    /// The client must send origin, i.e. this must be a CORS request. It must also be UTF-8.
-    #[oai(status = 400)]
-    InvalidOrigin,
-    /// Unknown internal server error in URL creation.
-    /// See logs.
-    #[oai(status = 500)]
-    Unknown,
-}
-#[derive(Object)]
-pub struct ConfirmRequest {
-    accepted: bool,
-    id: String,
 }
 #[derive(Object)]
 pub struct RedirectBody {
@@ -414,6 +414,9 @@ enum EmailLoginResponseError {
     /// Invalid name.
     #[oai(status = 400)]
     InvalidName,
+    /// This request must come from our own domain.
+    #[oai(status = 400)]
+    Cors,
     /// Error sending email.
     #[oai(status = 500)]
     EmailError,
@@ -426,6 +429,9 @@ struct TestLoginBody {
 }
 #[derive(ApiResponse, Debug, Clone, Copy)]
 enum TestLoginResponseError {
+    /// This request must come from our own domain.
+    #[oai(status = 400)]
+    Cors,
     /// No such login ID.
     #[oai(status = 401)]
     InvalidId,
@@ -733,7 +739,14 @@ impl MainRouter {
     }
     /// Corresponds to the login happening at the `IdP` in `SAML2`.
     #[oai(path = "/providers/email/login", method = "post")]
-    async fn email_login(&self, body: Json<EmailLoginBody>) -> Result<(), EmailLoginResponseError> {
+    async fn email_login(
+        &self,
+        body: Json<EmailLoginBody>,
+        headers: &poem::http::HeaderMap,
+    ) -> Result<(), EmailLoginResponseError> {
+        if headers.contains_key("origin") {
+            return Err(EmailLoginResponseError::Cors);
+        }
         if !self.auth_response_holding.contains_key(&body.id) {
             return Err(EmailLoginResponseError::Timeout);
         }
@@ -785,7 +798,11 @@ impl MainRouter {
     async fn mail_approve(
         &self,
         body: Json<EmailApproveBody>,
+        headers: &poem::http::HeaderMap,
     ) -> Result<PlainText<String>, EmailLoginResponseError> {
+        if headers.contains_key("origin") {
+            return Err(EmailLoginResponseError::Cors);
+        }
         let Some(login_data) = self.email_token_holding.get(&body.token) else {
             return Err(EmailLoginResponseError::Timeout);
         };
@@ -810,7 +827,11 @@ impl MainRouter {
     async fn test_approve(
         &self,
         body: Json<TestLoginBody>,
+        headers: &poem::http::HeaderMap,
     ) -> Result<PlainText<String>, TestLoginResponseError> {
+        if headers.contains_key("origin") {
+            return Err(TestLoginResponseError::Cors);
+        }
         let Some(mut data) = self.auth_response_holding.get(&body.id) else {
             return Err(TestLoginResponseError::InvalidId);
         };
