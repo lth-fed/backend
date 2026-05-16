@@ -1,5 +1,9 @@
 -- this file is ordered according to how a user interacts with the system:)
 
+CREATE FUNCTION array_sum_money(money[]) RETURNS money
+   LANGUAGE sql IMMUTABLE STRICT AS
+'SELECT sum(e) FROM unnest($1) AS a(e)';
+
 create table ticket_kinds (
     id uuid primary key,
     activity_id uuid not null references activities(id),
@@ -8,7 +12,7 @@ create table ticket_kinds (
     --
     name jsonb not null,
     -- in ören
-    price money not null check (price >= 0),
+    price money not null check (price >= 0::money),
     purchasing_available_start timestamptz not null,
     purchasing_available_stop timestamptz not null,
     max_tickets integer not null check (max_tickets > 0), -- default MAX_INT
@@ -16,8 +20,8 @@ create table ticket_kinds (
     check (min_tickets < max_tickets),
     -- we need this as a lock so we don't make too many
     -- https://github.com/lth-fed/backend/pull/7#discussion_r3145792223
-    -- not needed for purchased tickets since reserved tickets are converted 1:1 to purchased ones
-    reserved_tickets integer not null check (reserved_tickets >= 0 and reserved_tickets <= max_tickets),
+    reserved_or_purchased_tickets integer not null
+    check (reserved_or_purchased_tickets >= 0 and reserved_or_purchased_tickets <= max_tickets),
     -- to disable, make the range empty
     -- to allow transfer without bounds, just set this to a REALLY long interval
     allow_transfer_ticket_start timestamptz not null,
@@ -30,14 +34,14 @@ create table ticket_kinds (
 -- which groups are allowed to buy this ticket kind
 create table ticket_kind_allowed_groups (
     ticket_kind_id uuid not null references ticket_kinds(id),
-    group_id uuid not null references groups(id),
+    group_id ltree not null references groups(admin_path),
     primary key (group_id, ticket_kind_id)
 );
 -- these are examples for how this table can be used:
 -- matpref: options tom, has_text_field = true, required= false
 -- dryckespaket: options: ["alkohol", "alkoholfritt", "inget"], has_text_field = false, required = true, multiple_alternatives = false
 -- matpref val: options ["vego", "vegan", "nötter"], has_text_field = true, required=false, multiple_alternatives=true
-create table ticket_addon (
+create table ticket_addons (
     id uuid primary key,
     ticket_kind_id uuid not null references ticket_kinds(id),
     idx integer not null,
@@ -54,15 +58,15 @@ create table ticket_addon_options (
     idx integer not null,
     --
     name jsonb not null,
-    price money not null check (price >= 0),
+    price money not null check (price >= 0::money),
     -- for the books, if e.g. 20SEK went to spirits, 15SEK to wine etc.
     -- add price here & category below. The index of the item maps it to it's price / category
 
     -- this is not optimal but composite types & sum constraints seemed very sus
-    bookkeeping_prices bigint[] not null,
+    bookkeeping_prices money[] not null,
     bookkeeping_price_categories text[] not null,
-    constraint bookkeeping_prices_add_up check (SUM(bookkeeping_prices) = price),
-    constraint bookkeeping_lengths_consistent check (LEN(bookkeeping_prices) = LEN(bookkeeping_price_categories))
+    constraint bookkeeping_prices_add_up check (array_sum_money(bookkeeping_prices) = price),
+    constraint bookkeeping_lengths_consistent check (cardinality(bookkeeping_prices) = cardinality(bookkeeping_price_categories))
 );
 
 -- people who have started queuing to buy a ticket
@@ -75,7 +79,7 @@ create table ticket_queuers (
     id uuid primary key,
     -- a biljettsläpp is only per ticket_kind, not per activity
     ticket_id uuid not null references ticket_kinds(id),
-    user_id uuid not null references users(id),
+    user_id text not null references users(id),
     -- remove after 20 minutes, should refresh after 15 minutes
     started_queueing timestamptz not null
 
@@ -95,7 +99,7 @@ create table ticket_queuers (
 create table ticket_queue (
     id uuid primary key,
     ticket_id uuid not null references ticket_kinds(id),
-    user_id uuid not null references users(id),
+    user_id text not null references users(id),
     placement integer not null check (placement >= 0)
 );
 
@@ -103,7 +107,7 @@ create table ticket_queue (
 create table ticket_reservations (
     id uuid primary key,
     ticket_id uuid not null references ticket_kinds(id),
-    user_id uuid not null references users(id),
+    user_id text not null references users(id),
     -- remove after this!
     -- or if transaction is currently happening and not cancellable wait for max an hour or smth
     timeout timestamptz not null
@@ -114,19 +118,19 @@ create table ticket_reservations (
 
 -- ONE PERSON CAN ONLY OWN ONE TICKET KIND PER ACTIVITY
 -- the backend has to check this when both buying and transferring a ticket!
-create table purchased_ticket (
+create table purchased_tickets (
     id uuid primary key,
     ticket_kind_id uuid not null references ticket_kinds(id),
     -- if these are not the same the ticket is clearly transferred
-    purchaser_id uuid not null references users(id),
-    owner_id uuid not null references users(id),
+    purchaser_id text not null references users(id),
+    owner_id text not null references users(id),
     -- could have price here, since it's not allowed to be changed once a ticket has been purchased, but it's just unnecessary because it's easy to calculate
     constraint max_one_ticket_per_person_per_activity unique (ticket_kind_id, owner_id)
 );
 create table purchased_ticket_addons (
     id uuid primary key,
     addon_id uuid not null references ticket_addons(id),
-    ticket_id uuid not null references purchased_ticket(id),
+    ticket_id uuid not null references purchased_tickets(id),
     ---
     selected_options integer[] not null,
     selected_text text not null
@@ -134,6 +138,6 @@ create table purchased_ticket_addons (
 -- clear if timestamptz is more than 1 day old
 create table purchased_ticket_validations (
     id uuid primary key,
-    purchased_ticket_id uuid not null references purchased_ticket(id),
+    purchased_ticket_id uuid not null references purchased_tickets(id),
     timestamptz timestamptz not null
 );
