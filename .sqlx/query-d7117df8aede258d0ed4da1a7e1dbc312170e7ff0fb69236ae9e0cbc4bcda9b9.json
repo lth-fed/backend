@@ -1,0 +1,27 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select group_path from group_adminships where user_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "group_path",
+        "type_info": {
+          "Custom": {
+            "name": "ltree",
+            "kind": "Simple"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "d7117df8aede258d0ed4da1a7e1dbc312170e7ff0fb69236ae9e0cbc4bcda9b9"
+}

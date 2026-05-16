@@ -81,6 +81,7 @@ pub async fn check_parent_adminship(
 
     check_adminship(db, user_id, &parent_group).await
 }
+
 /// Creates an adminship for the user on the given group.
 ///
 /// If the user is not already a member of the group, a membership is created
@@ -167,6 +168,21 @@ pub async fn group_admins(db: impl PgExecutor<'_>, group_path: &Path) -> sqlx::R
     )
     .fetch_all(db)
     .await
+}
+
+/// Returns the list of groups the user is an admin of.
+///
+/// # Errors
+///
+/// Returns an error if the database query fails.
+pub async fn user_admin_groups(db: impl PgExecutor<'_>, user_id: &str) -> sqlx::Result<Vec<Path>> {
+    sqlx::query_scalar!(
+        "select group_path from group_adminships where user_id = $1",
+        user_id
+    )
+    .fetch_all(db)
+    .await
+    .map(|paths| paths.into_iter().map(Path).collect())
 }
 
 #[cfg(test)]

@@ -38,7 +38,7 @@ pub async fn user_groups(db: impl PgExecutor<'_>, user_id: &str) -> sqlx::Result
     sqlx::query_as!(
         Group,
         r#"
-            select distinct g.path, g.limit_membership_visibility, g.name, g.description, g.deleted
+            select distinct g.id, g.path, g.limit_membership_visibility, g.name, g.description, g.deleted
             from groups g
             join group_memberships gm on gm.user_id = $1
             where
@@ -57,10 +57,7 @@ pub async fn user_groups(db: impl PgExecutor<'_>, user_id: &str) -> sqlx::Result
 /// # Errors
 ///
 /// Returns an error if the database query fails.
-pub async fn group_members(
-    db: impl PgExecutor<'_>,
-    group_path: &Path,
-) -> sqlx::Result<Vec<String>> {
+pub async fn group_members(db: impl PgExecutor<'_>, group_id: Uuid) -> sqlx::Result<Vec<String>> {
     sqlx::query_scalar!(
         "select distinct user_id from group_memberships where group_path <@ $1",
         group_path.0

@@ -1,10 +1,15 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            select distinct g.path, g.limit_membership_visibility, g.name, g.description, g.deleted\n            from groups g\n            join group_memberships gm on gm.user_id = $1\n            where\n                (g.limit_membership_visibility = false and g.path <@ gm.group_path)\n                or\n                (g.limit_membership_visibility = true and g.path = gm.group_path)\n        ",
+  "query": "insert into groups (path, name, description, limit_membership_visibility) values ($1, $2, $3, $4) returning id, path, limit_membership_visibility, name, description, deleted",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
         "name": "path",
         "type_info": {
           "Custom": {
@@ -14,29 +19,37 @@
         }
       },
       {
-        "ordinal": 1,
+        "ordinal": 2,
         "name": "limit_membership_visibility",
         "type_info": "Bool"
       },
       {
-        "ordinal": 2,
+        "ordinal": 3,
         "name": "name",
         "type_info": "Jsonb"
       },
       {
-        "ordinal": 3,
+        "ordinal": 4,
         "name": "description",
         "type_info": "Jsonb"
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "deleted",
         "type_info": "Bool"
       }
     ],
     "parameters": {
       "Left": [
-        "Text"
+        {
+          "Custom": {
+            "name": "ltree",
+            "kind": "Simple"
+          }
+        },
+        "Jsonb",
+        "Jsonb",
+        "Bool"
       ]
     },
     "nullable": [
@@ -44,8 +57,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "02cb3b86130e49aff140f8dfc300a78439c36f20b8c9668c9c1e987e21cbd175"
+  "hash": "7b48e8bd9d1f461369f0c28883358763d807d6ad4d7b2eaea16dcdf6ae70c69c"
 }
