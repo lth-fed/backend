@@ -3,4 +3,4 @@ create table images (
     created timestamptz not null,
     size bigint not null,
     url text not null
-)
+);
