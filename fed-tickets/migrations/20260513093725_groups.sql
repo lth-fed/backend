@@ -1,7 +1,8 @@
 create extension ltree;
 
 create table groups (
-    path ltree primary key,
+    id uuid primary key default uuidv4(),
+    path ltree not null unique,
 
     -- This generated column and fk constraint ensures that no non-root groups
     -- are orphans, i.e. that they have existing parents.
@@ -23,10 +24,14 @@ create table groups (
     deleted boolean not null default false
 );
 
+-- GiST index for ltree ancestor/descendant operators (@>, <@). The b-tree
+-- created by the unique constraint on `path` does not accelerate these.
+create index groups_path_gist on groups using gist (path);
+
 -- members from which other groups can ask to join this group?
 create table groups_ask_to_join (
-    target_path ltree not null references groups(path),
-    joiner_path ltree not null references groups(path),
+    target_path ltree not null references groups(path) on update cascade,
+    joiner_path ltree not null references groups(path) on update cascade,
     primary key (target_path, joiner_path)
 );
 
@@ -39,16 +44,19 @@ create table groups_ask_to_join (
 
 create table group_memberships (
     user_id text not null references users(id),
-    group_path ltree not null references groups(path),
+    group_path ltree not null references groups(path) on update cascade,
     primary key (user_id, group_path)
 );
 
 create table group_adminships (
     user_id text not null references users(id),
-    group_path ltree not null references groups(path),
+    group_path ltree not null references groups(path) on update cascade,
     primary key (user_id, group_path),
     -- ensure there exists a group membership with the same user_id and group_path
-    constraint group_adminships_group_membership_fk foreign key (user_id, group_path) references group_memberships (user_id, group_path) on delete cascade
+    constraint group_adminships_group_membership_fk foreign key (user_id, group_path)
+        references group_memberships (user_id, group_path)
+        on update cascade
+        on delete cascade
 );
 
 -- create type notification_level as enum ('none', 'personalized', 'all');

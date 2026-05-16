@@ -4,7 +4,7 @@ use poem_openapi::{
     ApiResponse, Object, OpenApi, param,
     payload::{Json, PlainText},
 };
-use sqlx::postgres::types::PgLTreeLabel;
+use uuid::Uuid;
 
 pub mod admin;
 pub mod member;
@@ -27,6 +27,7 @@ pub struct Router {
 
 #[derive(Debug, Object)]
 pub struct Group {
+    pub id: Uuid,
     pub path: Path,
     pub limit_membership_visibility: bool,
     pub name: serde_json::Value,
@@ -40,11 +41,7 @@ pub struct Group {
 )]
 #[derive(Debug, Object)]
 pub struct CreateGroup {
-    /// The parent group's ID, if any.
-    ///
-    /// An `null` or empty path is equivalent to no parent.
-    #[oai(default)]
-    pub parent: Path,
+    pub path: Path,
     pub name: serde_json::Value,
     pub description: serde_json::Value,
     pub limit_membership_visibility: bool,
@@ -98,22 +95,20 @@ impl Router {
         let mut txn = self.context.db.begin().await.map_err(InternalServerError)?;
 
         let CreateGroup {
-            parent,
+            path,
             name,
             description,
             limit_membership_visibility,
         } = create_group;
 
+        let parent = path
+            .parent()
+            .ok_or_else(|| Error::from_string("no parent group", StatusCode::BAD_REQUEST))?;
         check_adminship(&mut *txn, user.get_id(), &parent).await?;
-
-        let label = generate_group_label(&name)
-            .ok_or_else(|| Error::from_string("invalid name", StatusCode::BAD_REQUEST))?;
-
-        let path = parent.join(label);
 
         let group = sqlx::query_as!(
             Group,
-            "insert into groups (path, name, description, limit_membership_visibility) values ($1, $2, $3, $4) returning path, limit_membership_visibility, name, description, deleted",
+            "insert into groups (path, name, description, limit_membership_visibility) values ($1, $2, $3, $4) returning id, path, limit_membership_visibility, name, description, deleted",
             path.0,
             name,
             description,
@@ -123,7 +118,7 @@ impl Router {
         .await
         .map_err(|err| match err {
             sqlx::Error::Database(ref db_err) if let Some(constraint) = db_err.constraint() => match constraint {
-                "groups_pkey" => Error::from_string("group already exists", StatusCode::CONFLICT),
+                "groups_path_key" => Error::from_string("group already exists", StatusCode::CONFLICT),
                 "groups_parent_path_fkey" => Error::from_string(format!("no parent with path `{parent}` exists"), StatusCode::BAD_REQUEST),
                 _unknown_constraint => InternalServerError(err),
             }
@@ -188,6 +183,7 @@ impl Router {
         let adminship = admin::create_adminship(&mut *txn, &user_id, &group)
             .await
             .map_err(InternalServerError)?;
+        // todo: notify other admins via email
         txn.commit().await.map_err(InternalServerError)?;
 
         Ok(Json(adminship))
@@ -210,15 +206,9 @@ impl Router {
         admin::remove_adminship(&mut *txn, &user_id, &group)
             .await
             .map_err(InternalServerError)?;
+        // todo: notify other admins via email
         txn.commit().await.map_err(InternalServerError)?;
 
         Ok(RemoveAdminshipResponse::Ok(PlainText("adminship removed")))
     }
-}
-
-fn generate_group_label(value: &serde_json::Value) -> Option<PgLTreeLabel> {
-    value.as_object()?.iter().find_map(|(_key, value)| {
-        let value = value.as_str()?;
-        PgLTreeLabel::new(value).ok()
-    })
 }
