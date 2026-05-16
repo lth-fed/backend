@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select exists (\n                select 1\n                from ticket_kinds tk\n                where tk.activity_id = $1\n            ) as value;\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "value",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "4c5fa9ab0172c45a1c0cbd60ea611d0e43bde2e1a3958a7f888e77d1949b66f6"
+}
