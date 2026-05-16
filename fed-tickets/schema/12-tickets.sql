@@ -1,5 +1,4 @@
 -- this file is ordered according to how a user interacts with the system:)
-
 CREATE FUNCTION array_sum_money(money[]) RETURNS money
    LANGUAGE sql IMMUTABLE STRICT AS
 'SELECT sum(e) FROM unnest($1) AS a(e)';
