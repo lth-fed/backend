@@ -1,16 +1,3 @@
-//! - [x] tappen hemsidan: användare vill logga in med auth
-//! - [x] skickar till providers/lu med body av continue url & callback (put that & save origin header in cache)
-//!   `curl -d '{ "continue_url": "https://icelk.dev?wow" }' https://auth.teknologappen.se/api/v0/providers/lu -H 'origin: icelk.dev' -H "content-type: application/json"`
-//!   gå till hemsidan!
-//!   - [x] origin & callback host must match
-//! - [x] login sker
-//! - [x] auth får tillbaka token
-//! - [x] auth sparar (token, origin, continue, callback) ett tag med ett ID
-//! - visar en sida för användaren om hur den vill dela sina uppgifter (redirect från post sidan med ?id=...)
-//!   `curl -d '{ "accepted": true, "id": "<id>" }' https://auth.teknologappen.se/api/v0/confirm-datasharing -H "content-type: application/json`
-//! - om nej, redirect back / postMessage, no ID
-//! - [x] om ja, make request set http only cookie & callback to server, it returns redirect url & status redirect back / postMessage
-//!   `curl -vd '{ "domain": "icelk.dev", "refresh_token": "<...>" }' https://auth.teknologappen.se/api/v0/refresh -H "content-type: application/json"`
 #![allow(clippy::unused_async, reason = "OpenAPI requires async handlers")]
 #![allow(
     missing_debug_implementations,
