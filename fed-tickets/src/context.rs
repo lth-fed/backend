@@ -7,10 +7,38 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Postgres};
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::EnvFilter;
+use chacha20::ChaCha20;
+use chacha20::cipher::KeyIvInit as _;
+use chacha20::cipher::StreamCipher as _;
+use sqlx::PgPool;
 
 #[derive(Debug, Clone)]
 pub struct Context {
     pub db: PgPool,
+    encryption_key: [u8; 32],
+}
+
+impl Context {
+    #[must_use]
+    pub fn new(db: PgPool, encryption_key: [u8; 32]) -> Self {
+        Context { db, encryption_key }
+    }
+    /// Encrypts and decrypts any data using chacha20 given a 12 byte nonce.
+    ///
+    /// ## Example
+    /// ```rs
+    /// let nonce: [u8; 12] = rand::random();
+    /// let data = b"secret data";
+    /// let encrypted = context.endecrypt(data, &nonce);
+    /// let decrypted = context.endecrypt(&encrypted, &nonce);
+    /// ```
+    #[must_use]
+    pub fn endecrypt(&self, data: &[u8], nonce: &[u8; 12]) -> Vec<u8> {
+        let mut cipher = ChaCha20::new(&self.encryption_key.into(), nonce.into());
+        let mut buffer = data.to_owned();
+        cipher.apply_keystream(&mut buffer);
+        buffer
+    }
 }
 impl Context {
     /// # Errors
