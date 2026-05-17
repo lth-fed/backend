@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use poem_openapi::{ApiResponse, Object, OpenApi, payload::Json};
 
 use crate::context::Context;
@@ -5,6 +7,12 @@ use crate::context::Context;
 #[derive(Clone, Debug)]
 pub struct Router {
     pub context: Context,
+}
+impl Deref for Router {
+    type Target = Context;
+    fn deref(&self) -> &Self::Target {
+        &self.context
+    }
 }
 
 #[derive(Debug, Object)]
