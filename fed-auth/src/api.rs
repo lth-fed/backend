@@ -8,7 +8,7 @@ use poem_openapi::{ApiResponse, Object, OpenApi};
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
-use crate::{Context, context, cookie, jwt, random_id};
+use crate::{Context, DOMAIN, context, cookie, jwt, random_id};
 
 const ALLOWED_DOMAINS: &[&str] = &[
     "https://teknologappen.se",
@@ -241,7 +241,7 @@ impl MainRouter {
         headers: &poem::http::HeaderMap,
         cookies: &CookieJar,
     ) -> Result<PlainText<String>, ConfirmError> {
-        if headers.contains_key("origin") {
+        if headers.get("origin").is_some_and(|origin| origin != DOMAIN) {
             return Err(ConfirmError::Cors);
         }
         let Some(data) = self.auth_sessions.get(&body.id) else {
@@ -394,7 +394,7 @@ impl MainRouter {
     ) -> Result<PlainText<String>, ProviderError> {
         let origin = self.check_redirect_provider(headers, &body)?;
         let id = random_id();
-        let redirect = format!("https://auth.teknologappen.se/providers/email/?id={id}");
+        let redirect = format!("{DOMAIN}/providers/email/?id={id}");
 
         Ok(self.redirect_provider(&body, &id, origin, redirect))
     }
@@ -406,7 +406,7 @@ impl MainRouter {
     ) -> Result<PlainText<String>, ProviderError> {
         let origin = self.check_redirect_provider(headers, &body)?;
         let id = random_id();
-        let redirect = format!("https://auth.teknologappen.se/providers/test/?id={id}");
+        let redirect = format!("{DOMAIN}/providers/test/?id={id}");
 
         Ok(self.redirect_provider(&body, &id, origin, redirect))
     }
@@ -417,7 +417,7 @@ impl MainRouter {
         body: Json<EmailLoginRequest>,
         headers: &poem::http::HeaderMap,
     ) -> Result<(), EmailLoginError> {
-        if headers.contains_key("origin") {
+        if headers.get("origin").is_some_and(|origin| origin != DOMAIN) {
             return Err(EmailLoginError::Cors);
         }
         if !self.auth_sessions.contains_key(&body.id) {
@@ -429,7 +429,7 @@ impl MainRouter {
         let token = random_id();
         // having this as format_args made the await point for lettre fail because format_args is
         // not Send??
-        let link = format!("https://auth.teknologappen.se/providers/email/approve/?token={token}");
+        let link = format!("{DOMAIN}/providers/email/approve/?token={token}");
         if let Some((from, email)) = &self.email {
             let html = format!(
                 "<p>Någon har försökt logga in med denna e-post adress. Om detta inte var du bör du slänga detta mailet. Tryck på länken för att logga in.</p><p><a href='{link}'>{link}</a>"
@@ -473,7 +473,7 @@ impl MainRouter {
         body: Json<EmailApproveResponse>,
         headers: &poem::http::HeaderMap,
     ) -> Result<PlainText<String>, EmailLoginError> {
-        if headers.contains_key("origin") {
+        if headers.get("origin").is_some_and(|origin| origin != DOMAIN) {
             return Err(EmailLoginError::Cors);
         }
         let Some(login_data) = self.email_token_holding.get(&body.token) else {
@@ -502,7 +502,7 @@ impl MainRouter {
         body: Json<TestLoginRequest>,
         headers: &poem::http::HeaderMap,
     ) -> Result<PlainText<String>, TestLoginError> {
-        if headers.contains_key("origin") {
+        if headers.get("origin").is_some_and(|origin| origin != DOMAIN) {
             return Err(TestLoginError::Cors);
         }
         let Some(mut data) = self.auth_sessions.get(&body.id) else {

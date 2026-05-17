@@ -16,7 +16,7 @@ use samael::traits::ToXml as _;
 use tracing::error;
 use xmltree::XMLNode;
 
-use crate::{Context, context};
+use crate::{Context, DOMAIN, context};
 
 pub async fn get_service_provider()
 -> color_eyre::Result<(ServiceProvider, openssl::pkey::PKey<openssl::pkey::Private>)> {
@@ -42,7 +42,7 @@ pub async fn get_service_provider()
     let saml_cert = samael::crypto::CertificateDer::from(saml_cert);
 
     let sp = ServiceProviderBuilder::default()
-        .entity_id("https://auth.teknologappen.se/saml2/".to_owned())
+        .entity_id(format!("{DOMAIN}/saml2/"))
         .key(saml_pk.clone())
         .certificate(saml_cert)
         .allow_idp_initiated(false)
@@ -56,9 +56,9 @@ pub async fn get_service_provider()
             telephone_numbers: None,
         })
         .idp_metadata(idp_metadata)
-        .acs_url("https://auth.teknologappen.se/saml2/acs".to_owned())
+        .acs_url(format!("{DOMAIN}/saml2/acs"))
         // doesn't actually exist but is required by samael to exist
-        .slo_url("https://auth.teknologappen.se/saml2/slo".to_owned())
+        .slo_url(format!("{DOMAIN}/saml2/slo"))
         .build()?;
     Ok((sp, saml_pk))
 }
