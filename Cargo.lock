@@ -936,6 +936,7 @@ dependencies = [
  "poem-openapi",
  "reqwest",
  "serde",
+ "sqlx",
 ]
 
 [[package]]

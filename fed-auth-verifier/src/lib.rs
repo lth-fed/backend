@@ -104,94 +104,56 @@ pub enum CallbackResponseError {
     Unknown,
 }
 #[derive(Debug, Object, Deserialize)]
-pub struct CallbackData {
+pub struct CallbackDataV1 {
     pub sub: String,
     pub email: String,
     pub full_name: String,
 }
 
-/// $cb can use the try operator `?` for returning [`CallbackResponseError`].
-///
 /// # Example
 ///
 /// ```no_compile
+/// # use poem_openapi::OpenApi;
+/// # use fed_auth_verifier::CallbackDataV1;
 /// pub struct Context {
 ///     db: sqlx::PgPool,
 /// }
-/// auth_callback_router!(AuthRouter, Context, "/api/v0/auth-login", async |ctx, data| {
-///     sqlx::query!(
-///         "insert into users values ($1, $2, $3)",
-///         data.sub, data.full_name, data.mail,
-///     )
-///     .execute(&*ctx.db)
-///     .await
-///     .map_err(|_| CallbackResponseError::DbError)?;
-/// });
+/// pub struct Router {
+///     context: Context,
+/// }
+/// #[OpenApi]
+/// impl Router {
+///     #[oai(path = "/callback/v1", method = "post")]
+///     async fn callback(&self, data: CallbackDataV1) {
+///         sqlx::query!(
+///             "insert into users values ($1, $2, $3)",
+///             data.sub, data.full_name, data.mail,
+///         )
+///         .execute(&self.context.db)
+///         .await
+///         .unwrap();
+///     }
+/// }
 /// ```
-#[macro_export]
-macro_rules! auth_callback_router {
-    ($router_name: ident, $context_type: ident, $url: literal, async |$context: ident, $data: ident| $cb: expr) => {
-        use poem_openapi::{OpenApi, payload::PlainText};
-        use std::ops::Deref;
-        use $crate::*;
-
-        pub struct $router_name {
-            pub context: $context_type,
-        }
-        impl Deref for $router_name {
-            type Target = $context_type;
-            fn deref(&self) -> &Self::Target {
-                &self.context
-            }
-        }
-        #[OpenApi]
-        impl $router_name {
-            /// The auth server will post here when a user loggs in.
-            #[oai(path = $url, method = "post")]
-            async fn callback(&self, body: PlainText<String>) -> Result<(), CallbackResponseError> {
-                assure_verification_key()
-                    .await
-                    .map_err(|_| CallbackResponseError::Unknown)?;
-                let $data: CallbackData = AUTH_KEY
-                    .with_borrow(|key| {
-                        let Some(key) = key else {
-                            return Err(CallbackResponseError::Unknown);
-                        };
-                        Ok(VALIDATION
-                            .with(|validation| jsonwebtoken::decode(&**body, key, validation)))
-                    })?
-                    .map_err(|_| CallbackResponseError::SignatureInvalid)?
-                    .claims;
-
-                let $context = &**self;
-                $cb;
-
-                Ok(())
-            }
-        }
-    };
-}
-
-#[cfg(test)]
-mod tests {
-    use poem_openapi::OpenApiService;
-
-    pub struct Context {
-        number: u64,
-    }
-    auth_callback_router!(AuthRouter, Context, "/api/v0/auth", async |ctx, data| {
-        println!("Data: {data:?}, context number: {}", ctx.number);
-    });
-
-    #[test]
-    fn auth_callback() {
-        let _api_service = OpenApiService::new(
-            AuthRouter {
-                context: Context { number: 1 },
-            },
-            env!("CARGO_PKG_NAME"),
-            env!("CARGO_PKG_VERSION"),
-        )
-        .server("http://localhost:21443");
+impl<'a> FromRequest<'a> for CallbackDataV1 {
+    async fn from_request(
+        _req: &'a poem::Request,
+        body: &mut poem::RequestBody,
+    ) -> poem::Result<Self> {
+        assure_verification_key()
+            .await
+            .map_err(|_| CallbackResponseError::Unknown)?;
+        let body = body.take()?;
+        let body = body.into_string().await?;
+        let data: CallbackDataV1 = AUTH_KEY
+            .with_borrow(|key| {
+                let Some(key) = key else {
+                    return Err(CallbackResponseError::Unknown);
+                };
+                Ok(VALIDATION.with(|validation| jsonwebtoken::decode(&body, key, validation)))
+            })?
+            .map_err(|_| CallbackResponseError::SignatureInvalid)?
+            .claims;
+        Ok(data)
     }
 }
