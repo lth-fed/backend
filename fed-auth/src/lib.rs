@@ -34,6 +34,8 @@ mod saml2;
 
 pub(crate) use context::Context;
 
+pub(crate) const DOMAIN: &str = "https://auth.teknologappen.se";
+
 #[derive(rust_embed::Embed)]
 #[cfg_attr(
     not(all(
@@ -64,7 +66,7 @@ pub async fn get_endpoint(db: Option<PgPool>) -> color_eyre::Result<impl poem::E
     #[cfg(debug_assertions)]
     let server_url = "http://localhost:8001";
     #[cfg(not(debug_assertions))]
-    let server_url = "https://auth.teknologappen.se";
+    let server_url = DOMAIN;
     let api_service = OpenApiService::new(
         api::MainRouter {
             context: context.clone(),
