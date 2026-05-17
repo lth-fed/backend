@@ -285,10 +285,7 @@ impl SamlRouter {
     /// Get JWT access token and a new refresh token.
     #[oai(path = "/acs", method = "post")]
     #[allow(clippy::panic, reason = "yes")]
-    async fn acs(
-        &self,
-        body: Form<HashMap<String, String>>,
-    ) -> Result<Response<()>, AcsError> {
+    async fn acs(&self, body: Form<HashMap<String, String>>) -> Result<Response<()>, AcsError> {
         // we'd want the library to take an iterator instead of &[&str]
         let ids: Vec<_> = self
             .saml2_request_id_cache
@@ -297,9 +294,7 @@ impl SamlRouter {
             .collect();
         let ids: Vec<_> = ids.iter().map(String::as_str).collect();
 
-        let saml_response = body
-            .get("SAMLResponse")
-            .ok_or(AcsError::NoSamlResponse)?;
+        let saml_response = body.get("SAMLResponse").ok_or(AcsError::NoSamlResponse)?;
         let ass = self
             .service_provider
             .parse_base64_response(saml_response, Some(&ids))

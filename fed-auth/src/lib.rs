@@ -35,7 +35,20 @@ mod saml2;
 pub(crate) use context::Context;
 
 #[derive(rust_embed::Embed)]
-#[folder = "../../frontend/auth/build"]
+#[cfg_attr(
+    not(all(
+        debug_assertions,
+        feature = "ci-test-dont-use-when-building-for-production"
+    )),
+    folder = "../../frontend/auth/build"
+)]
+#[cfg_attr(
+    all(
+        debug_assertions,
+        feature = "ci-test-dont-use-when-building-for-production"
+    ),
+    folder = "."
+)]
 struct Website;
 
 fn random_id() -> String {

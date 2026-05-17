@@ -8,6 +8,9 @@ edition = "2024"
 name = "fed-auth"
 path = "src/main.rs"
 
+[features]
+ci-test-dont-use-when-building-for-production = []
+
 [dependencies]
 base64 = "0.22.1"
 color-eyre.workspace = true

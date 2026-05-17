@@ -2,21 +2,61 @@ name: Cargo Build & Test
 
 on: push
 
-env: 
+env:
   CARGO_TERM_COLOR: always
-  SQLX_OFFLINE: true
+  PGPASSWORD: postgres
+  SQLX_OFFLINE: "true"
 
 jobs:
-  build_and_test:
-    name: Rust CI
+  build:
+    name: Rust build & lints
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt update && sudo apt-get install libxmlsec1-dev pkg-config
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
-      - run: mkdir -p ../frontend/auth/build
-      - run: touch ../frontend/auth/build/index.html
-      - run: cargo build --workspace
-      - run: cargo test --workspace
-      - run: cargo clippy --workspace -- -D warnings
+      - run: cargo build --workspace -F ci-test-dont-use-when-building-for-production
+      - run: cargo clippy --workspace -F ci-test-dont-use-when-building-for-production -- -D warnings
+
+  test:
+    name: Rust tests
+    runs-on: ubuntu-latest
+    services:
+      postgres-fed:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          # doesn't really matter since sqlx creates them
+          POSTGRES_DB: fed
+        ports:
+          - 5432:5432
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt update && sudo apt-get install libxmlsec1-dev pkg-config
+      - uses: Swatinem/rust-cache@v2
+      - run: cp fed-auth/.env.example fed-auth/.env
+      - run: cp fed-tickets/.env.example fed-tickets/.env
+        # test those who don't need DB
+      - run: cargo test --workspace --exclude fed-auth --exclude fed-tickets
+      - name: Wait for Postgres
+        run: |
+          for i in {1..30}; do
+            if pg_isready -h localhost -p 5432 -U postgres; then
+              echo "Postgres is ready"
+              exit 0
+            fi
+            echo "Waiting for Postgres... ($i/30)"
+            sleep 2
+          done
+          echo "Postgres did not become ready in time"
+          exit 1
+      - run: createdb -h localhost -p 5432 -U postgres auth
+        # ... and run them against the real database
+      - run: cargo test -p fed-tickets
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost/fed
+      - run: cargo test -p fed-auth -F ci-test-dont-use-when-building-for-production
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost/auth

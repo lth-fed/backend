@@ -276,8 +276,8 @@ impl MainRouter {
 
         if body.accepted {
             if let Some(cb_url) = &data.callback {
-                let token = jwt::encode(&user_data, &self.private_key)
-                    .ok_or(ConfirmError::Unknown)?;
+                let token =
+                    jwt::encode(&user_data, &self.private_key).ok_or(ConfirmError::Unknown)?;
                 match cb_url.as_latest() {
                     context::CallbackUrlVersion::V1 { url } => {
                         self.reqwest_client
