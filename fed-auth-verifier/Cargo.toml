@@ -11,5 +11,8 @@ poem-openapi.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 
+[dev-dependencies]
+sqlx.workspace = true
+
 [lints]
 workspace = true
