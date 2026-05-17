@@ -931,12 +931,14 @@ dependencies = [
 name = "fed-auth-verifier"
 version = "0.1.0"
 dependencies = [
+ "color-eyre",
  "jsonwebtoken",
  "poem",
  "poem-openapi",
  "reqwest",
  "serde",
  "sqlx",
+ "tracing",
 ]
 
 [[package]]

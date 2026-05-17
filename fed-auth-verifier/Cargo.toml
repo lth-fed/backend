@@ -5,11 +5,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+color-eyre.workspace = true
 jsonwebtoken.workspace = true
 poem.workspace = true
 poem-openapi.workspace = true
 reqwest.workspace = true
 serde.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 sqlx.workspace = true

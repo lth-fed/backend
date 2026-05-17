@@ -17,6 +17,7 @@
     reason = "we can't add debug to e.g. Context"
 )]
 #![allow(clippy::same_name_method, reason = "rust_embed uses it")]
+use fed_auth_verifier::AuthContext;
 use poem::EndpointExt as _;
 use poem::endpoint::EmbeddedFilesEndpoint;
 use poem::http::Method;
@@ -63,6 +64,8 @@ fn random_id() -> String {
 /// If the endpoint fails to set up, often because env variables / database is missing.
 pub async fn get_endpoint(db: Option<PgPool>) -> color_eyre::Result<impl poem::Endpoint> {
     let context = Context::new(db).await?;
+    let auth_ctx =
+        AuthContext::from_decoding_key(jsonwebtoken::DecodingKey::from_ed_der(&context.public_key));
     #[cfg(debug_assertions)]
     let server_url = "http://localhost:8001";
     #[cfg(not(debug_assertions))]
@@ -95,7 +98,7 @@ pub async fn get_endpoint(db: Option<PgPool>) -> color_eyre::Result<impl poem::E
 
     let route = Route::new()
         .nest("/", EmbeddedFilesEndpoint::<Website>::new())
-        .nest("/api/v0", api_service)
+        .nest("/api/v0", api_service.data(auth_ctx))
         .nest("/api/v0/docs", ui)
         .nest("/saml2", saml_service)
         .nest("/saml2/docs", saml_ui)
