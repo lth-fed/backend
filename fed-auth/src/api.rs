@@ -130,8 +130,8 @@ impl Deref for MainRouter {
 }
 #[OpenApi]
 impl MainRouter {
-    /// Returns the key as DER.
-    #[oai(path = "/verify-key.der", method = "get")]
+    /// Returns the public key as it's raw bytes (32 bytes).
+    #[oai(path = "/verifying-key", method = "get")]
     async fn get_verify_key(&self) -> Response<Binary<Vec<u8>>> {
         Response::new(Binary(self.public_key.clone()))
     }
