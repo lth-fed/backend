@@ -1,12 +1,12 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select distinct user_id from group_adminships where group_path @> $1",
+  "query": "select id from groups where path = $1",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "user_id",
-        "type_info": "Text"
+        "name": "id",
+        "type_info": "Uuid"
       }
     ],
     "parameters": {
@@ -23,5 +23,5 @@
       false
     ]
   },
-  "hash": "f5bd92d0eb82bd76d27afd3850a5b6722c299e4d77ed53381008ca5f5786d8cc"
+  "hash": "06a785b4a7cd278d21e494d06020b1a64443a7ce0d414f2b9d32a2a7e4898397"
 }

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from group_adminships ga\n        using groups g, groups target\n        where g.id = ga.group_id\n          and target.id = $2\n          and ga.user_id = $1\n          and g.path <@ target.path",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5c610abdfac872f90ef15d302e2c155a8daf8815c595a60ae01071395864cb7f"
+}

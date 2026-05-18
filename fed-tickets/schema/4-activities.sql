@@ -13,7 +13,7 @@ create table activities (
     id uuid primary key,
     -- has to be user with email
     responsible_id text not null references users(id),
-    creator_id ltree not null references groups(admin_path),
+    creator_id uuid not null references groups(id),
     --
     title jsonb not null,
     description jsonb not null,
@@ -28,12 +28,12 @@ create table activities (
 -- co-hosts of event. should not include activities.creator_id
 create table activity_hosts (
     activity_id uuid not null references activities(id),
-    group_id ltree not null references groups(admin_path),
+    group_id uuid not null references groups(id),
     primary key (activity_id, group_id)
 );
 -- invites to be `activity_hosts`
 create table activity_host_invites (
     activity_id uuid not null references activities(id),
-    group_id ltree not null references groups(admin_path),
+    group_id uuid not null references groups(id),
     primary key (activity_id, group_id)
 );

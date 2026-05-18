@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            select distinct g.id, g.path, g.limit_membership_visibility, g.name, g.description, g.deleted\n            from groups g\n            join group_memberships gm on gm.user_id = $1\n            where\n                (g.limit_membership_visibility = false and g.path <@ gm.group_path)\n                or\n                (g.limit_membership_visibility = true and g.path = gm.group_path)\n        ",
+  "query": "\n            select distinct g.id, g.path, g.limit_membership_visibility, g.name, g.description, g.deleted\n            from groups g\n            join group_memberships gm on gm.user_id = $1\n            join groups mg on mg.id = gm.group_id\n            where\n                (g.limit_membership_visibility = false and g.path <@ mg.path)\n                or\n                (g.limit_membership_visibility = true and g.id = gm.group_id)\n        ",
   "describe": {
     "columns": [
       {
@@ -53,5 +53,5 @@
       false
     ]
   },
-  "hash": "124fb27821c8f1df112062f7d69efde394ea895aa62e2f515c9cd1668e9aadf3"
+  "hash": "4f9b6664ff4b8cc4760825e6fe7169b368f5128df1aab6b73a3e00ee9a6ad514"
 }

@@ -1,4 +1,6 @@
 /target
 /postgres-data
 **.env
-/.sqlx # make sure to run `cargo sqlx prepare` without --workspace
+
+# make sure to run `cargo sqlx prepare` without --workspace
+/.sqlx

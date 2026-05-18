@@ -1,9 +1,11 @@
 use sqlx::PgExecutor;
+use uuid::Uuid;
 
 use crate::group::{Group, path::Path};
 
 /// Returns the closest matching (longest prefix) group path for the given user
-/// and group path, if such a membership exists.
+/// and group id, if such a membership exists. Returns `None` if the user has
+/// no membership covering the group, or if the group does not exist.
 ///
 /// # Errors
 ///
@@ -11,20 +13,21 @@ use crate::group::{Group, path::Path};
 pub async fn closest_user_membership(
     db: impl PgExecutor<'_>,
     user_id: &str,
-    group_path: &Path,
+    group_id: Uuid,
 ) -> sqlx::Result<Option<Path>> {
     sqlx::query_scalar!(
-        r#"select group_path
-        from group_memberships
-        where user_id = $1 and group_path @> $2
-        order by nlevel(group_path) desc
+        r#"select g.path as "path!: Path"
+        from group_memberships gm
+        join groups g on g.id = gm.group_id
+        join groups target on target.id = $2
+        where gm.user_id = $1 and g.path @> target.path
+        order by nlevel(g.path) desc
         limit 1"#,
         user_id,
-        group_path.0
+        group_id
     )
     .fetch_optional(db)
     .await
-    .map(|opt| opt.map(Path))
 }
 
 /// Returns all the groups that the user is a member of, including nested
@@ -41,10 +44,11 @@ pub async fn user_groups(db: impl PgExecutor<'_>, user_id: &str) -> sqlx::Result
             select distinct g.id, g.path, g.limit_membership_visibility, g.name, g.description, g.deleted
             from groups g
             join group_memberships gm on gm.user_id = $1
+            join groups mg on mg.id = gm.group_id
             where
-                (g.limit_membership_visibility = false and g.path <@ gm.group_path)
+                (g.limit_membership_visibility = false and g.path <@ mg.path)
                 or
-                (g.limit_membership_visibility = true and g.path = gm.group_path)
+                (g.limit_membership_visibility = true and g.id = gm.group_id)
         "#,
         user_id
     )
@@ -59,8 +63,12 @@ pub async fn user_groups(db: impl PgExecutor<'_>, user_id: &str) -> sqlx::Result
 /// Returns an error if the database query fails.
 pub async fn group_members(db: impl PgExecutor<'_>, group_id: Uuid) -> sqlx::Result<Vec<String>> {
     sqlx::query_scalar!(
-        "select distinct user_id from group_memberships where group_path <@ $1",
-        group_path.0
+        r#"select distinct gm.user_id
+        from group_memberships gm
+        join groups g on g.id = gm.group_id
+        join groups target on target.id = $1
+        where g.path <@ target.path"#,
+        group_id
     )
     .fetch_all(db)
     .await
@@ -70,6 +78,13 @@ pub async fn group_members(db: impl PgExecutor<'_>, group_id: Uuid) -> sqlx::Res
 mod tests {
     use super::*;
     use sqlx::PgPool;
+
+    use crate::group::id_by_path;
+
+    async fn id_of(db: &PgPool, path: &str) -> Uuid {
+        let path: Path = path.parse().unwrap();
+        id_by_path(db, &path).await.unwrap().unwrap()
+    }
 
     fn sorted_paths(groups: Vec<Group>) -> Vec<String> {
         let mut paths: Vec<String> = groups.into_iter().map(|g| g.path.to_string()).collect();
@@ -110,12 +125,12 @@ mod tests {
         assert!(user_groups(&db, "nobody").await.unwrap().is_empty());
 
         assert_eq!(
-            group_members(&db, &"tlth".parse().unwrap()).await.unwrap(),
+            group_members(&db, id_of(&db, "tlth").await).await.unwrap(),
             vec!["user_a", "user_b", "user_c"]
         );
 
         assert_eq!(
-            group_members(&db, &"tlth.d.nolla".parse().unwrap())
+            group_members(&db, id_of(&db, "tlth.d.nolla").await)
                 .await
                 .unwrap(),
             vec!["user_b"]

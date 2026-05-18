@@ -1,7 +1,4 @@
 -- this file is ordered according to how a user interacts with the system:)
-CREATE FUNCTION array_sum_money(money[]) RETURNS money
-   LANGUAGE sql IMMUTABLE STRICT AS
-'SELECT sum(e) FROM unnest($1) AS a(e)';
 
 create table ticket_kinds (
     id uuid primary key,
@@ -33,7 +30,7 @@ create table ticket_kinds (
 -- which groups are allowed to buy this ticket kind
 create table ticket_kind_allowed_groups (
     ticket_kind_id uuid not null references ticket_kinds(id),
-    group_id ltree not null references groups(admin_path),
+    group_id uuid not null references groups(id),
     primary key (group_id, ticket_kind_id)
 );
 -- these are examples for how this table can be used:

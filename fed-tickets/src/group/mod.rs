@@ -4,6 +4,7 @@ use poem_openapi::{
     ApiResponse, Object, OpenApi, param,
     payload::{Json, PlainText},
 };
+use sqlx::PgExecutor;
 use uuid::Uuid;
 
 pub mod admin;
@@ -19,6 +20,17 @@ use crate::{
         member::{group_members, user_groups},
     },
 };
+
+/// Looks up a group's uuid by its path.
+///
+/// # Errors
+///
+/// Returns an error if the database query fails.
+pub async fn id_by_path(db: impl PgExecutor<'_>, path: &Path) -> sqlx::Result<Option<Uuid>> {
+    sqlx::query_scalar!("select id from groups where path = $1", path.0)
+        .fetch_optional(db)
+        .await
+}
 
 #[derive(Clone, Debug)]
 pub struct Router {
@@ -104,7 +116,16 @@ impl Router {
         let parent = path
             .parent()
             .ok_or_else(|| Error::from_string("no parent group", StatusCode::BAD_REQUEST))?;
-        check_adminship(&mut *txn, user.get_id(), &parent).await?;
+        let parent_id = id_by_path(&mut *txn, &parent)
+            .await
+            .map_err(InternalServerError)?
+            .ok_or_else(|| {
+                Error::from_string(
+                    format!("no parent with path `{parent}` exists"),
+                    StatusCode::BAD_REQUEST,
+                )
+            })?;
+        check_adminship(&mut *txn, user.get_id(), parent_id).await?;
 
         let group = sqlx::query_as!(
             Group,
@@ -132,15 +153,15 @@ impl Router {
 
     /// List all members of a group. To do it, you need to be an admin of the
     /// group.
-    #[oai(path = "/groups/:group/members", method = "get")]
+    #[oai(path = "/groups/:group_id/members", method = "get")]
     async fn list_members(
         &self,
         user: User,
-        param::Path(group): param::Path<Path>,
+        param::Path(group_id): param::Path<Uuid>,
     ) -> Result<Json<Vec<String>>> {
         let mut txn = self.context.db.begin().await.map_err(InternalServerError)?;
-        check_adminship(&mut *txn, user.get_id(), &group).await?;
-        let members = group_members(&mut *txn, &group)
+        check_adminship(&mut *txn, user.get_id(), group_id).await?;
+        let members = group_members(&mut *txn, group_id)
             .await
             .map_err(InternalServerError)?;
 
@@ -149,15 +170,15 @@ impl Router {
 
     /// List all admins of a group. To do it, you need to be an admin of the
     /// group.
-    #[oai(path = "/groups/:group/admins", method = "get")]
+    #[oai(path = "/groups/:group_id/admins", method = "get")]
     async fn list_admins(
         &self,
         user: User,
-        param::Path(group): param::Path<Path>,
+        param::Path(group_id): param::Path<Uuid>,
     ) -> Result<Json<Vec<String>>> {
         let mut txn = self.context.db.begin().await.map_err(InternalServerError)?;
-        check_adminship(&mut *txn, user.get_id(), &group).await?;
-        let admins = group_admins(&mut *txn, &group)
+        check_adminship(&mut *txn, user.get_id(), group_id).await?;
+        let admins = group_admins(&mut *txn, group_id)
             .await
             .map_err(InternalServerError)?;
 
@@ -168,19 +189,19 @@ impl Router {
     ///
     /// The user performing this action must be a literal super-admin, meaning
     /// they must at least be an administrator of the parent group.
-    #[oai(path = "/groups/:group/admins", method = "post")]
+    #[oai(path = "/groups/:group_id/admins", method = "post")]
     async fn create_adminship(
         &self,
         user: User,
-        param::Path(group): param::Path<Path>,
+        param::Path(group_id): param::Path<Uuid>,
         Json(create_adminship): Json<CreateAdminship>,
     ) -> Result<Json<Adminship>> {
         let CreateAdminship { user_id } = create_adminship;
 
         let mut txn = self.context.db.begin().await.map_err(InternalServerError)?;
 
-        check_parent_adminship(&mut *txn, user.get_id(), &group).await?;
-        let adminship = admin::create_adminship(&mut *txn, &user_id, &group)
+        check_parent_adminship(&mut *txn, user.get_id(), group_id).await?;
+        let adminship = admin::create_adminship(&mut *txn, &user_id, group_id)
             .await
             .map_err(InternalServerError)?;
         // todo: notify other admins via email
@@ -193,17 +214,17 @@ impl Router {
     ///
     /// The user performing this action must be a literal super-admin, meaning
     /// they must at least be an administrator of the parent group.
-    #[oai(path = "/groups/:group/admins/:user_id", method = "delete")]
+    #[oai(path = "/groups/:group_id/admins/:user_id", method = "delete")]
     async fn remove_adminship(
         &self,
         user: User,
-        param::Path(group): param::Path<Path>,
+        param::Path(group_id): param::Path<Uuid>,
         Json(user_id): Json<String>,
     ) -> Result<RemoveAdminshipResponse> {
         let mut txn = self.context.db.begin().await.map_err(InternalServerError)?;
 
-        check_parent_adminship(&mut *txn, user.get_id(), &group).await?;
-        admin::remove_adminship(&mut *txn, &user_id, &group)
+        check_parent_adminship(&mut *txn, user.get_id(), group_id).await?;
+        admin::remove_adminship(&mut *txn, &user_id, group_id)
             .await
             .map_err(InternalServerError)?;
         // todo: notify other admins via email
