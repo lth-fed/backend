@@ -73,7 +73,7 @@ struct Activity {
 #[derive(ApiResponse)]
 enum ActivityError {
     #[oai(status = 500)]
-    DbError,
+    Unknown,
 }
 
 #[derive(Clone, Debug)]
@@ -113,7 +113,7 @@ impl Router {
         .fetch_one(&self.context.db)
         .await
         .inspect_err(|err| error!("Failed to fetch activity details from db: {err}"))
-        .map_err(|_| ActivityError::DbError)?;
+        .map_err(|_| ActivityError::Unknown)?;
         let other_hosts = sqlx::query!(
             r#"select name, url
             from activity_hosts
@@ -126,7 +126,7 @@ impl Router {
         .fetch_all(&self.context.db)
         .await
         .inspect_err(|err| error!("Failed to fetch activity details from db: {err}"))
-        .map_err(|_| ActivityError::DbError)?;
+        .map_err(|_| ActivityError::Unknown)?;
         let tickets_available = sqlx::query!(
             r#"select exists (
                 select 1
@@ -139,7 +139,7 @@ impl Router {
         .fetch_one(&self.context.db)
         .await
         .inspect_err(|err| error!("Failed to fetch activity details from db: {err}"))
-        .map_err(|_| ActivityError::DbError)?;
+        .map_err(|_| ActivityError::Unknown)?;
 
         let mut hosts = Vec::with_capacity(1 + other_hosts.len());
         hosts.push(Host {
@@ -153,12 +153,13 @@ impl Router {
             });
         }
 
-        // todo: decrypt user data!
         let activity = Activity {
             id: activity.id,
             responsible: Responsible {
                 id: activity.responsible_id,
-                name: "ono".to_owned(),
+                name: self
+                    .decrypt_string(&activity.responsible_name, &activity.responsible_nonce)
+                    .map_err(|()| ActivityError::Unknown)?,
             },
             title: activity.title,
             description: activity.description,
