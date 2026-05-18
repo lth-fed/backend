@@ -5,8 +5,8 @@ use std::ops::Deref;
 use base64::Engine as _;
 use color_eyre::eyre::Context as _;
 use poem::http::StatusCode;
+use poem_openapi::OpenApi;
 use poem_openapi::payload::{Binary, Form, Response};
-use poem_openapi::{ApiResponse, OpenApi};
 use samael::metadata::{
     AttributeConsumingService, ContactPerson, ContactType, EntityDescriptor, LocalizedName,
     LocalizedUri, RequestedAttribute,
@@ -62,7 +62,7 @@ pub async fn get_service_provider()
         .build()?;
     Ok((sp, saml_pk))
 }
-fn add_metadata(metadata: &mut EntityDescriptor) -> Result<(), MetadataError> {
+fn add_metadata(metadata: &mut EntityDescriptor) -> poem::Result<()> {
     let org_name = vec![
         LocalizedName {
             lang: Some("se".into()),
@@ -93,7 +93,7 @@ fn add_metadata(metadata: &mut EntityDescriptor) -> Result<(), MetadataError> {
         .and_then(|descs| descs.first_mut())
     else {
         error!("Failed to get sp sso descriptor");
-        return Err(MetadataError::MetadataInvalid);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR.into());
     };
     metadata.contact_person = Some(vec![
         ContactPerson {
@@ -163,7 +163,7 @@ fn add_metadata(metadata: &mut EntityDescriptor) -> Result<(), MetadataError> {
     // sp_desc.name_id_formats = Some(vec!["urn:oasis:names:tc:SAML:2.0:nameid-format:transient".into()]);
     Ok(())
 }
-fn add_metadata_extensions(meta: &mut xmltree::Element) -> Result<usize, MetadataError> {
+fn add_metadata_extensions(meta: &mut xmltree::Element) -> poem::Result<usize> {
     // the xmlns are needed for parsing, they are removed later. Copied from an example SP
     // metadata: https://metadata.qa.swamid.se/?rawXML=1361
     let security_contact_person = r#"<md:ContactPerson contactType="other" remd:contactType="http://refeds.org/metadata/contactType/security" xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" xmlns:remd="http://refeds.org/metadata">
@@ -195,13 +195,13 @@ fn add_metadata_extensions(meta: &mut xmltree::Element) -> Result<usize, Metadat
 </md:Extensions>"#;
     let mut sec_meta = xmltree::Element::parse(Cursor::new(security_contact_person))
         .inspect_err(|err| error!("Failed to parse metadata: {err}"))
-        .map_err(|_| MetadataError::MetadataInvalid)?;
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let mut desc_meta = xmltree::Element::parse(Cursor::new(descriptor_extensions))
         .inspect_err(|err| error!("Failed to parse metadata: {err}"))
-        .map_err(|_| MetadataError::MetadataInvalid)?;
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let mut spsso_meta = xmltree::Element::parse(Cursor::new(spsso_extensions))
         .inspect_err(|err| error!("Failed to parse metadata: {err}"))
-        .map_err(|_| MetadataError::MetadataInvalid)?;
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     meta.namespaces = desc_meta.namespaces.take();
     sec_meta.namespaces = None;
     spsso_meta.namespaces = None;
@@ -211,31 +211,13 @@ fn add_metadata_extensions(meta: &mut xmltree::Element) -> Result<usize, Metadat
 
     let Some(spsso) = meta.get_mut_child("SPSSODescriptor") else {
         error!("Metadata is not an object!");
-        return Err(MetadataError::MetadataInvalid);
+        return Err(StatusCode::INTERNAL_SERVER_ERROR.into());
     };
     spsso.children.push(XMLNode::Element(spsso_meta));
 
     Ok(descriptor_extensions.len() + spsso_extensions.len())
 }
 
-#[derive(ApiResponse, Debug, Clone, Copy)]
-enum MetadataError {
-    /// Unable to produce correct metadata, invalid configuration.
-    #[oai(status = 500)]
-    MetadataInvalid,
-}
-#[derive(ApiResponse, Debug, Clone, Copy)]
-enum AcsError {
-    /// No `SAMLResponse` prop.
-    #[oai(status = 400)]
-    NoSamlResponse,
-    /// Invalid ACS response.
-    #[oai(status = 400)]
-    InvalidAcsResponse,
-    /// SAML response took too long.
-    #[oai(status = 400)]
-    CacheFlushed,
-}
 #[derive(Clone)]
 pub(crate) struct SamlRouter {
     pub context: Context,
@@ -253,29 +235,29 @@ impl SamlRouter {
     /// The body actually is `application/xml` but since [`poem-openapi`] is cringe I can't just
     /// add a string as an XML response.
     #[oai(path = "/metadata", method = "get")]
-    async fn metadata(&self) -> Result<Response<Binary<Vec<u8>>>, MetadataError> {
+    async fn metadata(&self) -> poem::Result<Response<Binary<Vec<u8>>>> {
         let mut metadata = self
             .service_provider
             .metadata()
             .inspect_err(|err| error!("Failed to get metadata: {err}"))
-            .map_err(|_| MetadataError::MetadataInvalid)?;
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         add_metadata(&mut metadata)?;
 
         let metadata = metadata
             .to_string()
             .inspect_err(|err| error!("Failed to convert metadata to string: {err}"))
-            .map_err(|_| MetadataError::MetadataInvalid)?;
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
         let mut meta = xmltree::Element::parse(Cursor::new(&metadata))
             .inspect_err(|err| error!("Failed to parse metadata: {err}"))
-            .map_err(|_| MetadataError::MetadataInvalid)?;
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
         let exts_len = add_metadata_extensions(&mut meta)?;
 
         let mut metadata = Cursor::new(Vec::with_capacity(metadata.len() + exts_len + 100));
         meta.write(&mut metadata)
             .inspect_err(|err| error!("Failed to serialize updated metadata: {err}"))
-            .map_err(|_| MetadataError::MetadataInvalid)?;
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         let metadata = metadata.into_inner();
         Ok(
             Response::new(Binary(metadata))
@@ -285,7 +267,7 @@ impl SamlRouter {
     /// Get JWT access token and a new refresh token.
     #[oai(path = "/acs", method = "post")]
     #[allow(clippy::panic, reason = "yes")]
-    async fn acs(&self, body: Form<HashMap<String, String>>) -> Result<Response<()>, AcsError> {
+    async fn acs(&self, body: Form<HashMap<String, String>>) -> poem::Result<Response<()>> {
         // we'd want the library to take an iterator instead of &[&str]
         let ids: Vec<_> = self
             .saml2_request_id_cache
@@ -294,12 +276,14 @@ impl SamlRouter {
             .collect();
         let ids: Vec<_> = ids.iter().map(String::as_str).collect();
 
-        let saml_response = body.get("SAMLResponse").ok_or(AcsError::NoSamlResponse)?;
+        let saml_response = body
+            .get("SAMLResponse")
+            .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
         let ass = self
             .service_provider
             .parse_base64_response(saml_response, Some(&ids))
             .inspect_err(|err| error!("Invalid ACS response: {err}"))
-            .map_err(|_| AcsError::InvalidAcsResponse)?;
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         let Some(request_id) = ass
             .subject
             .as_ref()
@@ -308,10 +292,10 @@ impl SamlRouter {
             .and_then(|conf| conf.subject_confirmation_data.as_ref())
             .and_then(|conf_data| conf_data.in_response_to.as_ref())
         else {
-            return Err(AcsError::InvalidAcsResponse);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR.into());
         };
         let Some(mut data) = self.auth_sessions.get(request_id) else {
-            return Err(AcsError::CacheFlushed);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR.into());
         };
         println!("{ass:#?}");
         data.validated_user = ass
