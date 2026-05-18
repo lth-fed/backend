@@ -3,6 +3,7 @@ resolver = "3"
 members = ["fed-auth", "fed-auth-verifier", "fed-tickets"]
 
 [workspace.dependencies]
+base64 = "0.22.1"
 color-eyre = "0.6.5"
 dotenvy = "0.15.7"
 jsonwebtoken = { version = "10.3.0", default-features = false, features = ["rust_crypto", "use_pem"] }

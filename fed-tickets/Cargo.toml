@@ -4,10 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+base64.workspace = true
+# NOTE: this doesn't verify authenticity: i.e. that the encrypted data comes from someone with the key (us)
+# this is not needed for user data encryption because we don't need to validate the integrity of the data,
+# the only purpose is to anonymise it.
 chacha20 = "0.10.0"
 color-eyre.workspace = true
 dotenvy.workspace = true
-hex = "0.4.3"
 poem.workspace = true
 poem-openapi.workspace = true
 rand.workspace = true
