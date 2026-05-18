@@ -1,11 +1,11 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select group_path from group_adminships where user_id = $1",
+  "query": "select g.path as \"path!: Path\"\n        from group_adminships ga\n        join groups g on g.id = ga.group_id\n        where ga.user_id = $1",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "group_path",
+        "name": "path!: Path",
         "type_info": {
           "Custom": {
             "name": "ltree",
@@ -23,5 +23,5 @@
       false
     ]
   },
-  "hash": "d7117df8aede258d0ed4da1a7e1dbc312170e7ff0fb69236ae9e0cbc4bcda9b9"
+  "hash": "678ae9a3b637de09ade1e312ffbfc81311d7bb253a68335b24dd33ccaf186708"
 }

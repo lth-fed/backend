@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select g.path as \"path!: Path\"\n        from group_adminships ga\n        join groups g on g.id = ga.group_id\n        join groups target on target.id = $2\n        where ga.user_id = $1 and g.path @> target.path\n        order by nlevel(g.path) desc\n        limit 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "path!: Path",
+        "type_info": {
+          "Custom": {
+            "name": "ltree",
+            "kind": "Simple"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "d68eb7959348d6847537620f5bfe5845b39f4d523eaec093ef427da2fa50e541"
+}

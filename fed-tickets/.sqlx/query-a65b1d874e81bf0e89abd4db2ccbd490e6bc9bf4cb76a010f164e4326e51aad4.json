@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select distinct ga.user_id\n        from group_adminships ga\n        join groups g on g.id = ga.group_id\n        join groups target on target.id = $1\n        where g.path @> target.path",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a65b1d874e81bf0e89abd4db2ccbd490e6bc9bf4cb76a010f164e4326e51aad4"
+}

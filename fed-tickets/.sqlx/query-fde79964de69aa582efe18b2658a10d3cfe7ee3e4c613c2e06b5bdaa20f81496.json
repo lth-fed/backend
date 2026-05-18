@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from group_adminships where user_id = $1 and group_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fde79964de69aa582efe18b2658a10d3cfe7ee3e4c613c2e06b5bdaa20f81496"
+}

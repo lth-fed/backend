@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select exists (\n            select 1 from group_adminships ga\n            join groups g on g.id = ga.group_id\n            where ga.user_id = $1 and g.path @> target.path\n        ) as \"is_admin!\"\n        from groups target\n        where target.id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "is_admin!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "a2d3703d4f320808693ef69af1e07b0cce23e8d15b450615f713314da706041a"
+}
