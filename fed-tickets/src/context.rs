@@ -137,12 +137,9 @@ impl Context {
     /// assert_eq!(decrypted, "secret data");
     /// # };
     /// ```
-    pub fn decrypt_string(
-        &self,
-        encrypted_data: &[u8],
-        nonce: &[u8; 12],
-    ) -> Result<String, std::string::FromUtf8Error> {
-        let vec = self.endecrypt(encrypted_data, nonce);
-        String::from_utf8(vec)
+    #[allow(clippy::result_unit_err, reason = "fuck you")]
+    pub fn decrypt_string(&self, encrypted_data: &[u8], nonce: &[u8]) -> Result<String, ()> {
+        let vec = self.endecrypt(encrypted_data, nonce.try_into().map_err(|_| ())?);
+        String::from_utf8(vec).map_err(|_| ())
     }
 }
