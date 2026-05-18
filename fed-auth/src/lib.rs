@@ -67,6 +67,7 @@ pub async fn get_endpoint(db: Option<PgPool>) -> color_eyre::Result<impl poem::E
     // this url is just for the Swagger UI
     .server(server_url);
     let ui = api_service.swagger_ui();
+    let spec = api_service.spec_endpoint();
     let saml_service = OpenApiService::new(
         saml2::SamlRouter { context },
         env!("CARGO_PKG_NAME"),
@@ -75,6 +76,7 @@ pub async fn get_endpoint(db: Option<PgPool>) -> color_eyre::Result<impl poem::E
     // this url is just for the Swagger UI
     .server(server_url);
     let saml_ui = saml_service.swagger_ui();
+    let saml_spec = saml_service.spec_endpoint();
 
     let cors = Cors::new()
         .allow_method(Method::GET)
@@ -87,8 +89,10 @@ pub async fn get_endpoint(db: Option<PgPool>) -> color_eyre::Result<impl poem::E
         .nest("/", EmbeddedFilesEndpoint::<Website>::new())
         .nest("/api/v0", api_service.data(auth_ctx))
         .nest("/api/v0/docs", ui)
+        .nest("/api/v0/spec.json", spec)
         .nest("/saml2", saml_service)
         .nest("/saml2/docs", saml_ui)
+        .nest("/saml2/spec.json", saml_spec)
         .with(cors)
         .with(CookieJarManager::new());
     Ok(route)

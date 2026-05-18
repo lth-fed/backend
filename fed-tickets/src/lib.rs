@@ -31,6 +31,10 @@ pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl En
     // this url is just for the Swagger UI
     .server("http://localhost:8000/v0");
     let ui = api_service.swagger_ui();
+    let spec = api_service.spec_endpoint();
 
-    Ok(Route::new().nest("/v0", api_service).nest("/v0/docs", ui))
+    Ok(Route::new()
+        .nest("/v0", api_service)
+        .nest("/v0/docs", ui)
+        .nest("/v0/spec.json", spec))
 }
