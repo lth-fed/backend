@@ -12,7 +12,7 @@ path = "src/main.rs"
 ci-test-dont-use-when-building-for-production = []
 
 [dependencies]
-base64 = "0.22.1"
+base64.workspace = true
 color-eyre.workspace = true
 dotenvy.workspace = true
 ed25519-dalek = "2.2.0"

@@ -975,10 +975,10 @@ dependencies = [
 name = "fed-tickets"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "chacha20",
  "color-eyre",
  "dotenvy",
- "hex",
  "poem",
  "poem-openapi",
  "rand 0.10.1",
