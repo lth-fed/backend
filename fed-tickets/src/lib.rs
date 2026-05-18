@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use poem::{Endpoint, Route};
 use poem_openapi::OpenApiService;
 use sqlx::PgPool;
@@ -7,6 +9,10 @@ pub mod context;
 pub mod groups;
 pub mod healthcheck;
 pub use context::Context;
+use sqlx::types::Json;
+
+pub type DbInternationalizedString = Json<InternationalizedString>;
+pub type InternationalizedString = HashMap<String, String>;
 
 /// # Errors
 ///

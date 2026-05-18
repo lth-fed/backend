@@ -9,12 +9,13 @@ use sqlx::types::{JsonValue, Uuid};
 use tracing::error;
 
 use crate::context::Context;
+use crate::{DbInternationalizedString, InternationalizedString};
 
 #[derive(sqlx::Type, Debug)]
 #[sqlx(type_name = "location")]
 struct Location {
-    name: Option<JsonValue>,
-    directions: Option<JsonValue>,
+    name: Option<DbInternationalizedString>,
+    directions: Option<DbInternationalizedString>,
     coordinate_wgs84: Option<PgPoint>,
     url: Option<String>,
 }
@@ -25,17 +26,18 @@ struct Coords {
     east: f64,
 }
 #[derive(Object)]
+#[oai(rename = "Location")]
 struct PoemLocation {
-    name: Option<JsonValue>,
-    directions: Option<JsonValue>,
+    name: Option<InternationalizedString>,
+    directions: Option<InternationalizedString>,
     coordinate_wgs84: Option<Coords>,
     url: Option<String>,
 }
 impl From<Location> for PoemLocation {
     fn from(value: Location) -> Self {
         Self {
-            name: value.name,
-            directions: value.directions,
+            name: value.name.map(|name| name.0),
+            directions: value.directions.map(|dir| dir.0),
             coordinate_wgs84: value.coordinate_wgs84.map(|point| Coords {
                 north: point.x,
                 east: point.y,
@@ -141,25 +143,23 @@ impl Router {
         .inspect_err(|err| error!("Failed to fetch activity details from db: {err}"))
         .map_err(|_| ActivityError::Unknown)?;
 
-        let mut hosts = Vec::with_capacity(1 + other_hosts.len());
-        hosts.push(Host {
+        let hosts = std::iter::once(Host {
             name: activity.creator_name,
             logo_url: activity.creator_logo_url,
-        });
-        for host in other_hosts {
-            hosts.push(Host {
-                name: host.name,
-                logo_url: host.url,
-            });
-        }
+        })
+        .chain(other_hosts.into_iter().map(|other| Host {
+            name: other.name,
+            logo_url: other.url,
+        }))
+        .collect();
 
         let activity = Activity {
             id: activity.id,
             responsible: Responsible {
                 id: activity.responsible_id,
                 name: self
-                    .decrypt_string(&activity.responsible_name, &activity.responsible_nonce)
-                    .map_err(|()| ActivityError::Unknown)?,
+                    .decrypt_string(activity.responsible_name, &activity.responsible_nonce)
+                    .ok_or(ActivityError::Unknown)?,
             },
             title: activity.title,
             description: activity.description,

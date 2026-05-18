@@ -118,6 +118,30 @@ impl Context {
         let mut cipher = ChaCha20::new(&self.encryption_key.into(), nonce.into());
         cipher.apply_keystream(data);
     }
+    /// Decrypts to a [`&str`] using chacha20 given a nonce (which has to be 12 bytes).
+    ///
+    /// # Errors
+    ///
+    /// If the data was not UTF-8, this returns an error. Also errors if `nonce.len() != 12`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// # use fed_tickets::Context;
+    /// # async {
+    /// # let context = Context::new(None).await.unwrap();
+    /// let nonce: [u8; 12] = rand::random();
+    /// let data = b"secret data";
+    /// let mut encrypted = context.endecrypt(data, &nonce);
+    /// let decrypted = context.decrypt_str(&mut encrypted, &nonce).unwrap();
+    /// assert_eq!(decrypted, "secret data");
+    /// # };
+    /// ```
+    #[must_use]
+    pub fn decrypt_str<'a>(&self, encrypted_data: &'a mut [u8], nonce: &[u8]) -> Option<&'a str> {
+        self.endecrypt_mut_slice(encrypted_data, nonce.try_into().ok()?);
+        std::str::from_utf8(encrypted_data).ok()
+    }
     /// Decrypts to a [`String`] using chacha20 given a 12 byte nonce.
     ///
     /// # Errors
@@ -132,14 +156,14 @@ impl Context {
     /// # let context = Context::new(None).await.unwrap();
     /// let nonce: [u8; 12] = rand::random();
     /// let data = b"secret data";
-    /// let encrypted = context.endecrypt(data, &nonce);
-    /// let decrypted = context.decrypt_string(&encrypted, &nonce).unwrap();
+    /// let mut encrypted = context.endecrypt(data, &nonce);
+    /// let decrypted = context.decrypt_string(encrypted, &nonce).unwrap();
     /// assert_eq!(decrypted, "secret data");
     /// # };
     /// ```
-    #[allow(clippy::result_unit_err, reason = "fuck you")]
-    pub fn decrypt_string(&self, encrypted_data: &[u8], nonce: &[u8]) -> Result<String, ()> {
-        let vec = self.endecrypt(encrypted_data, nonce.try_into().map_err(|_| ())?);
-        String::from_utf8(vec).map_err(|_| ())
+    #[must_use]
+    pub fn decrypt_string(&self, mut encrypted_data: Vec<u8>, nonce: &[u8]) -> Option<String> {
+        self.endecrypt_mut_slice(&mut encrypted_data, nonce.try_into().ok()?);
+        String::from_utf8(encrypted_data).ok()
     }
 }

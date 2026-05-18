@@ -9,6 +9,8 @@ dotenvy = "0.15.7"
 jsonwebtoken = { version = "10.3.0", default-features = false, features = ["rust_crypto", "use_pem"] }
 lettre = { version = "0.11.22", default-features = false, features = ["builder", "pool", "ring", "smtp-transport", "tokio1-rustls", "webpki-roots"] }
 poem = { version = "3.1.12", features = ["cookie", "embed"] }
+# we don't pull in `sqlx` here, even though it'd make our lives a bit easier,
+# since it pulls in the mysql & sqlite drivers which makes compile time be slow
 poem-openapi = { version = "5.1.16", features = ["swagger-ui", "uuid", "time"] }
 rand = "0.10.1"
 reqwest = "0.13.3"
