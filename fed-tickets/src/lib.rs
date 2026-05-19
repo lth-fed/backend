@@ -12,7 +12,10 @@ pub use context::Context;
 use sqlx::types::Json;
 
 pub type DbInternationalizedString = Json<InternationalizedString>;
-pub type InternationalizedString = HashMap<String, String>;
+#[derive(Debug, Clone, poem_openapi::NewType, serde::Serialize, serde::Deserialize)] // eventually implement Deserialize ourselves
+#[oai(from_multipart = false, from_parameter = false, to_header = false)]
+#[serde(transparent)]
+pub struct InternationalizedString(HashMap<String, String>);
 
 /// # Errors
 ///

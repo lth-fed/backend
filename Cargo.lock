@@ -982,6 +982,7 @@ dependencies = [
  "poem",
  "poem-openapi",
  "rand 0.10.1",
+ "serde",
  "sqlx",
  "tokio",
  "tracing",
