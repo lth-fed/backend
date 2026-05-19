@@ -1,15 +1,16 @@
 use std::ops::Deref;
 
+use poem::http::StatusCode;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
-use poem_openapi::{ApiResponse, Object, OpenApi};
+use poem_openapi::{Object, OpenApi};
 use sqlx::postgres::types::PgPoint;
 use sqlx::types::time::OffsetDateTime;
 use sqlx::types::{JsonValue, Uuid};
 use tracing::error;
 
 use crate::context::Context;
-use crate::{DbInternationalizedString, InternationalizedString};
+use crate::{DbInternationalizedString, InternalServerError, InternationalizedString};
 
 #[derive(sqlx::Type, Debug)]
 #[sqlx(type_name = "location")]
@@ -72,12 +73,6 @@ struct Activity {
     tickets_exist: bool,
 }
 
-#[derive(ApiResponse)]
-enum ActivityError {
-    #[oai(status = 500)]
-    Unknown,
-}
-
 #[derive(Clone, Debug)]
 pub struct Router {
     pub context: Context,
@@ -92,7 +87,7 @@ impl Deref for Router {
 #[OpenApi(prefix_path = "/activities")]
 impl Router {
     #[oai(path = "/:id", method = "get")]
-    async fn details(&self, id: Path<Uuid>) -> Result<Json<Activity>, ActivityError> {
+    async fn details(&self, id: Path<Uuid>) -> poem::Result<Json<Activity>> {
         let activity = sqlx::query!(
             r#"select activities.id, title, activities.description,
                 location as "location!: Location", time_start, time_end,
@@ -115,7 +110,7 @@ impl Router {
         .fetch_one(&self.context.db)
         .await
         .inspect_err(|err| error!("Failed to fetch activity details from db: {err}"))
-        .map_err(|_| ActivityError::Unknown)?;
+        .map_err(|_| StatusCode::NOT_FOUND)?;
         let other_hosts = sqlx::query!(
             r#"select name, url
             from activity_hosts
@@ -127,8 +122,7 @@ impl Router {
         )
         .fetch_all(&self.context.db)
         .await
-        .inspect_err(|err| error!("Failed to fetch activity details from db: {err}"))
-        .map_err(|_| ActivityError::Unknown)?;
+        .map_err(InternalServerError::db)?;
         let tickets_available = sqlx::query!(
             r#"select exists (
                 select 1
@@ -140,8 +134,7 @@ impl Router {
         )
         .fetch_one(&self.context.db)
         .await
-        .inspect_err(|err| error!("Failed to fetch activity details from db: {err}"))
-        .map_err(|_| ActivityError::Unknown)?;
+        .map_err(InternalServerError::db)?;
 
         let hosts = std::iter::once(Host {
             name: activity.creator_name,
@@ -159,7 +152,7 @@ impl Router {
                 id: activity.responsible_id,
                 name: self
                     .decrypt_string(activity.responsible_name, &activity.responsible_nonce)
-                    .ok_or(ActivityError::Unknown)?,
+                    .ok_or(InternalServerError::encryption("activity.responsible_name"))?,
             },
             title: activity.title,
             description: activity.description,

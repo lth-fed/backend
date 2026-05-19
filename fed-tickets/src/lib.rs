@@ -1,8 +1,11 @@
 use std::collections::HashMap;
+use std::fmt::Display;
 
+use poem::http::StatusCode;
 use poem::{Endpoint, Route};
 use poem_openapi::OpenApiService;
 use sqlx::PgPool;
+use tracing::error;
 
 pub mod activities;
 pub mod context;
@@ -16,6 +19,37 @@ pub type DbInternationalizedString = Json<InternationalizedString>;
 #[oai(from_multipart = false, from_parameter = false, to_header = false)]
 #[serde(transparent)]
 pub struct InternationalizedString(HashMap<String, String>);
+
+#[derive(Debug)]
+pub struct InternalServerError<E: std::error::Error + Send + Sync + 'static> {
+    inner: E,
+}
+impl<E: Display + std::error::Error + Send + Sync + 'static> InternalServerError<E> {
+    #[track_caller]
+    pub fn generic(error: E) -> Self {
+        error!("Internal server error: {error}");
+        Self { inner: error }
+    }
+    #[track_caller]
+    pub fn db(error: E) -> Self {
+        error!("Database error: {error}");
+        Self { inner: error }
+    }
+}
+impl InternalServerError<poem::Error> {
+    #[track_caller]
+    pub fn encryption(error: &str) -> Self {
+        error!("Encryption error error: {error}");
+        Self {
+            inner: poem::Error::from_string(error.to_owned(), StatusCode::INTERNAL_SERVER_ERROR),
+        }
+    }
+}
+impl<E: std::error::Error + Send + Sync + 'static> From<InternalServerError<E>> for poem::Error {
+    fn from(value: InternalServerError<E>) -> Self {
+        poem::error::InternalServerError(value.inner)
+    }
+}
 
 /// # Errors
 ///
