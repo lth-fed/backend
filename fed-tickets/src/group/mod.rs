@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use fed_auth_verifier::User;
 use poem::{Error, Result, error::InternalServerError, http::StatusCode};
 use poem_openapi::{
@@ -37,6 +39,14 @@ pub struct Router {
     pub context: Context,
 }
 
+impl Deref for Router {
+    type Target = Context;
+
+    fn deref(&self) -> &Self::Target {
+        &self.context
+    }
+}
+
 #[derive(Debug, Object)]
 pub struct Group {
     pub id: Uuid,
@@ -47,12 +57,8 @@ pub struct Group {
     pub deleted: bool,
 }
 
-#[allow(
-    clippy::module_name_repetitions,
-    reason = "for uniformity in the generated OpenAPI schema"
-)]
 #[derive(Debug, Object)]
-pub struct CreateGroup {
+pub struct CreateGroupRequest {
     pub path: Path,
     pub name: serde_json::Value,
     pub description: serde_json::Value,
@@ -63,12 +69,6 @@ pub struct CreateGroup {
 pub struct CreateAdminship {
     /// The ID of the user to make an admin.
     pub user_id: String,
-}
-
-#[derive(Debug, ApiResponse)]
-pub enum ListGroupsResponse {
-    #[oai(status = 200)]
-    Ok(Json<Vec<Group>>),
 }
 
 #[derive(Debug, ApiResponse)]
@@ -87,12 +87,12 @@ pub enum RemoveAdminshipResponse {
 impl Router {
     /// List all groups the user is a direct or transitive member of.
     #[oai(path = "/groups", method = "get")]
-    async fn list_groups(&self, user: User) -> Result<ListGroupsResponse> {
+    async fn list_groups(&self, user: User) -> Result<Json<Vec<Group>>> {
         let groups = user_groups(&self.context.db, user.get_id())
             .await
             .map_err(InternalServerError)?;
 
-        Ok(ListGroupsResponse::Ok(Json(groups)))
+        Ok(Json(groups))
     }
 
     /// Creates a new group under the given parent group.
@@ -102,11 +102,11 @@ impl Router {
     async fn create_group(
         &self,
         user: User,
-        Json(create_group): Json<CreateGroup>,
+        Json(create_group): Json<CreateGroupRequest>,
     ) -> Result<CreateGroupResponse> {
         let mut txn = self.context.db.begin().await.map_err(InternalServerError)?;
 
-        let CreateGroup {
+        let CreateGroupRequest {
             path,
             name,
             description,
