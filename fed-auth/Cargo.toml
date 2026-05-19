@@ -16,7 +16,7 @@ base64.workspace = true
 color-eyre.workspace = true
 dotenvy.workspace = true
 ed25519-dalek = "2.2.0"
-fed-auth-verifier = { version = "0.1.0", path = "../fed-auth-verifier" }
+fed-auth-verifier.path = "../fed-auth-verifier"
 jsonwebtoken.workspace = true
 lettre.workspace = true
 mini-moka = "0.10.3"

@@ -1,0 +1,99 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select distinct on (a.id)\n                a.id,\n                creator.name as \"creator_name!: DIS\",\n                creator.admin_path,\n                a.title as \"title!: DIS\",\n                a.description as \"description!: DIS\",\n                a.location as \"location: Location\",\n                a.time_start,\n                a.time_end,\n                img.url\n            from group_members\n            inner join groups member_group on member_group.admin_path = group_members.group_id\n            -- get the ticket_kinds we're allowed to purchase\n            inner join ticket_kind_allowed_groups tk_ag on tk_ag.group_id @> group_members.group_id\n            inner join ticket_kinds kind on kind.id = tk_ag.ticket_kind_id\n            -- get the activity\n            inner join activities a on a.id = kind.activity_id\n\n            -- extra data (not used for logic)\n            inner join groups creator on creator.admin_path = a.creator_id\n            inner join images img on img.id = a.image_id\n\n            left join user_group_settings settings on\n                settings.user_id = $1 and settings.group_id = a.creator_id\n\n            where group_members.member_id = $1\n            and (\n                member_group.limit_membership_visibility = false\n                or tk_ag.group_id = group_members.group_id\n            )\n            and time_end + '6 hours' > now()\n            and (settings.visible is null or settings.visible = true)\n            --order by time_start asc\n            limit 100\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "creator_name!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 2,
+        "name": "admin_path",
+        "type_info": {
+          "Custom": {
+            "name": "ltree",
+            "kind": "Simple"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "title!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "description!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 5,
+        "name": "location: Location",
+        "type_info": {
+          "Custom": {
+            "name": "location",
+            "kind": {
+              "Composite": [
+                [
+                  "name",
+                  "Jsonb"
+                ],
+                [
+                  "directions",
+                  "Jsonb"
+                ],
+                [
+                  "coordinate_wgs84",
+                  "Point"
+                ],
+                [
+                  "url",
+                  "Text"
+                ]
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "time_start",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "time_end",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 8,
+        "name": "url",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "0f04c5c3901c88ba3538ff018c9c8d5df16c8e93a2eeb44a6807ae247feda03a"
+}

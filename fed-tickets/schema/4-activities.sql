@@ -9,6 +9,7 @@ create type location as (
     url text
 );
 
+-- for an activity without tickets, the frontend should create a free ticket with max_tickets = 0, to specify who can view the activity
 create table activities (
     id uuid primary key,
     -- has to be user with email
