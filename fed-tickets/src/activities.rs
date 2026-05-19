@@ -89,9 +89,9 @@ impl Deref for Router {
     }
 }
 
-#[OpenApi]
+#[OpenApi(prefix_path = "/activities")]
 impl Router {
-    #[oai(path = "/:id/details", method = "get")]
+    #[oai(path = "/:id", method = "get")]
     async fn details(&self, id: Path<Uuid>) -> Result<Json<Activity>, ActivityError> {
         let activity = sqlx::query!(
             r#"select activities.id, title, activities.description,
