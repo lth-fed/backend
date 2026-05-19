@@ -8,7 +8,7 @@ create table users (
     -- used by encryption
     nonce bytea not null,
     -- GDPR remove all accounts older than 2 years after this: this is a GDPR requirement
-    latest_refresh timestamptz not null,
+    latest_refresh timestamptz not null default now(),
     creation timestamptz not null default now(),
     -- don't remove name when becoming inactive!
     inactive_since timestamptz
