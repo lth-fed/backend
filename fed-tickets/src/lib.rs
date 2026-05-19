@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::fmt::Display;
 
+use fed_auth_verifier::AuthContext;
 use poem::http::StatusCode;
-use poem::{Endpoint, Route};
+use poem::{Endpoint, EndpointExt as _, Route};
 use poem_openapi::OpenApiService;
 use sqlx::PgPool;
 use tracing::error;
@@ -56,6 +57,7 @@ impl<E: std::error::Error + Send + Sync + 'static> From<InternalServerError<E>> 
 /// See [`Context::new`].
 pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl Endpoint> {
     let context = Context::new(test_db).await?;
+    let auth_context = AuthContext::new().await?;
     let api_service = OpenApiService::new(
         (
             activities::Router {
@@ -77,7 +79,7 @@ pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl En
     let spec = api_service.spec_endpoint();
 
     Ok(Route::new()
-        .nest("/v0", api_service)
+        .nest("/v0", api_service.data(auth_context))
         .nest("/v0/docs", ui)
         .nest("/v0/spec.json", spec))
 }
