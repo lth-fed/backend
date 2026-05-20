@@ -11,6 +11,15 @@ use uuid::Uuid;
 
 use crate::{Context, DOMAIN, context, cookie, jwt, random_id};
 
+#[cfg(debug_assertions)]
+const ALLOWED_DOMAINS: &[&str] = &[
+    "https://teknologappen.se",
+    "https://auth.esek.se",
+    "https://fsektionen.se",
+    "https://auth.dsek.se",
+    "http://localhost:5173",
+];
+#[cfg(not(debug_assertions))]
 const ALLOWED_DOMAINS: &[&str] = &[
     "https://teknologappen.se",
     "https://auth.esek.se",
