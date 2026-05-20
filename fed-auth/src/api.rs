@@ -11,21 +11,19 @@ use uuid::Uuid;
 
 use crate::{Context, DOMAIN, context, cookie, jwt, random_id};
 
-#[cfg(debug_assertions)]
-const ALLOWED_DOMAINS: &[&str] = &[
-    "https://teknologappen.se",
-    "https://auth.esek.se",
-    "https://fsektionen.se",
-    "https://auth.dsek.se",
-    "http://localhost:5173",
-];
-#[cfg(not(debug_assertions))]
 const ALLOWED_DOMAINS: &[&str] = &[
     "https://teknologappen.se",
     "https://auth.esek.se",
     "https://fsektionen.se",
     "https://auth.dsek.se",
 ];
+fn is_allowed_domain(domain: &str) -> bool {
+    #[cfg(debug_assertions)]
+    if matches!(domain, "http://localhost:5173" | DOMAIN) {
+        return true;
+    }
+    ALLOWED_DOMAINS.contains(&domain)
+}
 
 #[derive(Object)]
 struct RefreshResponse {
@@ -192,7 +190,7 @@ impl MainRouter {
             );
             return Err(StatusCode::BAD_REQUEST.into());
         };
-        if !ALLOWED_DOMAINS.contains(&data.origin.as_str()) {
+        if !is_allowed_domain(data.origin.as_str()) {
             warn!(
                 "Someone tried to log in from a disallowed domain ({})!",
                 data.origin
