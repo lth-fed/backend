@@ -22,6 +22,9 @@ mod saml2;
 
 pub(crate) use context::Context;
 
+#[cfg(debug_assertions)]
+pub(crate) const DOMAIN: &str = "http://localhost:8001";
+#[cfg(not(debug_assertions))]
 pub(crate) const DOMAIN: &str = "https://auth.teknologappen.se";
 
 #[derive(rust_embed::Embed)]
@@ -53,9 +56,6 @@ pub async fn get_endpoint(db: Option<PgPool>) -> color_eyre::Result<impl poem::E
     let context = Context::new(db).await?;
     let auth_ctx =
         AuthContext::from_decoding_key(jsonwebtoken::DecodingKey::from_ed_der(&context.public_key));
-    #[cfg(debug_assertions)]
-    let server_url = "http://localhost:8001";
-    #[cfg(not(debug_assertions))]
     let server_url = DOMAIN;
     let api_service = OpenApiService::new(
         api::MainRouter {
