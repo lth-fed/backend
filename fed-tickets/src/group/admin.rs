@@ -181,32 +181,6 @@ pub async fn remove_adminship(
     .map(|_| ())
 }
 
-/// Removes all adminships, direct as well as transitive, for the given user in
-/// the given group.
-///
-/// # Errors
-///
-/// Returns an error if the database query fails.
-pub async fn remove_all_adminships(
-    db: impl PgExecutor<'_>,
-    user_id: &str,
-    group_id: Uuid,
-) -> sqlx::Result<()> {
-    sqlx::query!(
-        r#"delete from group_adminships ga
-        using groups g, groups target
-        where g.id = ga.group_id
-          and target.id = $2
-          and ga.user_id = $1
-          and g.path <@ target.path"#,
-        user_id,
-        group_id
-    )
-    .execute(db)
-    .await
-    .map(|_| ())
-}
-
 /// Returns the list of admins for the given group.
 ///
 /// # Errors
@@ -299,8 +273,5 @@ mod tests {
         remove_adminship(&db, "user_a", e_id).await.unwrap();
         assert_eq!(group_admins(&db, nolla_id).await.unwrap(), vec!["user_a"]);
         assert!(group_admins(&db, e_id).await.unwrap().is_empty());
-
-        remove_all_adminships(&db, "user_a", e_id).await.unwrap();
-        assert!(group_admins(&db, nolla_id).await.unwrap().is_empty());
     }
 }
