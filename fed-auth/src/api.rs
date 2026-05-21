@@ -16,6 +16,7 @@ const ALLOWED_DOMAINS: &[&str] = &[
     "https://auth.esek.se",
     "https://fsektionen.se",
     "https://auth.dsek.se",
+    "capacitor://localhost",
 ];
 fn is_allowed_domain(domain: &str) -> bool {
     #[cfg(debug_assertions)]
@@ -36,6 +37,10 @@ struct RefreshResponse {
 struct ConfirmRequest {
     accepted: bool,
     id: String,
+}
+#[derive(Object, Clone)]
+struct ConfirmResponse {
+    url: String,
 }
 #[derive(Object)]
 pub struct ProviderRequest {
@@ -182,7 +187,7 @@ impl MainRouter {
         body: Json<ConfirmRequest>,
         headers: &poem::http::HeaderMap,
         cookies: &CookieJar,
-    ) -> poem::Result<PlainText<String>> {
+    ) -> poem::Result<Json<ConfirmResponse>> {
         if headers.get("origin").is_some_and(|origin| origin != DOMAIN) {
             return Err(StatusCode::BAD_REQUEST.into());
         }
@@ -198,15 +203,17 @@ impl MainRouter {
                 "Someone tried to log in from a disallowed domain ({})!",
                 data.origin
             );
-            return Ok(PlainText(format!(
-                "{}{}validated=false",
-                data.continue_url,
-                if data.continue_url.contains('?') {
-                    '&'
-                } else {
-                    '?'
-                },
-            )));
+            return Ok(Json(ConfirmResponse {
+                url: format!(
+                    "{}{}validated=false",
+                    data.continue_url,
+                    if data.continue_url.contains('?') {
+                        '&'
+                    } else {
+                        '?'
+                    },
+                ),
+            }));
         }
         let Some(user_data) = data.validated_user else {
             warn!(
@@ -216,7 +223,7 @@ impl MainRouter {
             return Err(StatusCode::UNAUTHORIZED.into());
         };
 
-        if body.accepted {
+        let refresh_token = if body.accepted {
             if let Some(cb_url) = &data.callback {
                 let token = jwt::encode(&user_data, &self.private_key)
                     .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -245,19 +252,25 @@ impl MainRouter {
             .inspect_err(|err| error!("Error inserting refresh token into DB: {err}"))
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             cookies.add(cookie::get(refresh_token));
-        }
+            Some(refresh_token)
+        } else {
+            None
+        };
 
         self.auth_sessions.invalidate(&body.id);
-        Ok(PlainText(format!(
-            "{}{}validated={}",
-            data.continue_url,
-            if data.continue_url.contains('?') {
-                '&'
-            } else {
-                '?'
-            },
-            body.accepted
-        )))
+        Ok(Json(ConfirmResponse {
+            url: format!(
+                "{}{}validated={}&refresh_token={}",
+                data.continue_url,
+                if data.continue_url.contains('?') {
+                    '&'
+                } else {
+                    '?'
+                },
+                body.accepted,
+                refresh_token.map_or_else(|| "none".into(), |token| token.to_string())
+            ),
+        }))
     }
 
     #[allow(clippy::unused_self, reason = "makes the developer experience nicer")]
