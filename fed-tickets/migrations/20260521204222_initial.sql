@@ -85,7 +85,6 @@ create table "public"."images" (
 
 
 create table "public"."purchased_ticket_addons" (
-    "id" uuid not null,
     "addon_id" uuid not null,
     "ticket_id" uuid not null,
     "selected_options" integer[] not null,
@@ -136,7 +135,7 @@ create table "public"."ticket_kind_allowed_groups" (
 
 
 create table "public"."ticket_kinds" (
-    "id" uuid not null,
+    "id" uuid not null default uuidv4(),
     "activity_id" uuid not null,
     "name" jsonb not null,
     "price" money not null,
@@ -231,7 +230,7 @@ CREATE UNIQUE INDEX images_pkey ON public.images USING btree (id);
 
 CREATE UNIQUE INDEX max_one_ticket_per_person_per_activity ON public.purchased_tickets USING btree (ticket_kind_id, owner_id);
 
-CREATE UNIQUE INDEX purchased_ticket_addons_pkey ON public.purchased_ticket_addons USING btree (id);
+CREATE UNIQUE INDEX purchased_ticket_addons_pkey ON public.purchased_ticket_addons USING btree (ticket_id, addon_id);
 
 CREATE UNIQUE INDEX purchased_ticket_validations_pkey ON public.purchased_ticket_validations USING btree (id);
 
@@ -496,5 +495,3 @@ alter table "public"."user_group_settings" validate constraint "user_group_setti
 alter table "public"."user_group_settings" add constraint "user_group_settings_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") NOT VALID;
 
 alter table "public"."user_group_settings" validate constraint "user_group_settings_user_id_fkey";
-
-

@@ -1,7 +1,7 @@
 -- this file is ordered according to how a user interacts with the system:)
 
 create table ticket_kinds (
-    id uuid primary key,
+    id uuid primary key default uuidv4(),
     activity_id uuid not null references activities(id),
     -- addons ticket_addons[] not null,
     -- allowed_grous set<ticket_kind_allowed_groups> not null,
@@ -124,12 +124,12 @@ create table purchased_tickets (
     constraint max_one_ticket_per_person_per_activity unique (ticket_kind_id, owner_id)
 );
 create table purchased_ticket_addons (
-    id uuid primary key,
     addon_id uuid not null references ticket_addons(id),
     ticket_id uuid not null references purchased_tickets(id),
     ---
     selected_options integer[] not null,
-    selected_text text not null
+    selected_text text not null,
+    primary key (ticket_id, addon_id)
 );
 -- clear if timestamptz is more than 1 day old
 create table purchased_ticket_validations (
