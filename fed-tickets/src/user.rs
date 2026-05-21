@@ -77,7 +77,7 @@ impl Router {
                     id: group.id,
                     path: group.path,
                     name:group.name.0,
-                    description:group.description.0, 
+                    description:group.description.0,
                     logo_url: group.logo_url,
                 }
             })
