@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into groups (path, limit_membership_visibility, name, description, logo_id, deleted) values ($1, false, '{}'::jsonb, '{}'::jsonb, '7c315a13-eff7-4268-89b9-5e072611ea21'::uuid, false) on conflict do nothing",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        {
+          "Custom": {
+            "name": "ltree",
+            "kind": "Simple"
+          }
+        }
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e6a7e71b3c83316f8b7fc40eb3a6bc967c94990be9bae9f14429920fe437a4c6"
+}

@@ -19,7 +19,10 @@ const ALLOWED_DOMAINS: &[&str] = &[
 ];
 fn is_allowed_domain(domain: &str) -> bool {
     #[cfg(debug_assertions)]
-    if matches!(domain, "http://localhost:5173" | DOMAIN) {
+    if matches!(
+        domain,
+        "http://localhost:5173" | "http://localhost:8000" | DOMAIN
+    ) {
         return true;
     }
     ALLOWED_DOMAINS.contains(&domain)
@@ -273,7 +276,10 @@ impl MainRouter {
                 .url()
                 .parse()
                 .map_err(|_| StatusCode::BAD_REQUEST)?;
-            if Some(origin) != cb_url.host() {
+            let origin: poem::http::Uri = origin.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
+            if origin.authority() != cb_url.authority()
+                || origin.scheme_str() != cb_url.scheme_str()
+            {
                 return Err(StatusCode::BAD_REQUEST.into());
             }
         }
