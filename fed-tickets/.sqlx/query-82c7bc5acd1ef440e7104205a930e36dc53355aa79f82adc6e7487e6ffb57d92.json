@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "insert into users (id, name, language, nonce) values ($1, $2, $3, $4)",
+  "query": "insert into users (id, name, language, nonce) values ($1, $2, $3, $4) on conflict do nothing",
   "describe": {
     "columns": [],
     "parameters": {
@@ -13,5 +13,5 @@
     },
     "nullable": []
   },
-  "hash": "39e617afcd6e76aa035c4660db4a127c80d09e8fd5b7d14ead3219c5100e0362"
+  "hash": "82c7bc5acd1ef440e7104205a930e36dc53355aa79f82adc6e7487e6ffb57d92"
 }

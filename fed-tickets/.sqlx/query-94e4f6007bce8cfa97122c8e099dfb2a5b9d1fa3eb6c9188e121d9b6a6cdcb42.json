@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into images (id, size, url) values ('7c315a13-eff7-4268-89b9-5e072611ea21'::uuid, 0, 'https://icelk.dev/logo.png') on conflict do nothing",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "94e4f6007bce8cfa97122c8e099dfb2a5b9d1fa3eb6c9188e121d9b6a6cdcb42"
+}

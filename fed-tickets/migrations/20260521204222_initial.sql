@@ -189,7 +189,7 @@ create table "public"."users" (
     "name" bytea not null,
     "language" bytea not null,
     "nonce" bytea not null,
-    "latest_refresh" timestamp with time zone not null,
+    "latest_refresh" timestamp with time zone not null default now(),
     "creation" timestamp with time zone not null default now(),
     "inactive_since" timestamp with time zone
 );

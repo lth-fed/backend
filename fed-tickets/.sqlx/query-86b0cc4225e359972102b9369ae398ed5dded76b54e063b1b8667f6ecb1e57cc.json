@@ -1,0 +1,27 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select id from groups where groups.path = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        {
+          "Custom": {
+            "name": "ltree",
+            "kind": "Simple"
+          }
+        }
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "86b0cc4225e359972102b9369ae398ed5dded76b54e063b1b8667f6ecb1e57cc"
+}
