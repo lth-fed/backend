@@ -16,7 +16,10 @@ const ALLOWED_DOMAINS: &[&str] = &[
     "https://auth.esek.se",
     "https://fsektionen.se",
     "https://auth.dsek.se",
+    // ios app
     "capacitor://localhost",
+    // android app
+    "https://localhost",
 ];
 fn is_allowed_domain(domain: &str) -> bool {
     #[cfg(debug_assertions)]
