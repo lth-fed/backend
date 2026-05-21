@@ -40,7 +40,7 @@ impl Router {
         &self,
         user: User,
         req: Json<GetFreeTicketRequest>,
-    ) -> poem::Result<()> {
+    ) -> poem::Result<Json<Uuid>> {
         let mut txn = self.db.begin().await.map_err(InternalServerError::db)?;
 
         validate_addons(&mut *txn, &req.addons, req.ticket_kind).await?;
@@ -51,17 +51,19 @@ impl Router {
             req.ticket_kind,
             user.get_id(),
         )
-        .fetch_optional(&mut *txn)
+        .fetch_one(&mut *txn)
         .await
         .map_err(|err| match err {
             sqlx::Error::Database(ref db_err) if let Some(constraint) = db_err.constraint() => {
-                panic!("constraint: {constraint}");
-
                 match constraint {
-                    _unknown_constraint => InternalServerError::db(err),
+                    "max_one_ticket_per_person_per_activity" => Error::from_string(
+                        "Max one ticket per person per activity",
+                        StatusCode::CONFLICT,
+                    ),
+                    _unknown_constraint => InternalServerError::db(err).into(),
                 }
             }
-            other_err => InternalServerError::db(other_err),
+            other_err => InternalServerError::db(other_err).into(),
         })?;
 
         for addon in &req.addons {
@@ -79,7 +81,7 @@ impl Router {
             .await
             .map_err(|err| InternalServerError::db(err))?;
 
-        todo!()
+        Ok(Json(ticket_id))
     }
 }
 
