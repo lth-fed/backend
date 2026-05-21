@@ -77,8 +77,8 @@ create table "public"."groups_ask_to_join" (
 
 
 create table "public"."images" (
-    "id" uuid not null,
-    "created" timestamp with time zone not null,
+    "id" uuid not null default uuidv4(),
+    "created" timestamp with time zone not null default now(),
     "size" bigint not null,
     "url" text not null
 );

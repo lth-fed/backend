@@ -3,8 +3,8 @@ CREATE FUNCTION array_sum_money(money[]) RETURNS money
 'SELECT sum(e) FROM unnest($1) AS a(e)';
 
 create table images (
-    id uuid primary key,
-    created timestamptz not null,
+    id uuid primary key default uuidv4(),
+    created timestamptz not null default now(),
     size bigint not null,
     url text not null
 );
