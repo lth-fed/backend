@@ -1,11 +1,14 @@
 use std::ops::Deref;
 
-use fed_auth_verifier::CallbackDataV1;
-use poem_openapi::OpenApi;
+use fed_auth_verifier::{CallbackDataV1, User};
+use poem_openapi::{Object, OpenApi, payload::Json};
 use sqlx::postgres::types::PgLTree;
+use sqlx::types::Uuid;
+use sqlx::types::time::OffsetDateTime;
 
-use crate::InternalServerError;
 use crate::context::Context;
+use crate::group::Path;
+use crate::{DbInternationalizedString as DIS, InternalServerError, InternationalizedString};
 
 #[derive(Clone, Debug)]
 pub struct Router {
@@ -42,8 +45,58 @@ fn get_guild(stil_id: &str) -> Option<char> {
     None
 }
 
+#[derive(Object)]
+struct MyGroup {
+    id: Uuid,
+    path: Path,
+    name: InternationalizedString,
+    description: InternationalizedString,
+    logo_url: String,
+}
+
+#[derive(Object)]
+struct Me {
+    id: String,
+    name: String,
+    language: String,
+    creation: OffsetDateTime,
+    groups: Vec<MyGroup>,
+}
+
 #[OpenApi(prefix_path = "/user")]
 impl Router {
+    #[oai(path = "/", method = "get")]
+    async fn me(&self, user: User) -> poem::Result<Json<Me>> {
+        let user_query = sqlx::query!("select * from users where id = ($1)", user.get_id());
+        let groups = sqlx::query!(
+            r#"select groups.id, path as "path!: Path", name as "name!: DIS", description as "description!: DIS", url as logo_url from group_memberships 
+            inner join groups on groups.id = group_memberships.group_id 
+            inner join images logo on logo.id = groups.logo_id where user_id = $1"#,
+            user.get_id()
+        )
+            .map(|group| {
+                MyGroup {
+                    id: group.id,
+                    path: group.path,name:group.name.0,description:group.description.0, logo_url: group.logo_url
+                }
+            })
+            .fetch_all(&self.db).await.map_err(InternalServerError::db)?;
+        let user = user_query
+            .fetch_one(&self.db)
+            .await
+            .map_err(InternalServerError::db)?;
+        Ok(Json(Me {
+            id: user.id,
+            name: self
+                .decrypt_string(user.name, &user.nonce)
+                .ok_or(InternalServerError::encryption("user.name"))?,
+            language: self
+                .decrypt_string(user.language, &user.nonce)
+                .ok_or(InternalServerError::encryption("user.language"))?,
+            creation: user.creation,
+            groups,
+        }))
+    }
     async fn populate_tlth(&self) -> poem::Result<()> {
         sqlx::query!(
             "insert into images (id, size, url) values ('7c315a13-eff7-4268-89b9-5e072611ea21'::uuid, 0, 'https://icelk.dev/logo.png') on conflict do nothing",
