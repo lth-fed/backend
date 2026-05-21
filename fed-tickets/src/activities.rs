@@ -88,6 +88,19 @@ struct BriefActivity {
     image_url: String,
 }
 
+#[derive(Object)]
+struct TicketKind {
+    id: Uuid,
+    name: InternationalizedString,
+    price: i64,
+    purchasing_available_start: OffsetDateTime,
+    purchasing_available_stop: OffsetDateTime,
+    /// Null if there's not a shortage of tickets.
+    tickets_left: Option<i32>,
+    membership_passing: bool,
+    // todo: add addons
+}
+
 #[derive(Clone, Debug)]
 pub struct Router {
     pub context: Context,
@@ -236,5 +249,56 @@ impl Router {
         };
 
         Ok(Json(activity))
+    }
+    #[oai(path = "/:id/ticket-kinds", method = "get")]
+    async fn kinds(&self, user: User, id: Path<Uuid>) -> poem::Result<Json<Vec<TicketKind>>> {
+        self.test_activity_access(user.get_id(), &id.0).await?;
+        let kinds = sqlx::query!(
+            r#"
+            select id,
+            kind.name as "name!: DIS",
+            kind.price,
+            kind.purchasing_available_start,
+            kind.purchasing_available_stop,
+            kind.reserved_or_purchased_tickets,
+            kind.max_tickets,
+            exists (
+                select 1
+                from group_memberships
+                inner join groups member_group on member_group.id = group_memberships.group_id
+                inner join ticket_kind_allowed_groups tk_ag on tk_ag.ticket_kind_id = kind.id
+                inner join groups allowed_group on allowed_group.id = tk_ag.group_id
+                    and allowed_group.path @> member_group.path
+
+                where group_memberships.user_id = $2
+                and (
+                    member_group.limit_membership_visibility = false
+                    or tk_ag.group_id = group_memberships.group_id
+                )
+            ) as membership_passing
+
+            from ticket_kinds as kind
+            where activity_id = $1
+            "#,
+            id.0,
+            user.get_id()
+        )
+        .map(|kind| {
+            // todo: check activity max too
+            let tickets_left = kind.max_tickets - kind.reserved_or_purchased_tickets;
+            TicketKind {
+                id: kind.id,
+                name: kind.name.0,
+                price: kind.price.0,
+                purchasing_available_start: kind.purchasing_available_start,
+                purchasing_available_stop: kind.purchasing_available_stop,
+                tickets_left: (tickets_left < 10i32).then_some(tickets_left),
+                membership_passing: kind.membership_passing.unwrap_or(false),
+            }
+        })
+        .fetch_all(&self.db)
+        .await
+        .map_err(InternalServerError::db)?;
+        Ok(Json(kinds))
     }
 }
