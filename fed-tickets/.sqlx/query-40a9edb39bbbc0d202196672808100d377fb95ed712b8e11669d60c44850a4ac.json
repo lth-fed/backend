@@ -1,0 +1,51 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select groups.id, path as \"path!: Path\", name as \"name!: DIS\", description as \"description!: DIS\", url as logo_url from group_memberships \n            inner join groups on groups.id = group_memberships.group_id \n            inner join images logo on logo.id = groups.logo_id where user_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "path!: Path",
+        "type_info": {
+          "Custom": {
+            "name": "ltree",
+            "kind": "Simple"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "name!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 3,
+        "name": "description!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "logo_url",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "40a9edb39bbbc0d202196672808100d377fb95ed712b8e11669d60c44850a4ac"
+}
