@@ -12,8 +12,8 @@ pub mod activities;
 pub mod context;
 pub mod group;
 pub mod healthcheck;
-pub mod user;
 pub mod ticket;
+pub mod user;
 
 pub use context::Context;
 use sqlx::types::Json;
