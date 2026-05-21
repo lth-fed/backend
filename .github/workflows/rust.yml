@@ -6,6 +6,7 @@ env:
   CARGO_TERM_COLOR: always
   PGPASSWORD: postgres
   SQLX_OFFLINE: "true"
+  DATABASE_URL: postgres://postgres:postgres@localhost/ci
 
 jobs:
   build:
@@ -40,8 +41,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cp fed-auth/.env.example fed-auth/.env
       - run: cp fed-tickets/.env.example fed-tickets/.env
-        # test those who don't need DB
-      - run: cargo test --workspace --exclude fed-auth --exclude fed-tickets
       - name: Wait for Postgres
         run: |
           for i in {1..30}; do
@@ -54,9 +53,4 @@ jobs:
           done
           echo "Postgres did not become ready in time"
           exit 1
-      - run: cargo test -p fed-tickets
-        env:
-          DATABASE_URL: postgres://postgres:postgres@localhost/ci
-      - run: cargo test -p fed-auth -F ci-test-dont-use-when-building-for-production
-        env:
-          DATABASE_URL: postgres://postgres:postgres@localhost/ci
+      - run: cargo test --workspace -F ci-test-dont-use-when-building-for-production
