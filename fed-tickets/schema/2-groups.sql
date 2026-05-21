@@ -50,6 +50,21 @@ create table group_memberships (
     primary key (user_id, group_id)
 );
 
+-- a view of all group memberships, including inherited memberships
+create view transitive_group_memberships as
+    select user_id, group_id
+    from group_memberships
+    inner join groups member_groups on (
+        group_memberships.group_id = member_groups.id
+    )
+    inner join groups on (
+        member_groups.path @> groups.path
+    )
+    where (
+        member_groups.limit_membership_visibility = false
+        or groups.id = member_groups.id
+    );
+
 create table group_adminships (
     user_id text not null references users(id),
     group_id uuid not null references groups(id),
