@@ -126,16 +126,20 @@ impl Router {
             inner join groups creator on creator.admin_path = a.creator_id
             inner join images img on img.id = a.image_id
 
-            left join user_group_settings settings on
-                settings.user_id = $1 and settings.group_id = a.creator_id
-
             where group_members.member_id = $1
             and (
                 member_group.limit_membership_visibility = false
                 or tk_ag.group_id = group_members.group_id
             )
             and time_end + '6 hours' > now()
-            and (settings.visible is null or settings.visible = true)
+            and not exists (
+                select 1
+                from user_group_settings as settings
+                inner join groups on groups.admin_path = settings.group_id
+                where settings.user_id = $1
+                and groups.admin_path @> creator.admin_path
+                and settings.visible = false
+            )
             --order by time_start asc
             limit 100
             "#,
