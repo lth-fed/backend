@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select * from users where id = ($1)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 2,
+        "name": "language",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 3,
+        "name": "nonce",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 4,
+        "name": "latest_refresh",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "creation",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "inactive_since",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "58cffa06f1c59d8fef7a3075ba26ccdeb86cfa49fde89492a626dd6e83991c5c"
+}
