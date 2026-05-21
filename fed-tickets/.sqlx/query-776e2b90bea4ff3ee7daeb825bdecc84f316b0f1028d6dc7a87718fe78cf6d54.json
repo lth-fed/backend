@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            select distinct g.id, g.path, g.limit_membership_visibility, g.name, g.description, g.deleted\n            from groups g\n            join group_memberships gm on gm.user_id = $1\n            join groups mg on mg.id = gm.group_id\n            where\n                (g.limit_membership_visibility = false and g.path <@ mg.path)\n                or\n                (g.limit_membership_visibility = true and g.id = gm.group_id)\n        ",
+  "query": "insert into groups\n            (path, name, description, membership_inherits_upward)\n            values ($1, $2, $3, $4)\n            returning id, path, membership_inherits_upward, name, description, deleted",
   "describe": {
     "columns": [
       {
@@ -20,7 +20,7 @@
       },
       {
         "ordinal": 2,
-        "name": "limit_membership_visibility",
+        "name": "membership_inherits_upward",
         "type_info": "Bool"
       },
       {
@@ -41,7 +41,15 @@
     ],
     "parameters": {
       "Left": [
-        "Text"
+        {
+          "Custom": {
+            "name": "ltree",
+            "kind": "Simple"
+          }
+        },
+        "Jsonb",
+        "Jsonb",
+        "Bool"
       ]
     },
     "nullable": [
@@ -53,5 +61,5 @@
       false
     ]
   },
-  "hash": "4f9b6664ff4b8cc4760825e6fe7169b368f5128df1aab6b73a3e00ee9a6ad514"
+  "hash": "776e2b90bea4ff3ee7daeb825bdecc84f316b0f1028d6dc7a87718fe78cf6d54"
 }

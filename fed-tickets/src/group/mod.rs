@@ -51,7 +51,7 @@ impl Deref for Router {
 pub struct Group {
     pub id: Uuid,
     pub path: Path,
-    pub limit_membership_visibility: bool,
+    pub membership_inherits_upward: bool,
     pub name: serde_json::Value,
     pub description: serde_json::Value,
     pub deleted: bool,
@@ -62,7 +62,7 @@ pub struct CreateGroupRequest {
     pub path: Path,
     pub name: serde_json::Value,
     pub description: serde_json::Value,
-    pub limit_membership_visibility: bool,
+    pub membership_inherits_upward: bool,
 }
 
 #[derive(Debug, Object)]
@@ -110,7 +110,7 @@ impl Router {
             path,
             name,
             description,
-            limit_membership_visibility,
+            membership_inherits_upward,
         } = create_group;
 
         let parent = path
@@ -129,19 +129,29 @@ impl Router {
 
         let group = sqlx::query_as!(
             Group,
-            "insert into groups (path, name, description, limit_membership_visibility) values ($1, $2, $3, $4) returning id, path, limit_membership_visibility, name, description, deleted",
+            "insert into groups
+            (path, name, description, membership_inherits_upward)
+            values ($1, $2, $3, $4)
+            returning id, path, membership_inherits_upward, name, description, deleted",
             path.0,
             name,
             description,
-            limit_membership_visibility,
+            membership_inherits_upward,
         )
         .fetch_one(&mut *txn)
         .await
         .map_err(|err| match err {
-            sqlx::Error::Database(ref db_err) if let Some(constraint) = db_err.constraint() => match constraint {
-                "groups_path_key" => Error::from_string("group already exists", StatusCode::CONFLICT),
-                "groups_parent_path_fkey" => Error::from_string(format!("no parent with path `{parent}` exists"), StatusCode::BAD_REQUEST),
-                _unknown_constraint => InternalServerError(err),
+            sqlx::Error::Database(ref db_err) if let Some(constraint) = db_err.constraint() => {
+                match constraint {
+                    "groups_path_key" => {
+                        Error::from_string("group already exists", StatusCode::CONFLICT)
+                    }
+                    "groups_parent_path_fkey" => Error::from_string(
+                        format!("no parent with path `{parent}` exists"),
+                        StatusCode::BAD_REQUEST,
+                    ),
+                    _unknown_constraint => InternalServerError(err),
+                }
             }
             other_err => InternalServerError(other_err),
         })?;

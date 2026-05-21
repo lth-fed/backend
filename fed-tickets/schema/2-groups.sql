@@ -18,7 +18,7 @@ create table groups (
     ) stored,
     foreign key (parent_path) references groups(path),
 
-    limit_membership_visibility boolean not null,
+    membership_inherits_upward boolean not null default true,
     --
     name jsonb not null,
     description jsonb not null,
@@ -50,14 +50,26 @@ create table group_memberships (
     primary key (user_id, group_id)
 );
 
+-- a view of all group memberships, including inherited memberships
+create or replace view effective_group_memberships as
+    select distinct
+        m.user_id,
+        g.id as group_id,
+        g.path as group_path
+    from group_memberships m
+    join groups member_group on m.group_id = member_group.id
+    join groups g on g.path @> member_group.path
+    where not member_group.deleted
+    and not g.deleted
+    and (
+        member_group.membership_inherits_upward = true
+        or member_group.path = g.path
+    );
+
 create table group_adminships (
     user_id text not null references users(id),
     group_id uuid not null references groups(id),
-    primary key (user_id, group_id),
-    -- ensure there exists a group membership with the same user_id and group_id
-    constraint group_adminships_group_membership_fk foreign key (user_id, group_id)
-        references group_memberships (user_id, group_id)
-        on delete cascade
+    primary key (user_id, group_id)
 );
 
 create type notification_level as enum ('none', 'personalized', 'all');
