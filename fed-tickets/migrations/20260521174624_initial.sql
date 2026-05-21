@@ -54,13 +54,6 @@ create table "public"."group_memberships" (
 );
 
 
-create table "public"."group_notifications" (
-    "user_id" text not null,
-    "group_id" uuid not null,
-    "level" notification_level not null
-);
-
-
 create table "public"."groups" (
     "id" uuid not null default uuidv4(),
     "path" ltree not null,
@@ -72,6 +65,7 @@ END) stored,
     "limit_membership_visibility" boolean not null,
     "name" jsonb not null,
     "description" jsonb not null,
+    "logo_id" uuid not null,
     "deleted" boolean not null default false
 );
 
@@ -182,6 +176,14 @@ create table "public"."ticket_reservations" (
 );
 
 
+create table "public"."user_group_settings" (
+    "user_id" text not null,
+    "group_id" uuid not null,
+    "visible" boolean not null,
+    "notification_level" notification_level not null
+);
+
+
 create table "public"."users" (
     "id" text not null,
     "name" bytea not null,
@@ -197,15 +199,25 @@ CREATE UNIQUE INDEX activities_pkey ON public.activities USING btree (id);
 
 CREATE UNIQUE INDEX activity_host_invites_pkey ON public.activity_host_invites USING btree (activity_id, group_id);
 
+CREATE INDEX activity_hosts_by_activity ON public.activity_hosts USING hash (activity_id);
+
 CREATE UNIQUE INDEX activity_hosts_pkey ON public.activity_hosts USING btree (activity_id, group_id);
+
+CREATE INDEX activity_time_end ON public.activities USING btree (time_end);
+
+CREATE INDEX activity_time_start ON public.activities USING btree (time_start);
 
 CREATE UNIQUE INDEX group_adminships_pkey ON public.group_adminships USING btree (user_id, group_id);
 
 CREATE UNIQUE INDEX group_member_requests_pkey ON public.group_member_requests USING btree (group_id, member_id);
 
+CREATE INDEX group_memberships_by_member ON public.group_memberships USING hash (user_id);
+
 CREATE UNIQUE INDEX group_memberships_pkey ON public.group_memberships USING btree (user_id, group_id);
 
-CREATE UNIQUE INDEX group_notifications_pkey ON public.group_notifications USING btree (group_id, user_id);
+CREATE INDEX group_tree ON public.groups USING gist (path);
+
+CREATE INDEX group_tree_eq ON public.groups USING hash (path);
 
 CREATE UNIQUE INDEX groups_ask_to_join_pkey ON public.groups_ask_to_join USING btree (target_id, joiner_id);
 
@@ -229,7 +241,11 @@ CREATE UNIQUE INDEX ticket_addon_options_pkey ON public.ticket_addon_options USI
 
 CREATE UNIQUE INDEX ticket_addons_pkey ON public.ticket_addons USING btree (id);
 
+CREATE INDEX ticket_kind_allowed_groups_by_group ON public.ticket_kind_allowed_groups USING hash (group_id);
+
 CREATE UNIQUE INDEX ticket_kind_allowed_groups_pkey ON public.ticket_kind_allowed_groups USING btree (group_id, ticket_kind_id);
+
+CREATE INDEX ticket_kind_by_activity ON public.ticket_kinds USING hash (activity_id);
 
 CREATE UNIQUE INDEX ticket_kinds_pkey ON public.ticket_kinds USING btree (id);
 
@@ -238,6 +254,12 @@ CREATE UNIQUE INDEX ticket_queue_pkey ON public.ticket_queue USING btree (id);
 CREATE UNIQUE INDEX ticket_queuers_pkey ON public.ticket_queuers USING btree (id);
 
 CREATE UNIQUE INDEX ticket_reservations_pkey ON public.ticket_reservations USING btree (id);
+
+CREATE INDEX user_group_settings_by_group ON public.user_group_settings USING hash (group_id);
+
+CREATE INDEX user_group_settings_by_user ON public.user_group_settings USING hash (user_id);
+
+CREATE UNIQUE INDEX user_group_settings_pkey ON public.user_group_settings USING btree (group_id, user_id);
 
 CREATE UNIQUE INDEX users_pkey ON public.users USING btree (id);
 
@@ -252,8 +274,6 @@ alter table "public"."group_adminships" add constraint "group_adminships_pkey" P
 alter table "public"."group_member_requests" add constraint "group_member_requests_pkey" PRIMARY KEY using index "group_member_requests_pkey";
 
 alter table "public"."group_memberships" add constraint "group_memberships_pkey" PRIMARY KEY using index "group_memberships_pkey";
-
-alter table "public"."group_notifications" add constraint "group_notifications_pkey" PRIMARY KEY using index "group_notifications_pkey";
 
 alter table "public"."groups" add constraint "groups_pkey" PRIMARY KEY using index "groups_pkey";
 
@@ -280,6 +300,8 @@ alter table "public"."ticket_queue" add constraint "ticket_queue_pkey" PRIMARY K
 alter table "public"."ticket_queuers" add constraint "ticket_queuers_pkey" PRIMARY KEY using index "ticket_queuers_pkey";
 
 alter table "public"."ticket_reservations" add constraint "ticket_reservations_pkey" PRIMARY KEY using index "ticket_reservations_pkey";
+
+alter table "public"."user_group_settings" add constraint "user_group_settings_pkey" PRIMARY KEY using index "user_group_settings_pkey";
 
 alter table "public"."users" add constraint "users_pkey" PRIMARY KEY using index "users_pkey";
 
@@ -343,13 +365,9 @@ alter table "public"."group_memberships" add constraint "group_memberships_user_
 
 alter table "public"."group_memberships" validate constraint "group_memberships_user_id_fkey";
 
-alter table "public"."group_notifications" add constraint "group_notifications_group_id_fkey" FOREIGN KEY ("group_id") REFERENCES "public"."groups"("id") NOT VALID;
+alter table "public"."groups" add constraint "groups_logo_id_fkey" FOREIGN KEY ("logo_id") REFERENCES "public"."images"("id") NOT VALID;
 
-alter table "public"."group_notifications" validate constraint "group_notifications_group_id_fkey";
-
-alter table "public"."group_notifications" add constraint "group_notifications_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") NOT VALID;
-
-alter table "public"."group_notifications" validate constraint "group_notifications_user_id_fkey";
+alter table "public"."groups" validate constraint "groups_logo_id_fkey";
 
 alter table "public"."groups" add constraint "groups_parent_path_fkey" FOREIGN KEY ("parent_path") REFERENCES "public"."groups"("path") NOT VALID;
 
@@ -431,11 +449,11 @@ alter table "public"."ticket_kinds" add constraint "ticket_kinds_check1" CHECK (
 
 alter table "public"."ticket_kinds" validate constraint "ticket_kinds_check1";
 
-alter table "public"."ticket_kinds" add constraint "ticket_kinds_max_tickets_check" CHECK ((max_tickets > 0)) not valid;
+alter table "public"."ticket_kinds" add constraint "ticket_kinds_max_tickets_check" CHECK ((max_tickets >= 0)) not valid;
 
 alter table "public"."ticket_kinds" validate constraint "ticket_kinds_max_tickets_check";
 
-alter table "public"."ticket_kinds" add constraint "ticket_kinds_min_tickets_check" CHECK ((min_tickets > 0)) not valid;
+alter table "public"."ticket_kinds" add constraint "ticket_kinds_min_tickets_check" CHECK ((min_tickets >= 0)) not valid;
 
 alter table "public"."ticket_kinds" validate constraint "ticket_kinds_min_tickets_check";
 
@@ -470,5 +488,13 @@ alter table "public"."ticket_reservations" validate constraint "ticket_reservati
 alter table "public"."ticket_reservations" add constraint "ticket_reservations_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") NOT VALID;
 
 alter table "public"."ticket_reservations" validate constraint "ticket_reservations_user_id_fkey";
+
+alter table "public"."user_group_settings" add constraint "user_group_settings_group_id_fkey" FOREIGN KEY ("group_id") REFERENCES "public"."groups"("id") NOT VALID;
+
+alter table "public"."user_group_settings" validate constraint "user_group_settings_group_id_fkey";
+
+alter table "public"."user_group_settings" add constraint "user_group_settings_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") NOT VALID;
+
+alter table "public"."user_group_settings" validate constraint "user_group_settings_user_id_fkey";
 
 
