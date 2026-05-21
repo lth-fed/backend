@@ -44,8 +44,10 @@ struct PurchasedAddon {
 #[derive(Object)]
 struct Ticket {
     id: Uuid,
+    #[allow(clippy::struct_field_names, reason = "reasonable name")]
     ticket_kind_id: Uuid,
     activity_id: Uuid,
+    #[allow(clippy::struct_field_names, reason = "reasonable name")]
     ticket_kind_name: IS,
     activity_title: IS,
     creator_name: IS,
@@ -225,6 +227,10 @@ async fn validate_addons(
     .await
     .map_err(InternalServerError::db)?;
 
+    #[allow(
+        clippy::cast_possible_wrap,
+        reason = "addons.len() will never exceed i64::MAX"
+    )]
     if count != Some(addons.len() as i64) {
         return Err(Error::from_string(
             "Invalid addons",
