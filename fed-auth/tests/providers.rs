@@ -84,9 +84,9 @@ async fn test(db: PgPool) -> color_eyre::Result<()> {
         .next()
         .unwrap()
         .to_owned();
-    response
-        .assert_text("https://auth.esek.se/auth/return?validated=true")
-        .await;
+    let json = response.json().await;
+    let url = json.value().object().get("url").string();
+    assert!(url.starts_with("https://auth.esek.se/auth/return?validated=true"));
 
     println!("refresh token: {token}");
     let response = app
