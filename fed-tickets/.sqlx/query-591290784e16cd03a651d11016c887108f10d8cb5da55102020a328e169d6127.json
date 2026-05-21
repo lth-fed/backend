@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select activities.id,\n                title as \"title!: DIS\",\n                activities.description as \"description!: DIS\",\n                location as \"location!: Location\", time_start, time_end,\n                max_tickets,\n                users.id as \"responsible_id\",\n                users.name as \"responsible_name\",\n                users.nonce as \"responsible_nonce\",\n                images.url as \"image_url\",\n                creator.name as \"creator_name!: DIS\",\n                creator_logo.url as \"creator_logo_url\",\n                creator.admin_path\n            from activities\n            inner join users on users.id = responsible_id\n            inner join images on images.id = image_id\n            inner join groups creator on creator.admin_path = creator_id\n            inner join images creator_logo on creator_logo.id = creator.logo_id\n            where activities.id = $1;\n            ",
+  "query": "select activities.id,\n                title as \"title!: DIS\",\n                activities.description as \"description!: DIS\",\n                location as \"location!: Location\", time_start, time_end,\n                max_tickets,\n                users.id as \"responsible_id\",\n                users.name as \"responsible_name\",\n                users.nonce as \"responsible_nonce\",\n                images.url as \"image_url\",\n                creator.name as \"creator_name!: DIS\",\n                creator_logo.url as \"creator_logo_url\",\n                creator.path as \"creator_path\"\n            from activities\n            inner join users on users.id = responsible_id\n            inner join images on images.id = image_id\n            inner join groups creator on creator.id = creator_id\n            inner join images creator_logo on creator_logo.id = creator.logo_id\n            where activities.id = $1;\n            ",
   "describe": {
     "columns": [
       {
@@ -94,7 +94,7 @@
       },
       {
         "ordinal": 13,
-        "name": "admin_path",
+        "name": "creator_path",
         "type_info": {
           "Custom": {
             "name": "ltree",
@@ -125,5 +125,5 @@
       false
     ]
   },
-  "hash": "ca7c6817a6ee5c02751d1254ce2c39c3ebb7e774bc15ae21272af38c08910cba"
+  "hash": "591290784e16cd03a651d11016c887108f10d8cb5da55102020a328e169d6127"
 }
