@@ -12,6 +12,7 @@ pub mod activities;
 pub mod context;
 pub mod group;
 pub mod healthcheck;
+pub mod ticket;
 pub use context::Context;
 use sqlx::types::Json;
 
@@ -64,6 +65,9 @@ pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl En
                 context: context.clone(),
             },
             group::Router {
+                context: context.clone(),
+            },
+            ticket::Router {
                 context: context.clone(),
             },
             healthcheck::Router {
