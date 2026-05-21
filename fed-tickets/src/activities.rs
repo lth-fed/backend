@@ -103,6 +103,9 @@ impl Deref for Router {
 impl Router {
     #[oai(path = "/", method = "get")]
     async fn list(&self, user: User) -> poem::Result<Json<Vec<BriefActivity>>> {
+        todo!();
+
+        /*
         let mut activities = sqlx::query_file!("src/activity-list.sql", user.get_id())
             .map(|activity| BriefActivity {
                 id: activity.id,
@@ -124,25 +127,21 @@ impl Router {
         // this is kinda bad since we limit, so it there's more than 100 items some may be missed.
         activities.sort_by_key(|act| act.time_start);
         Ok(Json(activities))
+        */
     }
     async fn test_activity_access(&self, user: &str, id: &Uuid) -> poem::Result<()> {
         // this clusterfuck is the same logic as above, which checks if this activity should be
         // visible
         sqlx::query!(
             r#"select exists (select 1
-            from group_memberships
-            inner join groups member_group on member_group.id = group_memberships.group_id
+            from effective_group_memberships gm
             -- get the ticket_kinds we're allowed to purchase
-            inner join groups allowed_group on allowed_group.path @> member_group.path
-            inner join ticket_kind_allowed_groups tk_ag on tk_ag.group_id = allowed_group.id
+            inner join ticket_kind_allowed_groups tk_ag on tk_ag.group_id = gm.group_id
             inner join ticket_kinds kind on kind.id = tk_ag.ticket_kind_id
 
-            where group_memberships.user_id = $1
+            where gm.user_id = $1
             and kind.activity_id = $2
-            and (
-                member_group.limit_membership_visibility = false
-                or tk_ag.group_id = group_memberships.group_id
-            ))
+            )
             "#,
             user,
             id

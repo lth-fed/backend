@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select exists (\n            select 1\n            from ticket_kind_allowed_groups tkag\n            inner join effective_group_memberships gm on tkag.group_id = gm.group_id\n            where tkag.ticket_kind_id = $1\n            and gm.user_id = $2\n        ) as \"may_purchase!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "may_purchase!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "587fb1bd4df092100e58e2bf840f1dea4f1b3df479a2aaedde14b4d76b02b071"
+}

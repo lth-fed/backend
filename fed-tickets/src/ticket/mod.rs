@@ -252,22 +252,12 @@ async fn ensure_user_may_purchase_ticket(
     ticket_kind: Uuid,
 ) -> poem::Result<()> {
     let may_purchase = sqlx::query_scalar!(
-        r#"select (
-            not exists (select 1 from ticket_kind_allowed_groups where ticket_kind_id = $1)
-            or
-            exists (
-                select 1
-                from ticket_kind_allowed_groups tkag
-                join groups allowed on allowed.id = tkag.group_id
-                join group_memberships gm on gm.user_id = $2
-                join groups member_group on member_group.id = gm.group_id
-                where tkag.ticket_kind_id = $1
-                and (
-                    (gm.group_id = allowed.id)
-                    or
-                    (allowed.limit_membership_visibility = false and member_group.path @> allowed.path)
-                )
-            )
+        r#"select exists (
+            select 1
+            from ticket_kind_allowed_groups tkag
+            inner join effective_group_memberships gm on tkag.group_id = gm.group_id
+            where tkag.ticket_kind_id = $1
+            and gm.user_id = $2
         ) as "may_purchase!""#,
         ticket_kind,
         user.get_id()

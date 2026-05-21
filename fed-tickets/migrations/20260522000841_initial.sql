@@ -10,7 +10,7 @@ create type "public"."location" as (
 );
 
 create table "public"."activities" (
-    "id" uuid not null,
+    "id" uuid not null default uuidv4(),
     "responsible_id" text not null,
     "creator_id" uuid not null,
     "title" jsonb not null,
@@ -19,7 +19,7 @@ create table "public"."activities" (
     "time_start" timestamp with time zone not null,
     "time_end" timestamp with time zone not null,
     "image_id" uuid not null,
-    "is_hidden" boolean not null,
+    "is_hidden" boolean not null default true,
     "max_tickets" integer not null
 );
 
@@ -62,7 +62,7 @@ CASE
     WHEN (nlevel(path) > 1) THEN subpath(path, 0, (nlevel(path) - 1))
     ELSE NULL::ltree
 END) stored,
-    "limit_membership_visibility" boolean not null,
+    "membership_inherits_upward" boolean not null default true,
     "name" jsonb not null,
     "description" jsonb not null,
     "logo_id" uuid not null,
@@ -495,3 +495,14 @@ alter table "public"."user_group_settings" validate constraint "user_group_setti
 alter table "public"."user_group_settings" add constraint "user_group_settings_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") NOT VALID;
 
 alter table "public"."user_group_settings" validate constraint "user_group_settings_user_id_fkey";
+
+create or replace view "public"."effective_group_memberships" as  SELECT DISTINCT m.user_id,
+    g.id AS group_id,
+    g.path AS group_path
+   FROM group_memberships m
+     JOIN groups member_group ON m.group_id = member_group.id
+     JOIN groups g ON g.path @> member_group.path
+  WHERE NOT member_group.deleted AND NOT g.deleted AND (member_group.membership_inherits_upward = true OR member_group.path = g.path);
+
+
+

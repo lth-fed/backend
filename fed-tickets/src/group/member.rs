@@ -41,14 +41,10 @@ pub async fn user_groups(db: impl PgExecutor<'_>, user_id: &str) -> sqlx::Result
     sqlx::query_as!(
         Group,
         r#"
-            select distinct g.id, g.path, g.limit_membership_visibility, g.name, g.description, g.deleted
-            from groups g
-            join group_memberships gm on gm.user_id = $1
-            join groups mg on mg.id = gm.group_id
-            where
-                (g.limit_membership_visibility = false and g.path <@ mg.path)
-                or
-                (g.limit_membership_visibility = true and g.id = gm.group_id)
+            select id, path, membership_inherits_upward, name, description, deleted
+            from effective_group_memberships eg
+            join groups g on g.id = eg.group_id
+            where eg.user_id = $1
         "#,
         user_id
     )
@@ -95,11 +91,9 @@ mod tests {
     // check out fixtures/user_groups.sql
     #[sqlx::test(fixtures("user_groups"))]
     async fn group_membership(db: PgPool) {
-        // Membership in `tlth.e` (limit_mv=false) reveals it and its limit_mv=false
-        // descendants, but not the limit_mv=true `tlth.e.nolla`.
         assert_eq!(
             sorted_paths(user_groups(&db, "user_a").await.unwrap()),
-            vec!["tlth.e", "tlth.e.styrelsen"],
+            vec!["tlth", "tlth.e"],
         );
 
         // Direct membership is the only way into a limit_mv=true group.
@@ -111,15 +105,7 @@ mod tests {
         // Overlapping memberships dedupe; limit_mv=true `*.nolla` groups stay hidden.
         assert_eq!(
             sorted_paths(user_groups(&db, "user_c").await.unwrap()),
-            vec![
-                "tlth",
-                "tlth.d",
-                "tlth.d.styrelsen",
-                "tlth.e",
-                "tlth.e.styrelsen",
-                "tlth.f",
-                "tlth.f.styrelsen",
-            ],
+            vec!["tlth", "tlth.f", "tlth.f.styrelsen"],
         );
 
         assert!(user_groups(&db, "nobody").await.unwrap().is_empty());
