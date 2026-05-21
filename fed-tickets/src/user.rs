@@ -67,24 +67,27 @@ struct Me {
 impl Router {
     #[oai(path = "/", method = "get")]
     async fn me(&self, user: User) -> poem::Result<Json<Me>> {
-        let user_query = sqlx::query!("select * from users where id = ($1)", user.get_id());
         let groups = sqlx::query!(
             r#"select groups.id, path as "path!: Path", name as "name!: DIS", description as "description!: DIS", url as logo_url from group_memberships 
             inner join groups on groups.id = group_memberships.group_id 
             inner join images logo on logo.id = groups.logo_id where user_id = $1"#,
             user.get_id()
-        )
-            .map(|group| {
+            ).map(|group| {
                 MyGroup {
                     id: group.id,
-                    path: group.path,name:group.name.0,description:group.description.0, logo_url: group.logo_url
+                    path: group.path,
+                    name:group.name.0,
+                    description:group.description.0, 
+                    logo_url: group.logo_url,
                 }
             })
             .fetch_all(&self.db).await.map_err(InternalServerError::db)?;
-        let user = user_query
+
+        let user = sqlx::query!("select * from users where id = ($1)", user.get_id())
             .fetch_one(&self.db)
             .await
             .map_err(InternalServerError::db)?;
+
         Ok(Json(Me {
             id: user.id,
             name: self
