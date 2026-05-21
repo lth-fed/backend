@@ -181,6 +181,16 @@ impl Router {
             .map_err(|err| InternalServerError::db(err))?;
         }
 
+        // increment ticket_kinds.reserved_or_purchased_tickets and set
+        // has_been_purchased to true
+        sqlx::query!(
+            "update ticket_kinds set reserved_or_purchased_tickets = reserved_or_purchased_tickets + 1, has_been_purchased = true where id = $1",
+            ticket_kind
+        )
+        .execute(&mut *txn)
+        .await
+        .map_err(|err| InternalServerError::db(err))?;
+
         txn.commit()
             .await
             .map_err(|err| InternalServerError::db(err))?;
