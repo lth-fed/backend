@@ -11,7 +11,7 @@ create type location as (
 
 -- for an activity without tickets, the frontend should create a free ticket with max_tickets = 0, to specify who can view the activity
 create table activities (
-    id uuid primary key,
+    id uuid primary key default uuidv4(),
     -- has to be user with email
     responsible_id text not null references users(id),
     creator_id uuid not null references groups(id),
@@ -22,7 +22,7 @@ create table activities (
     time_start timestamptz not null,
     time_end timestamptz not null,
     image_id uuid not null references images(id),
-    is_hidden boolean not null,
+    is_hidden boolean not null default true,
     max_tickets integer not null check (max_tickets > 0) -- default MAX_INT
 );
 
