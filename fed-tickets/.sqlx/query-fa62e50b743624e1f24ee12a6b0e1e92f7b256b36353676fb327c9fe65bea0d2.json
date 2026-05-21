@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update ticket_kinds set reserved_or_purchased_tickets = reserved_or_purchased_tickets + 1, has_been_purchased = true where id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fa62e50b743624e1f24ee12a6b0e1e92f7b256b36353676fb327c9fe65bea0d2"
+}

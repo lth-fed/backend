@@ -185,7 +185,7 @@ impl Router {
         // has_been_purchased to true
         sqlx::query!(
             "update ticket_kinds set reserved_or_purchased_tickets = reserved_or_purchased_tickets + 1, has_been_purchased = true where id = $1",
-            ticket_kind
+            req.ticket_kind
         )
         .execute(&mut *txn)
         .await
