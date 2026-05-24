@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into users (id, name, language, nonce) values ($1, $2, ''::bytea, $3)\n             on conflict (id) do nothing",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Bytea",
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "154528c0636d4e0d207951e4e27e50b6d2a2dc10a6a9ec4b65b7c978b66d9bc2"
+}

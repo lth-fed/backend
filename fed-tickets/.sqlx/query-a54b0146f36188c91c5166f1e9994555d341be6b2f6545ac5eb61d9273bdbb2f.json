@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into activities\n                (id, responsible_id, creator_id, title, description, location,\n                 time_start, time_end, image_id, is_hidden, max_tickets)\n             values ($1, $2, $3, $4, $5, row($6::jsonb, null, null, null)::location, $7, $8, $9, false, $10)\n             on conflict (id) do update set\n                title = excluded.title,\n                description = excluded.description,\n                location = excluded.location,\n                time_start = excluded.time_start,\n                time_end = excluded.time_end,\n                image_id = excluded.image_id,\n                is_hidden = excluded.is_hidden,\n                max_tickets = excluded.max_tickets",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Jsonb",
+        "Jsonb",
+        "Jsonb",
+        "Timestamptz",
+        "Timestamptz",
+        "Uuid",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a54b0146f36188c91c5166f1e9994555d341be6b2f6545ac5eb61d9273bdbb2f"
+}
