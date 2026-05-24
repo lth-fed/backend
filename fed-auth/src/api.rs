@@ -293,8 +293,18 @@ impl MainRouter {
                 .parse()
                 .map_err(|_| StatusCode::BAD_REQUEST)?;
             let origin: poem::http::Uri = origin.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
+            let same_domain =
+                origin
+                    .authority()
+                    .zip(cb_url.authority())
+                    .is_some_and(|(origin, cb)| {
+                        origin.as_str().starts_with(cb.as_str())
+                            || cb.as_str().starts_with(origin.as_str())
+                    });
             if origin.authority() != cb_url.authority()
                 || origin.scheme_str() != cb_url.scheme_str()
+                || origin.scheme().is_none()
+                || !same_domain
             {
                 return Err(StatusCode::BAD_REQUEST.into());
             }

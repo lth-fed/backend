@@ -14,7 +14,7 @@ use crate::{DbInternationalizedString as DIS, InternalServerError, International
 
 #[derive(sqlx::Type, Debug)]
 #[sqlx(type_name = "location")]
-struct Location {
+pub(crate) struct Location {
     name: Option<DIS>,
     directions: Option<DIS>,
     coordinate_wgs84: Option<PgPoint>,
@@ -28,7 +28,7 @@ struct Coords {
 }
 #[derive(Object)]
 #[oai(rename = "Location")]
-struct PoemLocation {
+pub(crate) struct PoemLocation {
     name: Option<InternationalizedString>,
     directions: Option<InternationalizedString>,
     coordinate_wgs84: Option<Coords>,
@@ -55,6 +55,8 @@ struct Responsible {
 #[derive(Object)]
 struct Host {
     name: InternationalizedString,
+    id: Uuid,
+    path: String,
     logo_url: String,
 }
 
@@ -178,9 +180,10 @@ impl Router {
                 users.name as "responsible_name",
                 users.nonce as "responsible_nonce",
                 images.url as "image_url",
+                creator.id as creator_id,
                 creator.name as "creator_name!: DIS",
                 creator_logo.url as "creator_logo_url",
-                creator.path as "creator_path"
+                creator.path as creator_path
             from activities
             inner join users on users.id = responsible_id
             inner join images on images.id = image_id
@@ -194,7 +197,7 @@ impl Router {
         .await
         .map_err(|_| StatusCode::NOT_FOUND)?;
         let other_hosts = sqlx::query!(
-            r#"select name as "name!: DIS", url
+            r#"select hosts.id, path, name as "name!: DIS", url
             from activity_hosts
             inner join groups hosts on hosts.id = activity_hosts.group_id
             inner join images on hosts.logo_id = images.id
@@ -221,10 +224,14 @@ impl Router {
 
         let hosts = std::iter::once(Host {
             name: activity.creator_name.0,
+            id: activity.creator_id,
+            path: activity.creator_path.to_string(),
             logo_url: activity.creator_logo_url,
         })
         .chain(other_hosts.into_iter().map(|other| Host {
             name: other.name.0,
+            id: other.id,
+            path: other.path.to_string(),
             logo_url: other.url,
         }))
         .collect();

@@ -1,6 +1,7 @@
 use sqlx::PgExecutor;
 use uuid::Uuid;
 
+use crate::DbInternationalizedString as DIS;
 use crate::group::{Group, path::Path};
 
 /// Returns the closest matching (longest prefix) group path for the given user
@@ -41,7 +42,7 @@ pub async fn user_groups(db: impl PgExecutor<'_>, user_id: &str) -> sqlx::Result
     sqlx::query_as!(
         Group,
         r#"
-            select distinct g.id, g.path, g.limit_membership_visibility, g.name, g.description, g.deleted
+            select distinct g.id, g.path, g.limit_membership_visibility, g.name as "name!: DIS", g.description as "description!: DIS", g.deleted
             from groups g
             join group_memberships gm on gm.user_id = $1
             join groups mg on mg.id = gm.group_id

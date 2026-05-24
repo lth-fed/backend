@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::fmt::Display;
 
 use fed_auth_verifier::AuthContext;
-use poem::http::StatusCode;
+use poem::http::{Method, StatusCode};
+use poem::middleware::Cors;
 use poem::{Endpoint, EndpointExt as _, Route};
 use poem_openapi::OpenApiService;
 use sqlx::PgPool;
@@ -23,6 +24,22 @@ pub type DbInternationalizedString = Json<InternationalizedString>;
 #[oai(from_multipart = false, from_parameter = false, to_header = false)]
 #[serde(transparent)]
 pub struct InternationalizedString(HashMap<String, String>);
+impl InternationalizedString {
+    /// # Panics
+    ///
+    /// None.
+    #[must_use]
+    pub fn to_json_value(self) -> serde_json::Value {
+        #[allow(clippy::expect_used, reason = "See string below")]
+        serde_json::to_value(self.0)
+            .expect("we know a hashmap will always serialize & we also know it has string keys")
+    }
+}
+impl From<DbInternationalizedString> for InternationalizedString {
+    fn from(value: DbInternationalizedString) -> Self {
+        value.0
+    }
+}
 
 #[derive(Debug)]
 pub struct InternalServerError<E: std::error::Error + Send + Sync + 'static> {
@@ -87,8 +104,16 @@ pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl En
     let ui = api_service.swagger_ui();
     let spec = api_service.spec_endpoint();
 
+    let cors = Cors::new()
+        .allow_method(Method::GET)
+        .allow_method(Method::POST)
+        .allow_header("content-type")
+        .allow_header("authorization")
+        .allow_credentials(true);
+
     Ok(Route::new()
         .nest("/v0", api_service.data(auth_context))
         .nest("/v0/docs", ui)
-        .nest("/v0/spec.json", spec))
+        .nest("/v0/spec.json", spec)
+        .with(cors))
 }

@@ -108,23 +108,24 @@ impl Router {
         .await
         .map_err(InternalServerError::db)?;
         let paths = [
-            "tlth",
-            "tlth.f",
-            "tlth.e",
-            "tlth.m",
-            "tlth.v",
-            "tlth.a",
-            "tlth.k",
-            "tlth.d",
-            "tlth.doct",
-            "tlth.ing",
-            "tlth.w",
-            "tlth.i",
+            ("tlth", "Teknologkåren"),
+            ("tlth.f", "F-sektionen"),
+            ("tlth.e", "E-sektionen"),
+            ("tlth.m", "Maskinsektionen"),
+            ("tlth.v", "V-sektionen"),
+            ("tlth.a", "A-sektionen"),
+            ("tlth.k", "K-sektionen"),
+            ("tlth.d", "D-sektionen"),
+            ("tlth.doct", "Doct-sektionen"),
+            ("tlth.ing", "Sektionen för högskoleingenjörsstudenter"),
+            ("tlth.w", "W-sektionen"),
+            ("tlth.i", "I-sektionen"),
         ];
-        for path in paths {
+        for (path, name) in paths {
             sqlx::query!(
-            "insert into groups (path, limit_membership_visibility, name, description, logo_id, deleted) values ($1, false, '{}'::jsonb, '{}'::jsonb, '7c315a13-eff7-4268-89b9-5e072611ea21'::uuid, false) on conflict do nothing",
-            path.parse::<PgLTree>().map_err(InternalServerError::db)?
+            r#"insert into groups (path, limit_membership_visibility, name, description, logo_id, deleted) values ($1, false, format('{"sv": "%s"}', $2::text)::jsonb, '{}'::jsonb, '7c315a13-eff7-4268-89b9-5e072611ea21'::uuid, false) on conflict do nothing"#,
+            path.parse::<PgLTree>().map_err(InternalServerError::db)?,
+            name
         )
         .execute(&self.db)
         .await

@@ -8,6 +8,7 @@ use sqlx::PgExecutor;
 use sqlx::types::time::OffsetDateTime;
 use uuid::Uuid;
 
+use crate::activities::{Location, PoemLocation};
 use crate::{
     Context, DbInternationalizedString as DIS, InternalServerError, InternationalizedString as IS,
 };
@@ -49,7 +50,10 @@ struct Ticket {
     activity_id: Uuid,
     #[allow(clippy::struct_field_names, reason = "reasonable name")]
     ticket_kind_name: IS,
+    activity_location: PoemLocation,
     activity_title: IS,
+    creator_id: Uuid,
+    creator_path: String,
     creator_name: IS,
     time_start: OffsetDateTime,
     time_end: OffsetDateTime,
@@ -61,28 +65,6 @@ impl Router {
     #[oai(path = "/", method = "get")]
     async fn my_tickets(&self, user: User) -> poem::Result<Json<Vec<Ticket>>> {
         let id = user.get_id();
-
-        let tickets = sqlx::query!(
-            r#"select
-                purchased_tickets.id as "id",
-                purchased_tickets.ticket_kind_id as "ticket_kind_id",
-                ticket_kinds.activity_id as "activity_id",
-                ticket_kinds.name as "ticket_kind_name!: DIS",
-                activities.title as "activity_title!: DIS",
-                creator.name as "creator_name!: DIS",
-                activities.time_start as "time_start",
-                activities.time_end as "time_end"
-            from purchased_tickets
-            inner join ticket_kinds on ticket_kinds.id = purchased_tickets.ticket_kind_id
-            inner join activities on activities.id = ticket_kinds.activity_id
-            inner join groups creator on creator.id = activities.creator_id
-            where purchased_tickets.owner_id = $1
-            "#,
-            id
-        )
-        .fetch_all(&self.context.db)
-        .await
-        .map_err(InternalServerError::db)?;
 
         let mut addons: HashMap<Uuid, Vec<PurchasedAddon>> = sqlx::query!(
             r#"select
@@ -123,22 +105,46 @@ impl Router {
             map
         });
 
-        Ok(Json(
-            tickets
-                .into_iter()
-                .map(|ticket| Ticket {
-                    addons: addons.remove(&ticket.id).unwrap_or_default(),
-                    id: ticket.id,
-                    ticket_kind_id: ticket.ticket_kind_id,
-                    activity_id: ticket.activity_id,
-                    ticket_kind_name: ticket.ticket_kind_name.0,
-                    activity_title: ticket.activity_title.0,
-                    creator_name: ticket.creator_name.0,
-                    time_start: ticket.time_start,
-                    time_end: ticket.time_end,
-                })
-                .collect(),
-        ))
+        let tickets = sqlx::query!(
+            r#"select
+                purchased_tickets.id as "id",
+                purchased_tickets.ticket_kind_id as "ticket_kind_id",
+                ticket_kinds.activity_id as "activity_id",
+                ticket_kinds.name as "ticket_kind_name!: DIS",
+                activities.title as "activity_title!: DIS",
+                creator.id as creator_id,
+                creator.path as creator_path,
+                creator.name as "creator_name!: DIS",
+                activities.location as "location!: Location",
+                activities.time_start as "time_start",
+                activities.time_end as "time_end"
+            from purchased_tickets
+            inner join ticket_kinds on ticket_kinds.id = purchased_tickets.ticket_kind_id
+            inner join activities on activities.id = ticket_kinds.activity_id
+            inner join groups creator on creator.id = activities.creator_id
+            where purchased_tickets.owner_id = $1
+            "#,
+            id
+        )
+        .map(|ticket| Ticket {
+            addons: addons.remove(&ticket.id).unwrap_or_default(),
+            id: ticket.id,
+            ticket_kind_id: ticket.ticket_kind_id,
+            activity_id: ticket.activity_id,
+            activity_location: ticket.location.into(),
+            activity_title: ticket.activity_title.0,
+            ticket_kind_name: ticket.ticket_kind_name.0,
+            creator_id: ticket.creator_id,
+            creator_path: ticket.creator_path.to_string(),
+            creator_name: ticket.creator_name.0,
+            time_start: ticket.time_start,
+            time_end: ticket.time_end,
+        })
+        .fetch_all(&self.context.db)
+        .await
+        .map_err(InternalServerError::db)?;
+
+        Ok(Json(tickets))
     }
 
     #[oai(path = "/", method = "post")]

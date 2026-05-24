@@ -15,6 +15,7 @@ mod path;
 
 pub use path::Path;
 
+use crate::{DbInternationalizedString as DIS, InternationalizedString as IS};
 use crate::{
     context::Context,
     group::{
@@ -52,16 +53,16 @@ pub struct Group {
     pub id: Uuid,
     pub path: Path,
     pub limit_membership_visibility: bool,
-    pub name: serde_json::Value,
-    pub description: serde_json::Value,
+    pub name: IS,
+    pub description: IS,
     pub deleted: bool,
 }
 
 #[derive(Debug, Object)]
 pub struct CreateGroupRequest {
     pub path: Path,
-    pub name: serde_json::Value,
-    pub description: serde_json::Value,
+    pub name: IS,
+    pub description: IS,
     pub limit_membership_visibility: bool,
 }
 
@@ -129,10 +130,10 @@ impl Router {
 
         let group = sqlx::query_as!(
             Group,
-            "insert into groups (path, name, description, limit_membership_visibility) values ($1, $2, $3, $4) returning id, path, limit_membership_visibility, name, description, deleted",
+            r#"insert into groups (path, name, description, limit_membership_visibility) values ($1, $2, $3, $4) returning id, path, limit_membership_visibility, name as "name!: DIS", description as "description!: DIS", deleted"#,
             path.0,
-            name,
-            description,
+            name.to_json_value(),
+            description.to_json_value(),
             limit_membership_visibility,
         )
         .fetch_one(&mut *txn)
