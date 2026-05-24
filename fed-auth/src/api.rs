@@ -298,11 +298,10 @@ impl MainRouter {
                     .authority()
                     .zip(cb_url.authority())
                     .is_some_and(|(origin, cb)| {
-                        origin.as_str().starts_with(cb.as_str())
-                            || cb.as_str().starts_with(origin.as_str())
+                        origin.as_str().ends_with(cb.as_str())
+                            || cb.as_str().ends_with(origin.as_str())
                     });
-            if origin.authority() != cb_url.authority()
-                || origin.scheme_str() != cb_url.scheme_str()
+            if origin.scheme_str() != cb_url.scheme_str()
                 || origin.scheme().is_none()
                 || !same_domain
             {
