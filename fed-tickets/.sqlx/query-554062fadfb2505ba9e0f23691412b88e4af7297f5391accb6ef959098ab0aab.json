@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into groups (path, limit_membership_visibility, name, description, logo_id, deleted)\n             values ($1, false, $2, $3, $4, false)\n             on conflict (path) do update set name = excluded.name, description = excluded.description",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        {
+          "Custom": {
+            "name": "ltree",
+            "kind": "Simple"
+          }
+        },
+        "Jsonb",
+        "Jsonb",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "554062fadfb2505ba9e0f23691412b88e4af7297f5391accb6ef959098ab0aab"
+}
