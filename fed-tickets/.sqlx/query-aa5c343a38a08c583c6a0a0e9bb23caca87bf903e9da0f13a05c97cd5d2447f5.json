@@ -1,0 +1,111 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n                purchased_tickets.id as \"id\",\n                purchased_tickets.ticket_kind_id as \"ticket_kind_id\",\n                ticket_kinds.activity_id as \"activity_id\",\n                ticket_kinds.name as \"ticket_kind_name!: DIS\",\n                activities.title as \"activity_title!: DIS\",\n                creator.id as creator_id,\n                creator.path as creator_path,\n                creator.name as \"creator_name!: DIS\",\n                activities.location as \"location!: Location\",\n                activities.time_start as \"time_start\",\n                activities.time_end as \"time_end\"\n            from purchased_tickets\n            inner join ticket_kinds on ticket_kinds.id = purchased_tickets.ticket_kind_id\n            inner join activities on activities.id = ticket_kinds.activity_id\n            inner join groups creator on creator.id = activities.creator_id\n            where purchased_tickets.owner_id = $1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "ticket_kind_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "activity_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "ticket_kind_name!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "activity_title!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 5,
+        "name": "creator_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 6,
+        "name": "creator_path",
+        "type_info": {
+          "Custom": {
+            "name": "ltree",
+            "kind": "Simple"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "creator_name!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 8,
+        "name": "location!: Location",
+        "type_info": {
+          "Custom": {
+            "name": "location",
+            "kind": {
+              "Composite": [
+                [
+                  "name",
+                  "Jsonb"
+                ],
+                [
+                  "directions",
+                  "Jsonb"
+                ],
+                [
+                  "coordinate_wgs84",
+                  "Point"
+                ],
+                [
+                  "url",
+                  "Text"
+                ]
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "time_start",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 10,
+        "name": "time_end",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "aa5c343a38a08c583c6a0a0e9bb23caca87bf903e9da0f13a05c97cd5d2447f5"
+}
