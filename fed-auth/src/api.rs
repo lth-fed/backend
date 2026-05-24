@@ -301,9 +301,22 @@ impl MainRouter {
                         origin.as_str().ends_with(cb.as_str())
                             || cb.as_str().ends_with(origin.as_str())
                     });
+
+            // Dev-only escape hatch matching the spirit of `is_allowed_domain`'s
+            // localhost branch above: in debug builds, a `localhost` origin paired
+            // with a `localhost` callback passes regardless of port, so a frontend
+            // running on `:5173` can supply a callback to fed-tickets on `:8000`
+            // without a same-origin reverse proxy in vite. Strictly fenced behind
+            // `cfg(debug_assertions)` so it can't reach release builds.
+            #[cfg(debug_assertions)]
+            let dev_localhost_pair =
+                origin.host() == Some("localhost") && cb_url.host() == Some("localhost");
+            #[cfg(not(debug_assertions))]
+            let dev_localhost_pair = false;
+
             if origin.scheme_str() != cb_url.scheme_str()
                 || origin.scheme().is_none()
-                || !same_domain
+                || !(same_domain || dev_localhost_pair)
             {
                 return Err(StatusCode::BAD_REQUEST.into());
             }
