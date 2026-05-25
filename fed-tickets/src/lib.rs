@@ -100,7 +100,7 @@ pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl En
         env!("CARGO_PKG_VERSION"),
     )
     // this url is just for the Swagger UI
-    .server("http://localhost:8000/v0");
+    .server("http://localhost:8002/v0");
     let ui = api_service.swagger_ui();
     let spec = api_service.spec_endpoint();
 

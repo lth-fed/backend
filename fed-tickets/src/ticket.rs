@@ -59,6 +59,10 @@ struct Ticket {
     time_end: OffsetDateTime,
     addons: Vec<PurchasedAddon>,
 }
+#[derive(Object)]
+struct PurchasedTicket {
+    id: Uuid,
+}
 
 #[OpenApi(prefix_path = "/tickets")]
 impl Router {
@@ -152,31 +156,20 @@ impl Router {
         &self,
         user: User,
         req: Json<GetFreeTicketRequest>,
-    ) -> poem::Result<Json<Uuid>> {
+    ) -> poem::Result<Json<PurchasedTicket>> {
         let mut txn = self.db.begin().await.map_err(InternalServerError::db)?;
 
         validate_addons(&mut *txn, &req.addons, req.ticket_kind).await?;
         ensure_user_may_purchase_ticket(&mut *txn, &user, req.ticket_kind).await?;
 
         let ticket_id = sqlx::query_scalar!(
-            "insert into purchased_tickets (ticket_kind_id, owner_id) values ($1, $2) returning id",
+            "insert into purchased_tickets (ticket_kind_id, purchaser_id, owner_id) values ($1, $2, $2) returning id",
             req.ticket_kind,
             user.get_id(),
         )
         .fetch_one(&mut *txn)
         .await
-        .map_err(|err| match err {
-            sqlx::Error::Database(ref db_err) if let Some(constraint) = db_err.constraint() => {
-                match constraint {
-                    "max_one_ticket_per_person_per_activity" => Error::from_string(
-                        "Max one ticket per person per activity",
-                        StatusCode::CONFLICT,
-                    ),
-                    _unknown_constraint => InternalServerError::db(err).into(),
-                }
-            }
-            other_err => InternalServerError::db(other_err).into(),
-        })?;
+        .map_err(InternalServerError::db)?;
 
         for addon in &req.addons {
             sqlx::query!(
@@ -203,7 +196,7 @@ impl Router {
             .await
             .map_err(|err| InternalServerError::db(err))?;
 
-        Ok(Json(ticket_id))
+        Ok(Json(PurchasedTicket { id: ticket_id }))
     }
 }
 
@@ -265,19 +258,28 @@ async fn ensure_user_may_purchase_ticket(
 ) -> poem::Result<()> {
     let may_purchase = sqlx::query_scalar!(
         r#"select (
-            not exists (select 1 from ticket_kind_allowed_groups where ticket_kind_id = $1)
-            or
+            not exists (
+                select 1
+                from purchased_tickets
+                inner join ticket_kinds kind on kind.id = $1
+                inner join ticket_kinds kinds on kinds.activity_id = kind.activity_id
+                where
+                    purchased_tickets.owner_id = $2
+                    and ticket_kind_id = kinds.id
+            )
+            and
             exists (
                 select 1
-                from ticket_kind_allowed_groups tkag
-                join groups allowed on allowed.id = tkag.group_id
-                join group_memberships gm on gm.user_id = $2
-                join groups member_group on member_group.id = gm.group_id
-                where tkag.ticket_kind_id = $1
+                from group_memberships
+                inner join groups member_group on member_group.id = group_memberships.group_id
+                inner join ticket_kind_allowed_groups tk_ag on tk_ag.ticket_kind_id = $1
+                inner join groups allowed_group on allowed_group.id = tk_ag.group_id
+                    and allowed_group.path @> member_group.path
+
+                where group_memberships.user_id = $2
                 and (
-                    (gm.group_id = allowed.id)
-                    or
-                    (allowed.limit_membership_visibility = false and member_group.path @> allowed.path)
+                    member_group.limit_membership_visibility = false
+                    or tk_ag.group_id = group_memberships.group_id
                 )
             )
         ) as "may_purchase!""#,
@@ -290,7 +292,8 @@ async fn ensure_user_may_purchase_ticket(
 
     if !may_purchase {
         return Err(Error::from_string(
-            "not allowed to purchase this ticket kind",
+            "not allowed to purchase this ticket kind OR \
+            you have already purchased one ticket for this activity",
             StatusCode::FORBIDDEN,
         ));
     }

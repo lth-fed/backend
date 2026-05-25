@@ -3,6 +3,7 @@ use std::ops::Deref;
 use fed_auth_verifier::User;
 use lettre::AsyncTransport as _;
 use poem::http::StatusCode;
+use poem::http::uri::PathAndQuery;
 use poem::web::cookie::CookieJar;
 use poem_openapi::payload::{Binary, Json, PlainText, Response};
 use poem_openapi::{Object, OpenApi};
@@ -13,6 +14,7 @@ use crate::{Context, DOMAIN, context, cookie, jwt, random_id};
 
 const ALLOWED_DOMAINS: &[&str] = &[
     "https://teknologappen.se",
+    "https://api.teknologappen.se",
     "https://auth.esek.se",
     "https://fsektionen.se",
     "https://auth.dsek.se",
@@ -290,8 +292,6 @@ impl MainRouter {
                 .url()
                 .parse()
                 .map_err(|_| StatusCode::BAD_REQUEST)?;
-            let origin: poem::http::Uri =
-                origin_str.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
 
             // Dev-only escape hatch matching the spirit of `is_allowed_domain`'s
             // localhost branch above: in debug builds, a `localhost` origin paired
@@ -300,23 +300,22 @@ impl MainRouter {
             // without a same-origin reverse proxy in vite. Strictly fenced behind
             // `cfg(debug_assertions)` so it can't reach release builds.
             #[cfg(debug_assertions)]
-            let dev_localhost_pair =
-                origin.host() == Some("localhost") && cb_url.host() == Some("localhost");
-            #[cfg(not(debug_assertions))]
-            let dev_localhost_pair = false;
+            {
+                let origin: poem::http::Uri =
+                    origin_str.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
+                let dev_localhost_pair =
+                    origin.host() == Some("localhost") || cb_url.host() == Some("localhost");
 
-            if dev_localhost_pair {
-                return Ok(origin_str);
+                if dev_localhost_pair {
+                    return Ok(origin_str);
+                }
             }
+
             let mut parts = cb_url.into_parts();
-            parts.path_and_query = None;
+            parts.path_and_query = Some(PathAndQuery::from_static(""));
             let cb_url = poem::http::Uri::from_parts(parts).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-            if origin.scheme_str() != cb_url.scheme_str()
-                || origin.scheme().is_none()
-                || !is_allowed_domain(&origin_str)
-                || !is_allowed_domain(&cb_url)
-            {
+            if !is_allowed_domain(&origin_str) || !is_allowed_domain(&cb_url) {
                 return Err(StatusCode::BAD_REQUEST.into());
             }
         }

@@ -10,7 +10,7 @@ create type "public"."location" as (
 );
 
 create table "public"."activities" (
-    "id" uuid not null,
+    "id" uuid not null default uuidv4(),
     "responsible_id" text not null,
     "creator_id" uuid not null,
     "title" jsonb not null,
@@ -19,7 +19,7 @@ create table "public"."activities" (
     "time_start" timestamp with time zone not null,
     "time_end" timestamp with time zone not null,
     "image_id" uuid not null,
-    "is_hidden" boolean not null,
+    "is_hidden" boolean not null default true,
     "max_tickets" integer not null
 );
 
@@ -100,7 +100,7 @@ create table "public"."purchased_ticket_validations" (
 
 
 create table "public"."purchased_tickets" (
-    "id" uuid not null,
+    "id" uuid not null default uuidv4(),
     "ticket_kind_id" uuid not null,
     "purchaser_id" text not null,
     "owner_id" text not null
@@ -495,3 +495,5 @@ alter table "public"."user_group_settings" validate constraint "user_group_setti
 alter table "public"."user_group_settings" add constraint "user_group_settings_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") NOT VALID;
 
 alter table "public"."user_group_settings" validate constraint "user_group_settings_user_id_fkey";
+
+

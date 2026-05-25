@@ -115,13 +115,12 @@ create table ticket_reservations (
 -- ONE PERSON CAN ONLY OWN ONE TICKET KIND PER ACTIVITY
 -- the backend has to check this when both buying and transferring a ticket!
 create table purchased_tickets (
-    id uuid primary key,
+    id uuid primary key default uuidv4(),
     ticket_kind_id uuid not null references ticket_kinds(id),
     -- if these are not the same the ticket is clearly transferred
     purchaser_id text not null references users(id),
-    owner_id text not null references users(id),
+    owner_id text not null references users(id)
     -- could have price here, since it's not allowed to be changed once a ticket has been purchased, but it's just unnecessary because it's easy to calculate
-    constraint max_one_ticket_per_person_per_activity unique (ticket_kind_id, owner_id)
 );
 create table purchased_ticket_addons (
     addon_id uuid not null references ticket_addons(id),

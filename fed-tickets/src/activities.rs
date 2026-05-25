@@ -243,7 +243,7 @@ impl Router {
                 id: activity.responsible_id,
                 name: self
                     .decrypt_string(activity.responsible_name, &activity.responsible_nonce)
-                    .ok_or(InternalServerError::encryption("activity.responsible_name"))?,
+                    .ok_or_else(|| InternalServerError::encryption("activity.responsible_name"))?,
             },
             title: activity.title.0,
             description: activity.description.0,
