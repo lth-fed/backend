@@ -92,46 +92,13 @@ impl Router {
             id: user.id,
             name: self
                 .decrypt_string(user.name, &user.nonce)
-                .ok_or(InternalServerError::encryption("user.name"))?,
+                .ok_or_else(|| InternalServerError::encryption("user.name"))?,
             language: self
                 .decrypt_string(user.language, &user.nonce)
-                .ok_or(InternalServerError::encryption("user.language"))?,
+                .ok_or_else(|| InternalServerError::encryption("user.language"))?,
             creation: user.creation,
             groups,
         }))
-    }
-    async fn populate_tlth(&self) -> poem::Result<()> {
-        sqlx::query!(
-            "insert into images (id, size, url) values ('7c315a13-eff7-4268-89b9-5e072611ea21'::uuid, 0, 'https://icelk.dev/logo.png') on conflict do nothing",
-        )
-        .execute(&self.db)
-        .await
-        .map_err(InternalServerError::db)?;
-        let paths = [
-            ("tlth", "Teknologkåren"),
-            ("tlth.f", "F-sektionen"),
-            ("tlth.e", "E-sektionen"),
-            ("tlth.m", "Maskinsektionen"),
-            ("tlth.v", "V-sektionen"),
-            ("tlth.a", "A-sektionen"),
-            ("tlth.k", "K-sektionen"),
-            ("tlth.d", "D-sektionen"),
-            ("tlth.doct", "Doct-sektionen"),
-            ("tlth.ing", "Sektionen för högskoleingenjörsstudenter"),
-            ("tlth.w", "W-sektionen"),
-            ("tlth.i", "I-sektionen"),
-        ];
-        for (path, name) in paths {
-            sqlx::query!(
-            r#"insert into groups (path, limit_membership_visibility, name, description, logo_id, deleted) values ($1, false, format('{"sv": "%s"}', $2::text)::jsonb, '{}'::jsonb, '7c315a13-eff7-4268-89b9-5e072611ea21'::uuid, false) on conflict do nothing"#,
-            path.parse::<PgLTree>().map_err(InternalServerError::db)?,
-            name
-        )
-        .execute(&self.db)
-        .await
-        .map_err(InternalServerError::db)?;
-        }
-        Ok(())
     }
     #[oai(path = "/auth-callback/v1", method = "post")]
     async fn auth_callback_v1(&self, cb_data: CallbackDataV1) -> poem::Result<()> {
@@ -153,7 +120,6 @@ impl Router {
         .map_err(InternalServerError::db)?;
 
         if let Some(guild) = get_guild(cb_data.sub.strip_prefix("test:").unwrap_or(&cb_data.sub)) {
-            self.populate_tlth().await?;
             let id = sqlx::query!(
                 "select id from groups where groups.path = $1",
                 format!("tlth.{guild}")
