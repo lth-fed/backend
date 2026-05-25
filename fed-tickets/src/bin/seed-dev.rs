@@ -1,8 +1,8 @@
 //! Seed the dev database with the same activities, groups, and ticket
-//! kinds the frontend's `lib/api/*.ts` mock data uses, so a freshly
+//! kinds the frontend's `lib/api/*.ts` mock data uses (as of 2026-05-25), so a freshly
 //! migrated DB renders the demo screens against real backend data.
 //!
-//! Idempotent: every insert is `on conflict do nothing` so re-running
+//! Idempotent: every insert is `on conflict do nothing` or `on conflict do update` so re-running
 //! is safe. Run with `cargo run --bin seed-dev` (from `fed-tickets/`).
 //!
 //! Adding new fixtures: extend the data tables at the top of `seed()`
@@ -14,6 +14,8 @@
     clippy::min_ident_chars,
     clippy::too_many_lines,
     clippy::doc_markdown,
+    // öre
+    clippy::inconsistent_digit_grouping,
     reason = "fixture script: panicking on bad static input is fine, the data tables are intentionally large, and short loop bindings (`a`, `k`) read more cleanly than full words in tight scopes."
 )]
 
@@ -34,7 +36,7 @@ const LOGO_IMG: Uuid = Uuid::from_u128(0x7c315a13_eff7_4268_89b9_5e072611ea21);
 /// `populate_tlth` in `user.rs` already inserts.
 async fn seed_image(ctx: &Context) -> color_eyre::Result<()> {
     sqlx::query!(
-        "insert into images (id, size, url) values ($1, 0, 'https://icelk.dev/logo.png') on conflict do nothing",
+        "insert into images (id, size, url) values ($1, 0, 'https://icelk.dev/tappen-icon.png') on conflict do nothing",
         LOGO_IMG
     )
     .execute(&ctx.db)
@@ -43,32 +45,99 @@ async fn seed_image(ctx: &Context) -> color_eyre::Result<()> {
     Ok(())
 }
 
+/// Can be used in production!
+///
 /// `tlth` and one node per known guild code. Names are filled with both
 /// English and Swedish strings so `pickI18n` on the frontend renders
 /// real labels (the empty `'{}'::jsonb` seed the auth flow leaves behind
 /// otherwise produces blank rows).
-async fn seed_groups(ctx: &Context) -> color_eyre::Result<()> {
-    let groups: &[(&str, &str, &str)] = &[
-        ("tlth", "TLTH", "Teknologkåren vid Lunds Tekniska Högskola"),
-        ("tlth.f", "F-sektionen", "Fysiksektionen"),
-        ("tlth.e", "E-sektionen", "E-sektionen vid LTH"),
-        ("tlth.m", "M-sektionen", "Maskinteknik"),
-        ("tlth.v", "V-sektionen", "Väg- och vattenbyggnad"),
-        ("tlth.a", "A-sektionen", "Arkitektur"),
-        ("tlth.k", "K-sektionen", "Kemi"),
-        ("tlth.d", "D-sektionen", "Datateknik"),
-        ("tlth.ing", "Ingenjörssektionen", "Ingenjörshögskolan"),
-        ("tlth.w", "W-sektionen", "Ekosystemteknik"),
-        ("tlth.i", "I-sektionen", "Industriell ekonomi"),
+///
+/// # Errors
+///
+/// Return an error if the DB connection fails.
+pub async fn seed_groups(ctx: &Context) -> color_eyre::Result<()> {
+    let groups: &[(&str, &str, &str, &str)] = &[
+        (
+            "tlth",
+            "TLTH",
+            "Teknologkåren vid Lunds Tekniska Högskola",
+            "Teknologkåren at LTH",
+        ),
+        (
+            "tlth.f",
+            "F-sektionen",
+            "Sektionen för Teknisk Fysik, Teknisk Matematik, Teknisk Nanovetenskap samt masterprogrammen Photonics, Nanoscience, Machine Learning Systems och Control and Large Scale Accelerators and Lasers.",
+            "Section of Engineering Physics, Engineering Mathematics, Engineering Nanoscience and the master programs Photonics, Nanoscience, Machine Learning Systems and Control and Large Scale Accelerators and Lasers.",
+        ),
+        (
+            "tlth.e",
+            "E-sektionen",
+            "Sektionen för Elektroteknik, Medicin och Teknik samt mastersprogrammen Embedded Electronics Engineering och Wireless Communication.",
+            "Section for Electrical Engineering, Medicine and Technology and the master's programs Embedded Electronics Engineering and Wireless Communication.",
+        ),
+        (
+            "tlth.m",
+            "Maskinsektionen",
+            "Sektionen för Maskinteknik, Maskinteknik med teknisk design samt masterprogrammen Production and Material Engineering och Sustainable Energy Engineering.",
+            "Section of Mechanical Engineering, Mechanical Engineering with Technical Design and the master programs Production and Material Engineering and Sustainable Energy Engineering.",
+        ),
+        (
+            "tlth.v",
+            "V-sektionen",
+            "Sektionen för Väg- och Vattenbyggnad, Lantmäteri, Brandingenjör, Riskhantering samt masterprogrammen Fire Safety Engineering, Disaster Risk Management, Climate Change Adaption och Energy-efficient and Environmental Building Design.",
+            "The Department of Civil Engineering, Surveying, Fire Engineering, Risk Management, and the master's programs in Fire Safety Engineering, Disaster Risk Management, Climate Change Adaptation, and Energy-efficient and Environmental Building Design.",
+        ),
+        (
+            "tlth.a",
+            "A-sektionen",
+            "Sektionen för Arkitektur och Industridesign samt masterprogrammen Sustainable Urban Design, Industrial Design, Architecture och Digital Architecture and Emergent Futures.",
+            "The Section for Architecture and Industrial Design and the Master's programs Sustainable Urban Design, Industrial Design, Architecture and Digital Architecture and Emergent Futures.",
+        ),
+        (
+            "tlth.k",
+            "K-sektionen",
+            "Sektionen för Kemiteknik, Bioteknik och kandidatprogrammet i livsmedelsteknik samt masterprogrammen Biotechnology, Food Technology and Nutrition, Food Innovation and Product design, Pharmaceutical Technology: Discovery, Development and Production och Food Systems.",
+            "Section for Chemical Engineering, Biotechnology and the Bachelor's program in Food Technology and the Master's programs Biotechnology, Food Technology and Nutrition, Food Innovation and Product design, Pharmaceutical Technology: Discovery, Development and Production and Food Systems.",
+        ),
+        (
+            "tlth.d",
+            "D-sektionen",
+            "Sektionen för Datateknik och Informations- och kommunikationsteknik samt masterprogrammet Virtual Reality and Augmented Reality.",
+            "Section for Computer Science and Information and Communication Technology and the Master program Virtual Reality and Augmented Reality.",
+        ),
+        (
+            "tlth.doct",
+            "Doct-sektionen",
+            "Sektionen för alla doktorander vid LTH.",
+            "The section for all PhD students at LTH.",
+        ),
+        (
+            "tlth.ing",
+            "Sektionen för högskoleingenjörsstudenter",
+            "Sektionen för högskoleingenjörsstudenter, Tekniskt och Naturvetenskapligt basår och masterprogrammet Mastersprogrammet Energy-Efficient and Environmental Building Design.",
+            "Section for Bachelor of Science in Engineering, Bachelor of Science in Technology and Master of Science in Energy-Efficient and Environmental Building Design.",
+        ),
+        (
+            "tlth.w",
+            "W-sektionen",
+            "Sektionen för Ekosystemteknik, Risk säkerhet och krishantering samt masterprogrammen Water Resources, Environmental Sciences, Policy and Management, Environmental Management and Policy och Membrane Engineering for Sustainable Development.",
+            "Section of Ecosystem Engineering, Risk Security and Crisis Management and the Master programs Water Resources, Environmental Sciences, Policy and Management, Environmental Management and Policy and Membrane Engineering for Sustainable Development.",
+        ),
+        (
+            "tlth.i",
+            "I-sektionen",
+            "Sektionen för Industriell ekonomi och masterprogrammet Logistics and Supply Chain Management.",
+            "Section for Industrial Economics and the Master's program Logistics and Supply Chain Management.",
+        ),
     ];
-    for (path, sv, sv_desc) in groups {
-        let name = serde_json::json!({ "en": sv, "sv": sv });
-        let description = serde_json::json!({ "en": sv_desc, "sv": sv_desc });
+    for (path, name, sv_desc, en_desc) in groups {
+        let name = serde_json::json!({ "en": name, "sv": name });
+        let description = serde_json::json!({ "en": sv_desc, "sv": en_desc });
         let path = path.parse::<PgLTree>().wrap_err("parse path")?;
         sqlx::query!(
             "insert into groups (path, limit_membership_visibility, name, description, logo_id, deleted)
              values ($1, false, $2, $3, $4, false)
-             on conflict (path) do update set name = excluded.name, description = excluded.description",
+             on conflict do nothing",
             path,
             name,
             description,
@@ -175,12 +244,12 @@ async fn seed_activities(ctx: &Context) -> color_eyre::Result<()> {
         ActivitySeed {
             id: Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_000a),
             creator_path: "tlth.a",
-            host_paths: &["tlth.a", "tlth.f"],
+            host_paths: &["tlth.f"],
             responsible_id: "test:si1234mc-s",
             title_en: "Other sitting kinda",
             title_sv: "Annan sittning typ",
-            description_en: "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.",
-            description_sv: "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.",
+            description_en: "english: Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.",
+            description_sv: "svenska:Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.",
             location_en: "Gasque Hall",
             location_sv: "Gasque-salen",
             time_start: dt("2026-06-15T17:00:00Z"),
@@ -192,7 +261,7 @@ async fn seed_activities(ctx: &Context) -> color_eyre::Result<()> {
                     id: Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_a000_0001),
                     name_en: "Standard",
                     name_sv: "Standard",
-                    price_ore: 12_000,
+                    price_ore: 120_00,
                     purchasing_start: dt("2026-05-20T00:00:00Z"),
                     purchasing_stop: dt("2026-06-15T12:00:00Z"),
                     max_tickets: 150,
@@ -201,7 +270,7 @@ async fn seed_activities(ctx: &Context) -> color_eyre::Result<()> {
                     id: Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_a000_0002),
                     name_en: "VIP",
                     name_sv: "VIP",
-                    price_ore: 22_000,
+                    price_ore: 220_00,
                     purchasing_start: dt("2026-05-20T00:00:00Z"),
                     purchasing_stop: dt("2026-06-15T12:00:00Z"),
                     max_tickets: 5,
@@ -220,12 +289,12 @@ async fn seed_activities(ctx: &Context) -> color_eyre::Result<()> {
         ActivitySeed {
             id: Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_000b),
             creator_path: "tlth.d",
-            host_paths: &["tlth.d"],
+            host_paths: &[],
             responsible_id: "test:si1234mc-s",
             title_en: "Spring fest",
             title_sv: "Vårfest",
-            description_en: "Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.",
-            description_sv: "Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.",
+            description_en: "english: Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.",
+            description_sv: "svenska: Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.",
             location_en: "Kårhuset",
             location_sv: "Kårhuset",
             time_start: dt("2026-06-22T21:00:00Z"),
@@ -237,7 +306,7 @@ async fn seed_activities(ctx: &Context) -> color_eyre::Result<()> {
                     id: Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_b000_0001),
                     name_en: "Early bird",
                     name_sv: "Early bird",
-                    price_ore: 8_000,
+                    price_ore: 80_00,
                     purchasing_start: dt("2026-05-20T00:00:00Z"),
                     purchasing_stop: dt("2026-06-01T00:00:00Z"),
                     max_tickets: 100,
@@ -246,7 +315,7 @@ async fn seed_activities(ctx: &Context) -> color_eyre::Result<()> {
                     id: Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_b000_0002),
                     name_en: "Standard",
                     name_sv: "Standard",
-                    price_ore: 11_000,
+                    price_ore: 110_00,
                     purchasing_start: dt("2026-06-01T00:00:00Z"),
                     purchasing_stop: dt("2026-06-22T12:00:00Z"),
                     max_tickets: 250,
@@ -254,8 +323,8 @@ async fn seed_activities(ctx: &Context) -> color_eyre::Result<()> {
                 TicketKindSeed {
                     id: Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_b000_0003),
                     name_en: "After party",
-                    name_sv: "After party",
-                    price_ore: 5_000,
+                    name_sv: "Eftersläpp",
+                    price_ore: 50_00,
                     purchasing_start: dt("2026-06-15T00:00:00Z"),
                     purchasing_stop: dt("2026-06-23T01:00:00Z"),
                     max_tickets: 50,
@@ -265,7 +334,7 @@ async fn seed_activities(ctx: &Context) -> color_eyre::Result<()> {
         ActivitySeed {
             id: Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_000c),
             creator_path: "tlth.i",
-            host_paths: &["tlth.i"],
+            host_paths: &[],
             responsible_id: "test:si1234mc-s",
             title_en: "Tuesday pub",
             title_sv: "Tisdagspub",
@@ -281,8 +350,8 @@ async fn seed_activities(ctx: &Context) -> color_eyre::Result<()> {
                 TicketKindSeed {
                     id: Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_c000_0001),
                     name_en: "Entry",
-                    name_sv: "Entré",
-                    price_ore: 4_000,
+                    name_sv: "Tillträde",
+                    price_ore: 40_00,
                     purchasing_start: dt("2026-06-15T00:00:00Z"),
                     purchasing_stop: dt("2026-06-29T17:00:00Z"),
                     max_tickets: 80,
