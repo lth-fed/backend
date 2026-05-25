@@ -21,15 +21,13 @@ const ALLOWED_DOMAINS: &[&str] = &[
     // android app
     "https://localhost",
 ];
-fn is_allowed_domain(domain: &str) -> bool {
+fn is_allowed_domain<'a>(domain: &impl PartialEq<&'a str>) -> bool {
     #[cfg(debug_assertions)]
-    if matches!(
-        domain,
-        "http://localhost:5173" | "http://localhost:8000" | DOMAIN
-    ) {
+    if *domain == "http://localhost:5173" || *domain == "http://localhost:8000" || *domain == DOMAIN
+    {
         return true;
     }
-    ALLOWED_DOMAINS.contains(&domain)
+    ALLOWED_DOMAINS.iter().any(|allowed| *domain == *allowed)
 }
 
 #[derive(Object)]
@@ -201,7 +199,7 @@ impl MainRouter {
             );
             return Err(StatusCode::BAD_REQUEST.into());
         };
-        if !is_allowed_domain(data.origin.as_str()) {
+        if !is_allowed_domain(&data.origin.as_str()) {
             warn!(
                 "Someone tried to log in from a disallowed domain ({})!",
                 data.origin
@@ -282,7 +280,7 @@ impl MainRouter {
         headers: &'a poem::http::HeaderMap,
         body: &Json<ProviderRequest>,
     ) -> poem::Result<&'a str> {
-        let origin = headers
+        let origin_str = headers
             .get("origin")
             .and_then(|header| header.to_str().ok())
             .ok_or(StatusCode::BAD_REQUEST)?;
@@ -292,15 +290,8 @@ impl MainRouter {
                 .url()
                 .parse()
                 .map_err(|_| StatusCode::BAD_REQUEST)?;
-            let origin: poem::http::Uri = origin.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
-            let same_domain =
-                origin
-                    .authority()
-                    .zip(cb_url.authority())
-                    .is_some_and(|(origin, cb)| {
-                        origin.as_str().ends_with(cb.as_str())
-                            || cb.as_str().ends_with(origin.as_str())
-                    });
+            let origin: poem::http::Uri =
+                origin_str.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
 
             // Dev-only escape hatch matching the spirit of `is_allowed_domain`'s
             // localhost branch above: in debug builds, a `localhost` origin paired
@@ -314,14 +305,22 @@ impl MainRouter {
             #[cfg(not(debug_assertions))]
             let dev_localhost_pair = false;
 
+            if dev_localhost_pair {
+                return Ok(origin_str);
+            }
+            let mut parts = cb_url.into_parts();
+            parts.path_and_query = None;
+            let cb_url = poem::http::Uri::from_parts(parts).map_err(|_| StatusCode::BAD_REQUEST)?;
+
             if origin.scheme_str() != cb_url.scheme_str()
                 || origin.scheme().is_none()
-                || !(same_domain || dev_localhost_pair)
+                || !is_allowed_domain(&origin_str)
+                || !is_allowed_domain(&cb_url)
             {
                 return Err(StatusCode::BAD_REQUEST.into());
             }
         }
-        Ok(origin)
+        Ok(origin_str)
     }
     fn redirect_provider(
         &self,
