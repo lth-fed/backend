@@ -232,7 +232,7 @@ impl Deref for SamlRouter {
 impl SamlRouter {
     /// Returns the SAML2 metadata.
     ///
-    /// The body actually is `application/xml` but since [`poem-openapi`] is cringe I can't just
+    /// The body actually is `application/xml` but since [`poem_openapi`] is cringe I can't just
     /// add a string as an XML response.
     #[oai(path = "/metadata", method = "get")]
     async fn metadata(&self) -> poem::Result<Response<Binary<Vec<u8>>>> {

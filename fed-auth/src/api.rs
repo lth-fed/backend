@@ -6,7 +6,7 @@ use poem::http::StatusCode;
 use poem::http::uri::PathAndQuery;
 use poem::web::cookie::CookieJar;
 use poem_openapi::payload::{Binary, Json, PlainText, Response};
-use poem_openapi::{Object, OpenApi};
+use poem_openapi::{ApiResponse, Enum, Object, OpenApi, Tags, Union};
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
@@ -77,6 +77,18 @@ impl Deref for MainRouter {
         &self.context
     }
 }
+// #[derive(Union)]
+// pub enum DaBigBossServerError {
+//     DbError(String),
+//     Other(String),
+// }
+// #[derive(ApiResponse)]
+// pub enum DaBigBossError<T> {
+//     // #[oai(status = 400)]
+//     // Error(T),
+//     #[oai(status = 500)]
+//     InternalServerError(DaBigBossServerError),
+// }
 #[OpenApi]
 impl MainRouter {
     /// Returns the public key as it's raw bytes (32 bytes).

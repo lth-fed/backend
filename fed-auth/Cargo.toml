@@ -17,6 +17,7 @@ color-eyre.workspace = true
 dotenvy.workspace = true
 ed25519-dalek = "2.2.0"
 fed-auth-verifier.path = "../fed-auth-verifier"
+gamlastan = "0.4.1"
 jsonwebtoken.workspace = true
 lettre.workspace = true
 mini-moka = "0.10.3"
@@ -33,6 +34,7 @@ sqlx.workspace = true
 tokio = { workspace = true, features = ["fs", "rt-multi-thread", "macros", "sync"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
+uppsala = "0.4.0"
 uuid.workspace = true
 # we need an xml library where we can change the structure and add stuff, while preserving all the data.
 # this seemed to be the only one to preserve e.g. prefixes (the `md` in `<md:Extensions>`).
