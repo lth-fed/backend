@@ -1,4 +1,4 @@
-use fed_tickets::get_endpoint;
+use minilith::get_endpoint;
 use poem::{Server, listener::TcpListener};
 
 #[tokio::main]

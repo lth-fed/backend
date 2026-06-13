@@ -296,7 +296,7 @@ impl MainRouter {
             // Dev-only escape hatch matching the spirit of `is_allowed_domain`'s
             // localhost branch above: in debug builds, a `localhost` origin paired
             // with a `localhost` callback passes regardless of port, so a frontend
-            // running on `:5173` can supply a callback to fed-tickets on `:8000`
+            // running on `:5173` can supply a callback to minilith on `:8000`
             // without a same-origin reverse proxy in vite. Strictly fenced behind
             // `cfg(debug_assertions)` so it can't reach release builds.
             #[cfg(debug_assertions)]

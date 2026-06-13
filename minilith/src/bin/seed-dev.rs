@@ -3,7 +3,7 @@
 //! migrated DB renders the demo screens against real backend data.
 //!
 //! Idempotent: every insert is `on conflict do nothing` or `on conflict do update` so re-running
-//! is safe. Run with `cargo run --bin seed-dev` (from `fed-tickets/`).
+//! is safe. Run with `cargo run --bin seed-dev` (from `minilith/`).
 //!
 //! Adding new fixtures: extend the data tables at the top of `seed()`
 //! and re-run. The activities reference user/group/image rows by id, so
@@ -22,7 +22,7 @@
 use std::collections::HashMap;
 
 use color_eyre::eyre::WrapErr as _;
-use fed_tickets::Context;
+use minilith::Context;
 use sqlx::postgres::types::{PgLTree, PgMoney};
 use sqlx::types::Json;
 use sqlx::types::time::OffsetDateTime;

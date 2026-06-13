@@ -81,7 +81,7 @@ impl Context {
     /// # Example
     ///
     /// ```rust
-    /// # use fed_tickets::Context;
+    /// # use minilith::Context;
     /// # async {
     /// # let context = Context::new(None).await.unwrap();
     /// let nonce: [u8; 12] = rand::random();
@@ -104,7 +104,7 @@ impl Context {
     /// # Example
     ///
     /// ```rust
-    /// # use fed_tickets::Context;
+    /// # use minilith::Context;
     /// # async {
     /// # let context = Context::new(None).await.unwrap();
     /// let nonce: [u8; 12] = rand::random();
@@ -127,7 +127,7 @@ impl Context {
     /// # Example
     ///
     /// ```rust
-    /// # use fed_tickets::Context;
+    /// # use minilith::Context;
     /// # async {
     /// # let context = Context::new(None).await.unwrap();
     /// let nonce: [u8; 12] = rand::random();
@@ -151,7 +151,7 @@ impl Context {
     /// # Example
     ///
     /// ```rust
-    /// # use fed_tickets::Context;
+    /// # use minilith::Context;
     /// # async {
     /// # let context = Context::new(None).await.unwrap();
     /// let nonce: [u8; 12] = rand::random();
