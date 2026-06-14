@@ -1,7 +1,6 @@
 use std::ops::Deref;
 
 use fed_auth_verifier::User;
-use poem::http::StatusCode;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use poem_openapi::{Object, OpenApi};
@@ -10,7 +9,10 @@ use sqlx::types::Uuid;
 use sqlx::types::time::OffsetDateTime;
 
 use crate::context::Context;
-use crate::{DbInternationalizedString as DIS, InternalServerError, InternationalizedString};
+use crate::{
+    DbInternationalizedString as DIS, InternationalizedString, MinilithErrorOptionExt as _,
+    MinilithErrorResultExt as _, MinilithResult,
+};
 
 #[derive(sqlx::Type, Debug)]
 #[sqlx(type_name = "location")]
@@ -117,7 +119,7 @@ impl Deref for Router {
 #[OpenApi(prefix_path = "/activities")]
 impl Router {
     #[oai(path = "/", method = "get")]
-    async fn list(&self, user: User) -> poem::Result<Json<Vec<BriefActivity>>> {
+    async fn list(&self, user: User) -> MinilithResult<Json<Vec<BriefActivity>>> {
         let mut activities = sqlx::query_file!("src/activity-list.sql", user.get_id())
             .map(|activity| BriefActivity {
                 id: activity.id,
@@ -132,7 +134,7 @@ impl Router {
             })
             .fetch_all(&self.context.db)
             .await
-            .map_err(InternalServerError::db)?;
+            .wrap_err_db("ACT_USER_LIST")?;
 
         // can't sort in query because postgres doesn't allow separate columns for distinct on &
         // order by
@@ -140,7 +142,7 @@ impl Router {
         activities.sort_by_key(|act| act.time_start);
         Ok(Json(activities))
     }
-    async fn test_activity_access(&self, user: &str, id: &Uuid) -> poem::Result<()> {
+    async fn test_activity_access(&self, user: &str, id: &Uuid) -> MinilithResult<()> {
         // this clusterfuck is the same logic as above, which checks if this activity should be
         // visible
         sqlx::query!(
@@ -164,11 +166,11 @@ impl Router {
         )
         .fetch_one(&self.context.db)
         .await
-        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+        .wrap_err_unauthorized("ACT_USER_ACCESS")?;
         Ok(())
     }
     #[oai(path = "/:id", method = "get")]
-    async fn details(&self, user: User, id: Path<Uuid>) -> poem::Result<Json<Activity>> {
+    async fn details(&self, user: User, id: Path<Uuid>) -> MinilithResult<Json<Activity>> {
         self.test_activity_access(user.get_id(), &id.0).await?;
         let activity = sqlx::query!(
             r#"select activities.id,
@@ -195,7 +197,7 @@ impl Router {
         )
         .fetch_one(&self.context.db)
         .await
-        .map_err(|_| StatusCode::NOT_FOUND)?;
+        .wrap_err_not_found()?;
         let other_hosts = sqlx::query!(
             r#"select hosts.id, path, name as "name!: DIS", url
             from activity_hosts
@@ -207,7 +209,7 @@ impl Router {
         )
         .fetch_all(&self.context.db)
         .await
-        .map_err(InternalServerError::db)?;
+        .wrap_err_db("ACT_USER_DETAILS")?;
         let tickets_available = sqlx::query!(
             r#"select exists (
                 select 1
@@ -220,7 +222,7 @@ impl Router {
         )
         .fetch_one(&self.context.db)
         .await
-        .map_err(InternalServerError::db)?;
+        .wrap_err_db("ACT_USER_DETAILS2")?;
 
         let hosts = std::iter::once(Host {
             name: activity.creator_name.0,
@@ -243,7 +245,7 @@ impl Router {
                 id: activity.responsible_id,
                 name: self
                     .decrypt_string(activity.responsible_name, &activity.responsible_nonce)
-                    .ok_or_else(|| InternalServerError::encryption("activity.responsible_name"))?,
+                    .wrap_err_encryption("ACT_USER_DETAILS_RESPONSIBLE_NAME")?,
             },
             title: activity.title.0,
             description: activity.description.0,
@@ -258,7 +260,7 @@ impl Router {
         Ok(Json(activity))
     }
     #[oai(path = "/:id/ticket-kinds", method = "get")]
-    async fn kinds(&self, user: User, id: Path<Uuid>) -> poem::Result<Json<Vec<TicketKind>>> {
+    async fn kinds(&self, user: User, id: Path<Uuid>) -> MinilithResult<Json<Vec<TicketKind>>> {
         self.test_activity_access(user.get_id(), &id.0).await?;
         let kinds = sqlx::query!(
             r#"
@@ -305,7 +307,7 @@ impl Router {
         })
         .fetch_all(&self.db)
         .await
-        .map_err(InternalServerError::db)?;
+        .wrap_err_db("TK_KINDS")?;
         Ok(Json(kinds))
     }
 }
