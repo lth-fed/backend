@@ -88,10 +88,7 @@ mod tests {
     }
 
     fn sorted_paths(groups: Vec<Group>) -> Vec<String> {
-        let mut paths: Vec<String> = groups
-            .into_iter()
-            .map(|group| group.path.to_string())
-            .collect();
+        let mut paths: Vec<String> = groups.into_iter().map(|g| g.path.to_string()).collect();
         paths.sort();
         paths
     }

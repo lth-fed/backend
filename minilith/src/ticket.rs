@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Deref;
 
 use fed_auth_verifier::User;
+use poem::{Error, http::StatusCode};
 use poem_openapi::{Object, OpenApi, payload::Json};
 use sqlx::PgExecutor;
 use sqlx::types::time::OffsetDateTime;
@@ -9,8 +10,7 @@ use uuid::Uuid;
 
 use crate::activities::{Location, PoemLocation};
 use crate::{
-    Context, DbInternationalizedString as DIS, InternationalizedString as IS,
-    MinilithEndpointError, MinilithErrorResultExt as _, MinilithResult,
+    Context, DbInternationalizedString as DIS, InternalServerError, InternationalizedString as IS,
 };
 
 #[derive(Debug, Clone)]
@@ -67,7 +67,7 @@ struct PurchasedTicket {
 #[OpenApi(prefix_path = "/tickets")]
 impl Router {
     #[oai(path = "/", method = "get")]
-    async fn my_tickets(&self, user: User) -> MinilithResult<Json<Vec<Ticket>>> {
+    async fn my_tickets(&self, user: User) -> poem::Result<Json<Vec<Ticket>>> {
         let id = user.get_id();
 
         let mut addons: HashMap<Uuid, Vec<PurchasedAddon>> = sqlx::query!(
@@ -102,7 +102,7 @@ impl Router {
         })
         .fetch_all(&self.context.db)
         .await
-        .wrap_err_db("TKS_ME1")?
+        .map_err(InternalServerError::db)?
         .into_iter()
         .fold(HashMap::new(), |mut map, (ticket_id, addon)| {
             map.entry(ticket_id).or_default().push(addon);
@@ -146,7 +146,7 @@ impl Router {
         })
         .fetch_all(&self.context.db)
         .await
-        .wrap_err_db("TKS_ME2")?;
+        .map_err(InternalServerError::db)?;
 
         Ok(Json(tickets))
     }
@@ -156,8 +156,8 @@ impl Router {
         &self,
         user: User,
         req: Json<GetFreeTicketRequest>,
-    ) -> MinilithResult<Json<PurchasedTicket>> {
-        let mut txn = self.db.begin().await.wrap_err_db("TKS_BUY_FREE0")?;
+    ) -> poem::Result<Json<PurchasedTicket>> {
+        let mut txn = self.db.begin().await.map_err(InternalServerError::db)?;
 
         validate_addons(&mut *txn, &req.addons, req.ticket_kind).await?;
         ensure_user_may_purchase_ticket(&mut *txn, &user, req.ticket_kind).await?;
@@ -169,7 +169,7 @@ impl Router {
         )
         .fetch_one(&mut *txn)
         .await
-        .wrap_err_db("TKS_BUY_FREE1")?;
+        .map_err(InternalServerError::db)?;
 
         for addon in &req.addons {
             sqlx::query!(
@@ -179,7 +179,7 @@ impl Router {
             )
             .execute(&mut *txn)
             .await
-            .wrap_err_db("TKS_BUY_FREE2")?;
+            .map_err(|err| InternalServerError::db(err))?;
         }
 
         // increment ticket_kinds.reserved_or_purchased_tickets and set
@@ -190,9 +190,11 @@ impl Router {
         )
         .execute(&mut *txn)
         .await
-            .wrap_err_db("TKS_BUY_FREE3")?;
+        .map_err(|err| InternalServerError::db(err))?;
 
-        txn.commit().await.wrap_err_db("TKS_BUY_FREE_CMT")?;
+        txn.commit()
+            .await
+            .map_err(|err| InternalServerError::db(err))?;
 
         Ok(Json(PurchasedTicket { id: ticket_id }))
     }
@@ -204,13 +206,13 @@ async fn validate_addons(
     db: impl PgExecutor<'_>,
     addons: &[Uuid],
     ticket_kind: Uuid,
-) -> MinilithResult<()> {
+) -> poem::Result<()> {
     let mut seen = HashSet::new();
     for &addon in addons {
         if !seen.insert(addon) {
-            return Err(MinilithEndpointError::bad_frontend_code(
-                "TKS_VALD_ADDON_DUPLIC",
-                format!("addon {addon} is duplicated"),
+            return Err(Error::from_string(
+                format!("Addon {addon} is duplicated"),
+                StatusCode::BAD_REQUEST,
             ));
         }
     }
@@ -222,16 +224,16 @@ async fn validate_addons(
     )
     .fetch_one(db)
     .await
-    .wrap_err_db("TKS_VALD_ADDON1")?;
+    .map_err(InternalServerError::db)?;
 
     #[allow(
         clippy::cast_possible_wrap,
         reason = "addons.len() will never exceed i64::MAX"
     )]
     if count != Some(addons.len() as i64) {
-        return Err(MinilithEndpointError::bad_frontend_code(
-            "TKS_VALD_ADDON_NR",
-            "number of addons doens't match number of available ones",
+        return Err(Error::from_string(
+            "Invalid addons",
+            StatusCode::BAD_REQUEST,
         ));
     }
 
@@ -253,7 +255,7 @@ async fn ensure_user_may_purchase_ticket(
     db: impl PgExecutor<'_>,
     user: &User,
     ticket_kind: Uuid,
-) -> MinilithResult<()> {
+) -> poem::Result<()> {
     let may_purchase = sqlx::query_scalar!(
         r#"select (
             not exists (
@@ -286,14 +288,13 @@ async fn ensure_user_may_purchase_ticket(
     )
     .fetch_one(db)
     .await
-    .wrap_err_db("TKS_VALD_PURCH")?;
+    .map_err(InternalServerError::db)?;
 
     if !may_purchase {
-        return Err(MinilithEndpointError::bad_user_input(
-            "TKS_VALD_PURCH",
+        return Err(Error::from_string(
             "not allowed to purchase this ticket kind OR \
             you have already purchased one ticket for this activity",
-            "ticket_kind",
+            StatusCode::FORBIDDEN,
         ));
     }
 

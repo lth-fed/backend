@@ -8,7 +8,7 @@ use sqlx::types::time::OffsetDateTime;
 
 use crate::context::Context;
 use crate::group::Path;
-use crate::{DbInternationalizedString as DIS, InternationalizedString, MinilithErrorOptionExt as _, MinilithErrorResultExt as _, MinilithResult};
+use crate::{DbInternationalizedString as DIS, InternalServerError, InternationalizedString};
 
 #[derive(Clone, Debug)]
 pub struct Router {
@@ -66,7 +66,7 @@ struct Me {
 #[OpenApi(prefix_path = "/user")]
 impl Router {
     #[oai(path = "/", method = "get")]
-    async fn me(&self, user: User) -> MinilithResult<Json<Me>> {
+    async fn me(&self, user: User) -> poem::Result<Json<Me>> {
         let groups = sqlx::query!(
             r#"select groups.id, path as "path!: Path", name as "name!: DIS", description as "description!: DIS", url as logo_url from group_memberships 
             inner join groups on groups.id = group_memberships.group_id 
@@ -81,27 +81,27 @@ impl Router {
                     logo_url: group.logo_url,
                 }
             })
-            .fetch_all(&self.db).await.wrap_err_db("USER_ME1")?;
+            .fetch_all(&self.db).await.map_err(InternalServerError::db)?;
 
         let user = sqlx::query!("select * from users where id = ($1)", user.get_id())
             .fetch_one(&self.db)
             .await
-            .wrap_err_db("USER_ME2")?;
+            .map_err(InternalServerError::db)?;
 
         Ok(Json(Me {
             id: user.id,
             name: self
                 .decrypt_string(user.name, &user.nonce)
-                .wrap_err_encryption("USER_ME_NAME")?,
+                .ok_or_else(|| InternalServerError::encryption("user.name"))?,
             language: self
                 .decrypt_string(user.language, &user.nonce)
-                .wrap_err_encryption("USER_ME_LANG")?,
+                .ok_or_else(|| InternalServerError::encryption("user.language"))?,
             creation: user.creation,
             groups,
         }))
     }
     #[oai(path = "/auth-callback/v1", method = "post")]
-    async fn auth_callback_v1(&self, cb_data: CallbackDataV1) -> MinilithResult<()> {
+    async fn auth_callback_v1(&self, cb_data: CallbackDataV1) -> poem::Result<()> {
         let nonce: [u8; 12] = rand::random();
         // this means we're leaking the name's length & lang's length, but I'm (Erik Davisson) is
         // pretty sure that's fine.
@@ -117,18 +117,18 @@ impl Router {
         )
         .execute(&self.db)
         .await
-        .wrap_err_db("USER_CB1")?;
+        .map_err(InternalServerError::db)?;
 
         if let Some(guild) = get_guild(cb_data.sub.strip_prefix("test:").unwrap_or(&cb_data.sub)) {
             let id = sqlx::query!(
                 "select id from groups where groups.path = $1",
                 format!("tlth.{guild}")
                     .parse::<PgLTree>()
-                    .wrap_err_db("TESTING_AUTH_CB")?
+                    .map_err(InternalServerError::db)?
             )
             .fetch_one(&self.db)
             .await
-            .wrap_err_db("TESTING_AUTH_ID")?;
+            .map_err(InternalServerError::db)?;
             let id = id.id;
             sqlx::query!(
                 "insert into group_memberships (group_id, user_id) values ($1, $2) on conflict do nothing",
@@ -137,7 +137,7 @@ impl Router {
             )
             .execute(&self.db)
             .await
-            .wrap_err_db("TESTING_AUTH")?;
+            .map_err(InternalServerError::db)?;
         }
 
         Ok(())

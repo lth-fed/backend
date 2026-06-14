@@ -1,14 +1,18 @@
+use poem::{Error, error::InternalServerError, http::StatusCode};
 use poem_openapi::Object;
 use sqlx::PgExecutor;
 use uuid::Uuid;
 
 use crate::group::path::Path;
-use crate::{MinilithEndpointError, MinilithErrorResultExt as _, MinilithResult};
 
 #[derive(Debug, Object)]
 pub struct Adminship {
     pub group_path: Path,
     pub user_id: String,
+}
+
+fn group_not_found(id: Uuid) -> Error {
+    Error::from_string(format!("group `{id}` not found"), StatusCode::NOT_FOUND)
 }
 
 /// Returns the closest matching (longest prefix) admin path for the given user
@@ -50,7 +54,7 @@ pub async fn check_adminship(
     db: impl PgExecutor<'_>,
     user_id: &str,
     group_id: Uuid,
-) -> MinilithResult<()> {
+) -> poem::Result<()> {
     let row = sqlx::query!(
         r#"select exists (
             select 1 from group_adminships ga
@@ -64,13 +68,13 @@ pub async fn check_adminship(
     )
     .fetch_optional(db)
     .await
-    .wrap_err_db("GRP_CK_ADMSHP")?;
+    .map_err(InternalServerError)?;
 
     match row {
-        None => Err(MinilithEndpointError::not_found()),
-        Some(row) if !row.is_admin => Err(MinilithEndpointError::bad_frontend_code(
-            "GRP_CK_ADMSHP_ACCESS",
+        None => Err(group_not_found(group_id)),
+        Some(row) if !row.is_admin => Err(Error::from_string(
             format!("must be an admin of group `{group_id}`"),
+            StatusCode::UNAUTHORIZED,
         )),
         Some(_) => Ok(()),
     }
@@ -88,7 +92,7 @@ pub async fn check_parent_adminship(
     db: impl PgExecutor<'_>,
     user_id: &str,
     group_id: Uuid,
-) -> MinilithResult<()> {
+) -> poem::Result<()> {
     let row = sqlx::query!(
         r#"select
             target.parent_path as "parent_path: Path",
@@ -104,17 +108,17 @@ pub async fn check_parent_adminship(
     )
     .fetch_optional(db)
     .await
-    .wrap_err_db("GRP_CK_ADMSHP_PARENT")?;
+    .map_err(InternalServerError)?;
 
     match row {
-        None => Err(MinilithEndpointError::not_found()),
-        Some(row) if row.parent_path.is_none() => Err(MinilithEndpointError::bad_frontend_code(
-            "GRP_CK_ADMSHP_PARENT_ROOT",
+        None => Err(group_not_found(group_id)),
+        Some(row) if row.parent_path.is_none() => Err(Error::from_string(
             "nobody may become admin of the root group",
+            StatusCode::BAD_REQUEST,
         )),
-        Some(row) if !row.is_admin => Err(MinilithEndpointError::bad_frontend_code(
-            "GRP_CK_ADMSHP_PARENT_ACCESS",
-            format!("you must be an admin of the parent of group `{group_id}`"),
+        Some(row) if !row.is_admin => Err(Error::from_string(
+            format!("must be an admin of the parent of group `{group_id}`"),
+            StatusCode::UNAUTHORIZED,
         )),
         Some(_) => Ok(()),
     }
@@ -241,8 +245,8 @@ mod tests {
             closest_user_adminship(&db, "user_a", e_id)
                 .await
                 .unwrap()
-                .map(|path| path.to_string()),
-            Some("tlth.e".to_owned()),
+                .map(|p| p.to_string()),
+            Some("tlth.e".to_string()),
         );
     }
 
@@ -254,7 +258,7 @@ mod tests {
     }
 
     #[sqlx::test(fixtures("adminship"))]
-    async fn remove_adminships(db: PgPool) {
+    async fn test_remove_adminship(db: PgPool) {
         let nolla_id = id_of(&db, "tlth.e.nolla").await;
         let e_id = id_of(&db, "tlth.e").await;
 
