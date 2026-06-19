@@ -1,7 +1,9 @@
 use jsonwebtoken::{Algorithm, Validation};
-use poem::FromRequest;
+use poem::error::ResponseError;
 use poem::http::StatusCode;
-use poem_openapi::{ApiResponse, Object};
+use poem::{FromRequest, IntoResponse as _};
+use poem_openapi::auth::Bearer;
+use poem_openapi::{ApiResponse, Object, SecurityScheme};
 use serde::Deserialize;
 use tracing::error;
 
@@ -57,44 +59,42 @@ struct Claims {
 /// Returns the logged in user. Returns [`StatusCode::UNAUTHORIZED`] if the user is not logged in.
 ///
 /// [`AuthContext`] MUST BE registered using [`poem::EndpointExt::data`].
-#[derive(Debug)]
-pub struct User {
-    id: String,
-}
+///
+/// # Errors
+///
+/// [`Error`]. This is mapped in `minilith` to it's errors.
+#[derive(Debug, SecurityScheme)]
+#[oai(
+    ty = "oauth2",
+    key_in = "header",
+    key_name = "authorization",
+    bearer_format = "JWT",
+    flows(authorization_code(
+        authorization_url = "https://auth.teknologappen.se/oidc/authorize",
+        token_url = "https://auth.teknologappen.se/oidc/token",
+    )),
+    checker = "User::from_token"
+)]
+pub struct User(String);
 impl User {
     #[must_use]
     pub fn get_id(&self) -> &str {
-        &self.id
+        &self.0
     }
-}
-
-impl<'a> FromRequest<'a> for User {
-    async fn from_request(
-        req: &'a poem::Request,
-        _body: &mut poem::RequestBody,
-    ) -> poem::Result<Self> {
+    #[allow(clippy::unused_async, reason = "poem_openapi wants us to")]
+    async fn from_token(req: &poem::Request, token: Bearer) -> poem::Result<String> {
         if is_testing() {
-            return Ok(Self {
-                id: "lund-university:aa0000bb-s".to_owned(),
-            });
+            return Ok("lund-university:aa0000bb-s".to_owned());
         }
         let context: &AuthContext = req.data().ok_or_else(|| {
             error!("AuthContext not registered as data!");
-            StatusCode::INTERNAL_SERVER_ERROR
+            Error::InternalError
         })?;
 
-        let authorization = req
-            .header("authorization")
-            .ok_or(StatusCode::UNAUTHORIZED)?;
-
-        let token = authorization
-            .strip_prefix("Bearer ")
-            .ok_or(StatusCode::UNAUTHORIZED)?;
-        let data = jsonwebtoken::decode::<Claims>(token, &context.auth_key, &context.validation)
-            .map_err(|_| StatusCode::UNAUTHORIZED)?;
-        Ok(Self {
-            id: data.claims.sub,
-        })
+        let data =
+            jsonwebtoken::decode::<Claims>(&token.token, &context.auth_key, &context.validation)
+                .map_err(|_| Error::Unauthorized)?;
+        Ok(data.claims.sub)
     }
 }
 
