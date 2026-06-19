@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["fed-auth", "fed-auth-verifier", "minilith"]
+members = ["fed-auth", "fed-auth-verifier", "minilith", "minilith-errors"]
 
 [workspace.dependencies]
 base64 = "0.22.1"

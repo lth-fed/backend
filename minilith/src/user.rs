@@ -68,6 +68,9 @@ struct Me {
 
 #[OpenApi(prefix_path = "/user")]
 impl Router {
+    /// # Errors
+    ///
+    /// AUTH, DB, ENC.
     #[oai(path = "/", method = "get")]
     async fn me(&self, user: User) -> MinilithResult<Json<Me>> {
         let groups = sqlx::query!(
@@ -110,6 +113,9 @@ impl Router {
             groups,
         }))
     }
+    /// # Errors
+    ///
+    /// DB, PARAM.
     #[oai(path = "/auth-callback/v1", method = "post")]
     async fn auth_callback_v1(&self, cb_data: CallbackDataV1) -> MinilithResult<()> {
         let nonce: [u8; 12] = rand::random();

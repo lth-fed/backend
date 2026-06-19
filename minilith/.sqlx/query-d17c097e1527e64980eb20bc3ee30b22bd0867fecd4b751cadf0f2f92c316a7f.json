@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "insert into groups (path, name, description, limit_membership_visibility) values ($1, $2, $3, $4) returning id, path, limit_membership_visibility, name as \"name!: DIS\", description as \"description!: DIS\", deleted",
+  "query": "insert into groups (path, name, description, limit_membership_visibility)\n            values ($1, $2, $3, $4)\n            returning\n                id, path, limit_membership_visibility, name as \"name!: DIS\",\n                description as \"description!: DIS\", deleted",
   "describe": {
     "columns": [
       {
@@ -61,5 +61,5 @@
       false
     ]
   },
-  "hash": "ecd02cc61ffbc0fd8c32f01aea19ad2d409b82fb1a2ee7c1d94e622539ff87e6"
+  "hash": "d17c097e1527e64980eb20bc3ee30b22bd0867fecd4b751cadf0f2f92c316a7f"
 }
