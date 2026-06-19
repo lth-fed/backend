@@ -44,8 +44,7 @@ pub async fn closest_user_adminship(
 ///
 /// # Errors
 ///
-/// Returns 404 if the group does not exist, 401 if the user is not an admin,
-/// or an internal error if the database query fails.
+/// DB, `BF_GRP_CK_ADMSHP_ACCESS`.
 pub async fn check_adminship(
     db: impl PgExecutor<'_>,
     user_id: &str,
@@ -64,7 +63,7 @@ pub async fn check_adminship(
     )
     .fetch_optional(db)
     .await
-    .wrap_err_db("GRP_CK_ADMSHP")?;
+    .wrap_err_db()?;
 
     match row {
         None => Err(MinilithEndpointError::not_found()),
@@ -81,9 +80,7 @@ pub async fn check_adminship(
 ///
 /// # Errors
 ///
-/// Returns 404 if the group does not exist, 400 if the group is a root group
-/// (no parent), 401 if the user is not an admin of the parent, or an internal
-/// error if the database query fails.
+/// DB, `BF_GRP_CK_ADMSHP_PARENT_ROOT`, `BF_GRP_CK_ADMSHP_PARENT_ACCESS`.
 pub async fn check_parent_adminship(
     db: impl PgExecutor<'_>,
     user_id: &str,
@@ -104,7 +101,7 @@ pub async fn check_parent_adminship(
     )
     .fetch_optional(db)
     .await
-    .wrap_err_db("GRP_CK_ADMSHP_PARENT")?;
+    .wrap_err_db()?;
 
     match row {
         None => Err(MinilithEndpointError::not_found()),
@@ -127,12 +124,12 @@ pub async fn check_parent_adminship(
 ///
 /// # Errors
 ///
-/// Returns an error if the database query fails.
+/// DB.
 pub async fn create_adminship(
     db: impl PgExecutor<'_>,
     user_id: &str,
     group_id: Uuid,
-) -> sqlx::Result<Adminship> {
+) -> MinilithResult<Adminship> {
     sqlx::query_as!(
         Adminship,
         r#"with ensure_membership as (
@@ -155,18 +152,19 @@ pub async fn create_adminship(
     )
     .fetch_one(db)
     .await
+    .wrap_err_db()
 }
 
 /// Removes the adminship for the given user in the given group.
 ///
 /// # Errors
 ///
-/// Returns an error if the database query fails.
+/// DB.
 pub async fn remove_adminship(
     db: impl PgExecutor<'_>,
     user_id: &str,
     group_id: Uuid,
-) -> sqlx::Result<()> {
+) -> MinilithResult<()> {
     sqlx::query!(
         "delete from group_adminships where user_id = $1 and group_id = $2",
         user_id,
@@ -175,14 +173,15 @@ pub async fn remove_adminship(
     .execute(db)
     .await
     .map(|_| ())
+    .wrap_err_db()
 }
 
 /// Returns the list of admins for the given group.
 ///
 /// # Errors
 ///
-/// Returns an error if the database query fails.
-pub async fn group_admins(db: impl PgExecutor<'_>, group_id: Uuid) -> sqlx::Result<Vec<String>> {
+/// DB.
+pub async fn group_admins(db: impl PgExecutor<'_>, group_id: Uuid) -> MinilithResult<Vec<String>> {
     sqlx::query_scalar!(
         r#"select distinct ga.user_id
         from group_adminships ga
@@ -193,14 +192,18 @@ pub async fn group_admins(db: impl PgExecutor<'_>, group_id: Uuid) -> sqlx::Resu
     )
     .fetch_all(db)
     .await
+    .wrap_err_db()
 }
 
 /// Returns the list of groups the user is an admin of.
 ///
 /// # Errors
 ///
-/// Returns an error if the database query fails.
-pub async fn user_admin_groups(db: impl PgExecutor<'_>, user_id: &str) -> sqlx::Result<Vec<Path>> {
+/// DB.
+pub async fn user_admin_groups(
+    db: impl PgExecutor<'_>,
+    user_id: &str,
+) -> MinilithResult<Vec<Path>> {
     sqlx::query_scalar!(
         r#"select g.path as "path!: Path"
         from group_adminships ga
@@ -210,6 +213,7 @@ pub async fn user_admin_groups(db: impl PgExecutor<'_>, user_id: &str) -> sqlx::
     )
     .fetch_all(db)
     .await
+    .wrap_err_db()
 }
 
 #[cfg(test)]

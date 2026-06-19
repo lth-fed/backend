@@ -56,7 +56,34 @@ struct Claims {
     sub: String,
 }
 
-/// Returns the logged in user. Returns [`StatusCode::UNAUTHORIZED`] if the user is not logged in.
+#[derive(Debug, Clone, Copy)]
+pub enum Error {
+    Unauthorized,
+    InternalError,
+}
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.status(), f)
+    }
+}
+impl std::error::Error for Error {}
+impl ResponseError for Error {
+    fn status(&self) -> StatusCode {
+        match self {
+            Self::Unauthorized => StatusCode::UNAUTHORIZED,
+            Self::InternalError => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+    fn as_response(&self) -> poem::Response
+    where
+        Self: std::error::Error + Send + Sync + 'static,
+    {
+        self.status().into_response()
+    }
+}
+
+/// Returns the logged in user. Spec says OAuth2 but it really is OIDC but without automatic
+/// discovery.
 ///
 /// [`AuthContext`] MUST BE registered using [`poem::EndpointExt::data`].
 ///
