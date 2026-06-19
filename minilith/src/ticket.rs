@@ -66,6 +66,9 @@ struct PurchasedTicket {
 
 #[OpenApi(prefix_path = "/tickets")]
 impl Router {
+    /// # Errors
+    ///
+    /// AUTH, DB
     #[oai(path = "/", method = "get")]
     async fn my_tickets(&self, user: User) -> MinilithResult<Json<Vec<Ticket>>> {
         let id = user.get_id();
@@ -102,7 +105,7 @@ impl Router {
         })
         .fetch_all(&self.context.db)
         .await
-        .wrap_err_db("TKS_ME1")?
+        .wrap_err_db()?
         .into_iter()
         .fold(HashMap::new(), |mut map, (ticket_id, addon)| {
             map.entry(ticket_id).or_default().push(addon);
@@ -146,18 +149,22 @@ impl Router {
         })
         .fetch_all(&self.context.db)
         .await
-        .wrap_err_db("TKS_ME2")?;
+        .wrap_err_db()?;
 
         Ok(Json(tickets))
     }
 
+    /// # Errors
+    ///
+    /// DB, AUTH, `BF_TKS_VALD_ADDON_DUPLIC` (duplicate addon), `BF_TKS_VALD_ADDON_NR` (not all
+    /// addons are sent), `BU_TKS_VALD_PURCH` (user already owns a ticket from this event).
     #[oai(path = "/", method = "post")]
     async fn get_free_ticket(
         &self,
         user: User,
         req: Json<GetFreeTicketRequest>,
     ) -> MinilithResult<Json<PurchasedTicket>> {
-        let mut txn = self.db.begin().await.wrap_err_db("TKS_BUY_FREE0")?;
+        let mut txn = self.db.begin().await.wrap_err_db()?;
 
         validate_addons(&mut *txn, &req.addons, req.ticket_kind).await?;
         ensure_user_may_purchase_ticket(&mut *txn, &user, req.ticket_kind).await?;
@@ -169,7 +176,7 @@ impl Router {
         )
         .fetch_one(&mut *txn)
         .await
-        .wrap_err_db("TKS_BUY_FREE1")?;
+        .wrap_err_db()?;
 
         for addon in &req.addons {
             sqlx::query!(
@@ -179,7 +186,7 @@ impl Router {
             )
             .execute(&mut *txn)
             .await
-            .wrap_err_db("TKS_BUY_FREE2")?;
+            .wrap_err_db()?;
         }
 
         // increment ticket_kinds.reserved_or_purchased_tickets and set
@@ -190,9 +197,9 @@ impl Router {
         )
         .execute(&mut *txn)
         .await
-            .wrap_err_db("TKS_BUY_FREE3")?;
+            .wrap_err_db()?;
 
-        txn.commit().await.wrap_err_db("TKS_BUY_FREE_CMT")?;
+        txn.commit().await.wrap_err_db()?;
 
         Ok(Json(PurchasedTicket { id: ticket_id }))
     }
@@ -222,7 +229,7 @@ async fn validate_addons(
     )
     .fetch_one(db)
     .await
-    .wrap_err_db("TKS_VALD_ADDON1")?;
+    .wrap_err_db()?;
 
     #[allow(
         clippy::cast_possible_wrap,
@@ -286,7 +293,7 @@ async fn ensure_user_may_purchase_ticket(
     )
     .fetch_one(db)
     .await
-    .wrap_err_db("TKS_VALD_PURCH")?;
+    .wrap_err_db()?;
 
     if !may_purchase {
         return Err(MinilithEndpointError::bad_user_input(

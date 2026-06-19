@@ -1,7 +1,6 @@
 use std::ops::Deref;
 
 use fed_auth_verifier::User;
-use poem::{Error, Result, error::InternalServerError, http::StatusCode};
 use poem_openapi::{
     ApiResponse, Object, OpenApi, param,
     payload::{Json, PlainText},
@@ -15,7 +14,10 @@ mod path;
 
 pub use path::Path;
 
-use crate::{DbInternationalizedString as DIS, InternationalizedString as IS};
+use crate::{
+    DbInternationalizedString as DIS, InternationalizedString as IS, MinilithEndpointError,
+    MinilithErrorOptionExt as _, MinilithErrorResultExt as _, MinilithResult,
+};
 use crate::{
     context::Context,
     group::{
@@ -29,10 +31,11 @@ use crate::{
 /// # Errors
 ///
 /// Returns an error if the database query fails.
-pub async fn id_by_path(db: impl PgExecutor<'_>, path: &Path) -> sqlx::Result<Option<Uuid>> {
+pub async fn id_by_path(db: impl PgExecutor<'_>, path: &Path) -> MinilithResult<Option<Uuid>> {
     sqlx::query_scalar!("select id from groups where path = $1", path.0)
         .fetch_optional(db)
         .await
+        .wrap_err_db()
 }
 
 #[derive(Clone, Debug)]
@@ -87,11 +90,13 @@ pub enum RemoveAdminshipResponse {
 #[OpenApi]
 impl Router {
     /// List all groups the user is a direct or transitive member of.
+    ///
+    /// # Errors
+    ///
+    /// DB, AUTH
     #[oai(path = "/groups", method = "get")]
-    async fn list_groups(&self, user: User) -> Result<Json<Vec<Group>>> {
-        let groups = user_groups(&self.context.db, user.get_id())
-            .await
-            .map_err(InternalServerError)?;
+    async fn list_groups(&self, user: User) -> MinilithResult<Json<Vec<Group>>> {
+        let groups = user_groups(&self.context.db, user.get_id()).await?;
 
         Ok(Json(groups))
     }
@@ -99,13 +104,17 @@ impl Router {
     /// Creates a new group under the given parent group.
     ///
     /// The user performing this action must be an admin of the parent group.
+    ///
+    /// # Errors
+    ///
+    /// DB, AUTH, `BF_GRP_NO_PARENT`, `BF_GRP_NULL_PARENT`, `BF_GRP_EXISTS`.
     #[oai(path = "/groups", method = "post")]
     async fn create_group(
         &self,
         user: User,
         Json(create_group): Json<CreateGroupRequest>,
-    ) -> Result<CreateGroupResponse> {
-        let mut txn = self.context.db.begin().await.map_err(InternalServerError)?;
+    ) -> MinilithResult<CreateGroupResponse> {
+        let mut txn = self.db.begin().await.wrap_err_db()?;
 
         let CreateGroupRequest {
             path,
@@ -114,23 +123,22 @@ impl Router {
             limit_membership_visibility,
         } = create_group;
 
-        let parent = path
-            .parent()
-            .ok_or_else(|| Error::from_string("no parent group", StatusCode::BAD_REQUEST))?;
+        let parent = path.parent().wrap_err_bad_frontend(
+            "GRP_NO_PARENT",
+            "group has to have a parent; you can't create a root group",
+        )?;
         let parent_id = id_by_path(&mut *txn, &parent)
-            .await
-            .map_err(InternalServerError)?
-            .ok_or_else(|| {
-                Error::from_string(
-                    format!("no parent with path `{parent}` exists"),
-                    StatusCode::BAD_REQUEST,
-                )
-            })?;
+            .await?
+            .wrap_err_bad_frontend("GRP_NULL_PARENT", "parent group doesn't exist")?;
         check_adminship(&mut *txn, user.get_id(), parent_id).await?;
 
         let group = sqlx::query_as!(
             Group,
-            r#"insert into groups (path, name, description, limit_membership_visibility) values ($1, $2, $3, $4) returning id, path, limit_membership_visibility, name as "name!: DIS", description as "description!: DIS", deleted"#,
+            r#"insert into groups (path, name, description, limit_membership_visibility)
+            values ($1, $2, $3, $4)
+            returning
+                id, path, limit_membership_visibility, name as "name!: DIS",
+                description as "description!: DIS", deleted"#,
             path.0,
             name.to_json_value(),
             description.to_json_value(),
@@ -139,49 +147,61 @@ impl Router {
         .fetch_one(&mut *txn)
         .await
         .map_err(|err| match err {
-            sqlx::Error::Database(ref db_err) if let Some(constraint) = db_err.constraint() => match constraint {
-                "groups_path_key" => Error::from_string("group already exists", StatusCode::CONFLICT),
-                "groups_parent_path_fkey" => Error::from_string(format!("no parent with path `{parent}` exists"), StatusCode::BAD_REQUEST),
-                _unknown_constraint => InternalServerError(err),
+            sqlx::Error::Database(ref db_err) if let Some(constraint) = db_err.constraint() => {
+                match constraint {
+                    "groups_path_key" => MinilithEndpointError::bad_frontend_code(
+                        "GRP_EXISTS",
+                        "a group with the same path/id already exists",
+                    ),
+                    "groups_parent_path_fkey" => MinilithEndpointError::bad_frontend_code(
+                        "GRP_NULL_PARENT",
+                        "no parent with path `{parent}` exists",
+                    ),
+                    _unknown_constraint => MinilithEndpointError::db(err),
+                }
             }
-            other_err => InternalServerError(other_err),
+            other_err => MinilithEndpointError::db(other_err),
         })?;
 
-        txn.commit().await.map_err(InternalServerError)?;
+        txn.commit().await.wrap_err_db()?;
 
         Ok(CreateGroupResponse::Ok(Json(group)))
     }
 
     /// List all members of a group. To do it, you need to be an admin of the
     /// group.
+    ///
+    /// # Errors
+    ///
+    /// AUTH, DB.
     #[oai(path = "/groups/:group_id/members", method = "get")]
     async fn list_members(
         &self,
         user: User,
         param::Path(group_id): param::Path<Uuid>,
-    ) -> Result<Json<Vec<String>>> {
-        let mut txn = self.context.db.begin().await.map_err(InternalServerError)?;
+    ) -> MinilithResult<Json<Vec<String>>> {
+        let mut txn = self.db.begin().await.wrap_err_db()?;
         check_adminship(&mut *txn, user.get_id(), group_id).await?;
-        let members = group_members(&mut *txn, group_id)
-            .await
-            .map_err(InternalServerError)?;
+        let members = group_members(&mut *txn, group_id).await?;
 
         Ok(Json(members))
     }
 
     /// List all admins of a group. To do it, you need to be an admin of the
     /// group.
+    ///
+    /// # Errors
+    ///
+    /// AUTH, DB
     #[oai(path = "/groups/:group_id/admins", method = "get")]
     async fn list_admins(
         &self,
         user: User,
         param::Path(group_id): param::Path<Uuid>,
-    ) -> Result<Json<Vec<String>>> {
-        let mut txn = self.context.db.begin().await.map_err(InternalServerError)?;
+    ) -> MinilithResult<Json<Vec<String>>> {
+        let mut txn = self.db.begin().await.wrap_err_db()?;
         check_adminship(&mut *txn, user.get_id(), group_id).await?;
-        let admins = group_admins(&mut *txn, group_id)
-            .await
-            .map_err(InternalServerError)?;
+        let admins = group_admins(&mut *txn, group_id).await?;
 
         Ok(Json(admins))
     }
@@ -190,23 +210,26 @@ impl Router {
     ///
     /// The user performing this action must be a literal super-admin, meaning
     /// they must at least be an administrator of the parent group.
+    ///
+    /// # Errors
+    ///
+    /// AUTH, DB, `BF_GRP_CK_ADMSHP_PARENT_ACCESS` (not access to do this, you need to be admin),
+    /// `BF_GRP_CK_ADMSHP_PARENT_ROOT` (cannot be admin of root node).
     #[oai(path = "/groups/:group_id/admins", method = "post")]
     async fn create_adminship(
         &self,
         user: User,
         param::Path(group_id): param::Path<Uuid>,
         Json(create_adminship): Json<CreateAdminship>,
-    ) -> Result<Json<Adminship>> {
+    ) -> MinilithResult<Json<Adminship>> {
         let CreateAdminship { user_id } = create_adminship;
 
-        let mut txn = self.context.db.begin().await.map_err(InternalServerError)?;
+        let mut txn = self.db.begin().await.wrap_err_db()?;
 
         check_parent_adminship(&mut *txn, user.get_id(), group_id).await?;
-        let adminship = admin::create_adminship(&mut *txn, &user_id, group_id)
-            .await
-            .map_err(InternalServerError)?;
+        let adminship = admin::create_adminship(&mut *txn, &user_id, group_id).await?;
         // todo: notify other admins via email
-        txn.commit().await.map_err(InternalServerError)?;
+        txn.commit().await.wrap_err_db()?;
 
         Ok(Json(adminship))
     }
@@ -215,21 +238,24 @@ impl Router {
     ///
     /// The user performing this action must be a literal super-admin, meaning
     /// they must at least be an administrator of the parent group.
+    ///
+    /// # Errors
+    ///
+    /// AUTH, DB, `BF_GRP_CK_ADMSHP_PARENT_ACCESS` (not access to do this, you need to be admin),
+    /// `BF_GRP_CK_ADMSHP_PARENT_ROOT` (cannot be admin of root node).
     #[oai(path = "/groups/:group_id/admins/:user_id", method = "delete")]
     async fn remove_adminship(
         &self,
         user: User,
         param::Path(group_id): param::Path<Uuid>,
         Json(user_id): Json<String>,
-    ) -> Result<RemoveAdminshipResponse> {
-        let mut txn = self.context.db.begin().await.map_err(InternalServerError)?;
+    ) -> MinilithResult<RemoveAdminshipResponse> {
+        let mut txn = self.db.begin().await.wrap_err_db()?;
 
         check_parent_adminship(&mut *txn, user.get_id(), group_id).await?;
-        admin::remove_adminship(&mut *txn, &user_id, group_id)
-            .await
-            .map_err(InternalServerError)?;
+        admin::remove_adminship(&mut *txn, &user_id, group_id).await?;
         // todo: notify other admins via email
-        txn.commit().await.map_err(InternalServerError)?;
+        txn.commit().await.wrap_err_db()?;
 
         Ok(RemoveAdminshipResponse::Ok(PlainText("adminship removed")))
     }

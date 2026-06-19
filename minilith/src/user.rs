@@ -71,25 +71,32 @@ impl Router {
     #[oai(path = "/", method = "get")]
     async fn me(&self, user: User) -> MinilithResult<Json<Me>> {
         let groups = sqlx::query!(
-            r#"select groups.id, path as "path!: Path", name as "name!: DIS", description as "description!: DIS", url as logo_url from group_memberships 
-            inner join groups on groups.id = group_memberships.group_id 
-            inner join images logo on logo.id = groups.logo_id where user_id = $1"#,
+            r#"select
+                groups.id, path as "path!: Path",
+                name as "name!: DIS",
+                description as "description!: DIS",
+                url as logo_url from group_memberships 
+            inner join groups on
+                groups.id = group_memberships.group_id 
+            inner join images logo on
+                logo.id = groups.logo_id where user_id = $1"#,
             user.get_id()
-            ).map(|group| {
-                MyGroup {
-                    id: group.id,
-                    path: group.path,
-                    name:group.name.0,
-                    description:group.description.0,
-                    logo_url: group.logo_url,
-                }
-            })
-            .fetch_all(&self.db).await.wrap_err_db("USER_ME1")?;
+        )
+        .map(|group| MyGroup {
+            id: group.id,
+            path: group.path,
+            name: group.name.0,
+            description: group.description.0,
+            logo_url: group.logo_url,
+        })
+        .fetch_all(&self.db)
+        .await
+        .wrap_err_db()?;
 
         let user = sqlx::query!("select * from users where id = ($1)", user.get_id())
             .fetch_one(&self.db)
             .await
-            .wrap_err_db("USER_ME2")?;
+            .wrap_err_db()?;
 
         Ok(Json(Me {
             id: user.id,
@@ -112,7 +119,8 @@ impl Router {
         self.endecrypt_mut_slice(&mut name, &nonce);
 
         sqlx::query!(
-            "insert into users (id, name, language, nonce) values ($1, $2, $3, $4) on conflict do nothing",
+            "insert into users (id, name, language, nonce)
+            values ($1, $2, $3, $4) on conflict do nothing",
             cb_data.sub,
             name,
             &[],
@@ -120,27 +128,26 @@ impl Router {
         )
         .execute(&self.db)
         .await
-        .wrap_err_db("USER_CB1")?;
+        .wrap_err_db()?;
 
         if let Some(guild) = get_guild(cb_data.sub.strip_prefix("test:").unwrap_or(&cb_data.sub)) {
             let id = sqlx::query!(
                 "select id from groups where groups.path = $1",
-                format!("tlth.{guild}")
-                    .parse::<PgLTree>()
-                    .wrap_err_db("TESTING_AUTH_CB")?
+                format!("tlth.{guild}").parse::<PgLTree>().wrap_err_db()?
             )
             .fetch_one(&self.db)
             .await
-            .wrap_err_db("TESTING_AUTH_ID")?;
+            .wrap_err_db()?;
             let id = id.id;
             sqlx::query!(
-                "insert into group_memberships (group_id, user_id) values ($1, $2) on conflict do nothing",
+                "insert into group_memberships (group_id, user_id)
+                values ($1, $2) on conflict do nothing",
                 id,
                 cb_data.sub
             )
             .execute(&self.db)
             .await
-            .wrap_err_db("TESTING_AUTH")?;
+            .wrap_err_db()?;
         }
 
         Ok(())

@@ -40,7 +40,7 @@ jobs:
       - run: sudo apt update && sudo apt-get install libxmlsec1-dev pkg-config
       - uses: Swatinem/rust-cache@v2
       - run: cp fed-auth/.env.example fed-auth/.env
-      - run: cp fed-tickets/.env.example fed-tickets/.env
+      - run: cp minilith/.env.example minilith/.env
       - name: Wait for Postgres
         run: |
           for i in {1..30}; do

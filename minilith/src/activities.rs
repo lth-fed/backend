@@ -118,6 +118,9 @@ impl Deref for Router {
 
 #[OpenApi(prefix_path = "/activities")]
 impl Router {
+    /// # Errors
+    ///
+    /// DB, AUTH.
     #[oai(path = "/", method = "get")]
     async fn list(&self, user: User) -> MinilithResult<Json<Vec<BriefActivity>>> {
         let mut activities = sqlx::query_file!("src/activity-list.sql", user.get_id())
@@ -134,7 +137,7 @@ impl Router {
             })
             .fetch_all(&self.context.db)
             .await
-            .wrap_err_db("ACT_USER_LIST")?;
+            .wrap_err_db()?;
 
         // can't sort in query because postgres doesn't allow separate columns for distinct on &
         // order by
@@ -142,6 +145,9 @@ impl Router {
         activities.sort_by_key(|act| act.time_start);
         Ok(Json(activities))
     }
+    /// # Errors
+    ///
+    /// `BF_ACT_USER_ACCESS` (user access to activity).
     async fn test_activity_access(&self, user: &str, id: &Uuid) -> MinilithResult<()> {
         // this clusterfuck is the same logic as above, which checks if this activity should be
         // visible
@@ -166,9 +172,13 @@ impl Router {
         )
         .fetch_one(&self.context.db)
         .await
-        .wrap_err_unauthorized("ACT_USER_ACCESS")?;
+        .wrap_err_bad_frontend("ACT_USER_ACCESS")?;
         Ok(())
     }
+    /// # Errors
+    ///
+    /// DB, AUTH, `BF_ACT_USER_ACCESS` (user access to activity), NF (activity not found), ENC
+    /// (decryption).
     #[oai(path = "/:id", method = "get")]
     async fn details(&self, user: User, id: Path<Uuid>) -> MinilithResult<Json<Activity>> {
         self.test_activity_access(user.get_id(), &id.0).await?;
@@ -209,7 +219,7 @@ impl Router {
         )
         .fetch_all(&self.context.db)
         .await
-        .wrap_err_db("ACT_USER_DETAILS")?;
+        .wrap_err_db()?;
         let tickets_available = sqlx::query!(
             r#"select exists (
                 select 1
@@ -222,7 +232,7 @@ impl Router {
         )
         .fetch_one(&self.context.db)
         .await
-        .wrap_err_db("ACT_USER_DETAILS2")?;
+        .wrap_err_db()?;
 
         let hosts = std::iter::once(Host {
             name: activity.creator_name.0,
@@ -259,6 +269,9 @@ impl Router {
 
         Ok(Json(activity))
     }
+    /// # Errors
+    ///
+    /// AUTH, `BF_ACT_USER_ACCESS` (access to activity), DB.
     #[oai(path = "/:id/ticket-kinds", method = "get")]
     async fn kinds(&self, user: User, id: Path<Uuid>) -> MinilithResult<Json<Vec<TicketKind>>> {
         self.test_activity_access(user.get_id(), &id.0).await?;
@@ -307,7 +320,7 @@ impl Router {
         })
         .fetch_all(&self.db)
         .await
-        .wrap_err_db("TK_KINDS")?;
+        .wrap_err_db()?;
         Ok(Json(kinds))
     }
 }

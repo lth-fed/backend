@@ -1,8 +1,8 @@
 use sqlx::PgExecutor;
 use uuid::Uuid;
 
-use crate::DbInternationalizedString as DIS;
 use crate::group::{Group, path::Path};
+use crate::{DbInternationalizedString as DIS, MinilithErrorResultExt as _, MinilithResult};
 
 /// Returns the closest matching (longest prefix) group path for the given user
 /// and group id, if such a membership exists. Returns `None` if the user has
@@ -10,12 +10,12 @@ use crate::group::{Group, path::Path};
 ///
 /// # Errors
 ///
-/// Returns an error if the database query fails.
+/// DB.
 pub async fn closest_user_membership(
     db: impl PgExecutor<'_>,
     user_id: &str,
     group_id: Uuid,
-) -> sqlx::Result<Option<Path>> {
+) -> MinilithResult<Option<Path>> {
     sqlx::query_scalar!(
         r#"select g.path as "path!: Path"
         from group_memberships gm
@@ -29,6 +29,7 @@ pub async fn closest_user_membership(
     )
     .fetch_optional(db)
     .await
+    .wrap_err_db()
 }
 
 /// Returns all the groups that the user is a member of, including nested
@@ -36,8 +37,8 @@ pub async fn closest_user_membership(
 ///
 /// # Errors
 ///
-/// Returns an error if the database query fails.
-pub async fn user_groups(db: impl PgExecutor<'_>, user_id: &str) -> sqlx::Result<Vec<Group>> {
+/// DB.
+pub async fn user_groups(db: impl PgExecutor<'_>, user_id: &str) -> MinilithResult<Vec<Group>> {
     // TODO: Tree structure?
     sqlx::query_as!(
         Group,
@@ -55,14 +56,15 @@ pub async fn user_groups(db: impl PgExecutor<'_>, user_id: &str) -> sqlx::Result
     )
     .fetch_all(db)
     .await
+    .wrap_err_db()
 }
 
 /// Returns the direct and transitive members of a group.
 ///
 /// # Errors
 ///
-/// Returns an error if the database query fails.
-pub async fn group_members(db: impl PgExecutor<'_>, group_id: Uuid) -> sqlx::Result<Vec<String>> {
+/// DB.
+pub async fn group_members(db: impl PgExecutor<'_>, group_id: Uuid) -> MinilithResult<Vec<String>> {
     sqlx::query_scalar!(
         r#"select distinct gm.user_id
         from group_memberships gm
@@ -73,6 +75,7 @@ pub async fn group_members(db: impl PgExecutor<'_>, group_id: Uuid) -> sqlx::Res
     )
     .fetch_all(db)
     .await
+    .wrap_err_db()
 }
 
 #[cfg(test)]
