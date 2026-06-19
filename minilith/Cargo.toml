@@ -12,6 +12,7 @@ chacha20 = "0.10.0"
 color-eyre.workspace = true
 dotenvy.workspace = true
 fed-auth-verifier.path = "../fed-auth-verifier"
+minilith-errors = { version = "0.1.0", path = "../minilith-errors" }
 poem.workspace = true
 poem-openapi.workspace = true
 rand.workspace = true

@@ -1,9 +1,8 @@
 use jsonwebtoken::{Algorithm, Validation};
-use poem::error::ResponseError;
+use minilith_errors::{MinilithEndpointError, MinilithErrorKind, MinilithErrorResultExt as _};
 use poem::http::StatusCode;
-use poem::{FromRequest, IntoResponse as _};
 use poem_openapi::auth::Bearer;
-use poem_openapi::{ApiResponse, Object, SecurityScheme};
+use poem_openapi::{ApiExtractor, Object, SecurityScheme};
 use serde::Deserialize;
 use tracing::error;
 
@@ -56,40 +55,15 @@ struct Claims {
     sub: String,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum Error {
-    Unauthorized,
-    InternalError,
-}
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(&self.status(), f)
-    }
-}
-impl std::error::Error for Error {}
-impl ResponseError for Error {
-    fn status(&self) -> StatusCode {
-        match self {
-            Self::Unauthorized => StatusCode::UNAUTHORIZED,
-            Self::InternalError => StatusCode::INTERNAL_SERVER_ERROR,
-        }
-    }
-    fn as_response(&self) -> poem::Response
-    where
-        Self: std::error::Error + Send + Sync + 'static,
-    {
-        self.status().into_response()
-    }
-}
-
-/// Returns the logged in user. Spec says OAuth2 but it really is OIDC but without automatic
-/// discovery.
+/// Returns the logged in user. Spec says `OAuth2` but it really is OIDC but without automatic
+/// discovery. Does return a string instead of the full error if the header `authorization` is not
+/// defined.
 ///
 /// [`AuthContext`] MUST BE registered using [`poem::EndpointExt::data`].
 ///
 /// # Errors
 ///
-/// [`Error`]. This is mapped in `minilith` to it's errors.
+/// [`MinilithEndpointError`]. UK, AUTH.
 #[derive(Debug, SecurityScheme)]
 #[oai(
     ty = "oauth2",
@@ -115,28 +89,23 @@ impl User {
         }
         let context: &AuthContext = req.data().ok_or_else(|| {
             error!("AuthContext not registered as data!");
-            Error::InternalError
+            MinilithEndpointError::internal_error(
+                "AUTH_EXTR",
+                MinilithErrorKind::Other,
+                "contact app developers",
+            )
         })?;
 
         let data =
             jsonwebtoken::decode::<Claims>(&token.token, &context.auth_key, &context.validation)
-                .map_err(|_| Error::Unauthorized)?;
+                .map_err(|_| MinilithEndpointError::unauthorized(
+                "EXTR_NOUSR",
+                "You don't have a valid login-session. Try logging out and in again or clearing cookies.",
+            ))?;
         Ok(data.claims.sub)
     }
 }
 
-#[derive(ApiResponse, Clone, Copy, Debug)]
-pub enum CallbackResponseError {
-    /// The request's signature was invalid; we can't trust this request.
-    #[oai(status = 401)]
-    SignatureInvalid,
-    /// The DB threw an error.
-    #[oai(status = 500)]
-    DbError,
-    /// Unknown internal error.
-    #[oai(status = 500)]
-    Unknown,
-}
 #[derive(Debug, Object, Deserialize)]
 pub struct CallbackDataV1 {
     pub sub: String,
@@ -171,20 +140,63 @@ pub struct CallbackDataV1 {
 ///     }
 /// }
 /// ```
-impl<'a> FromRequest<'a> for CallbackDataV1 {
+impl<'a> ApiExtractor<'a> for CallbackDataV1 {
+    // to make the OpenApi look pretty
+    // inspired by the impl of PlainText<String>
+    type ParamType = ();
+    type ParamRawType = ();
+
+    const TYPES: &'static [poem_openapi::ApiExtractorType] =
+        &[poem_openapi::ApiExtractorType::RequestObject];
+    const PARAM_IS_REQUIRED: bool = false;
+
+    fn request_meta() -> Option<poem_openapi::registry::MetaRequest> {
+        let mut jwt = poem_openapi::registry::MetaSchema::new("string");
+        jwt.example = Some(
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.\
+            eyJsb2dnZWRJbkFzIjoiYWRtaW4iLCJpYXQiOjE0MjI3Nzk2Mzh9.\
+            gzSraSYS8EXBxLN_oWnFSRgCzcmJmMjLiuyu5CSpyHI"
+                .into(),
+        );
+
+        Some(poem_openapi::registry::MetaRequest {
+            description: None,
+            content: vec![poem_openapi::registry::MetaMediaType {
+                content_type: "application/jwt",
+                schema: poem_openapi::registry::MetaSchemaRef::Inline(Box::new(jwt)),
+            }],
+            required: true,
+        })
+    }
+
     async fn from_request(
-        req: &'a poem::Request,
+        request: &'a poem::Request,
         body: &mut poem::RequestBody,
+        _param_opts: poem_openapi::ExtractParamOptions<()>,
     ) -> poem::Result<Self> {
-        let context: &AuthContext = req.data().ok_or_else(|| {
+        let context: &AuthContext = request.data().ok_or_else(|| {
             error!("AuthContext not registered as data!");
-            StatusCode::INTERNAL_SERVER_ERROR
+            MinilithEndpointError::internal_error(
+                "AUTH_CB_AC",
+                MinilithErrorKind::Other,
+                "contact app developers",
+            )
         })?;
-        let body = body.take()?;
-        let body = body.into_string().await?;
+        let body = body.take().map_err(|err| {
+            error!("Somebody took our body: {err}");
+            MinilithEndpointError::internal_error(
+                "AUTH_CB_BDY",
+                MinilithErrorKind::Other,
+                "contact app developers",
+            )
+        })?;
+        let body = body
+            .into_string()
+            .await
+            .wrap_err_bad_user("AUTH_CB_BDY_UTF8", "<body>")?;
         let data: CallbackDataV1 =
             jsonwebtoken::decode(&body, &context.auth_key, &context.validation)
-                .map_err(|_| CallbackResponseError::SignatureInvalid)?
+                .wrap_err_unauthorized("INVALID_TOKEN")?
                 .claims;
         Ok(data)
     }

@@ -1006,6 +1006,7 @@ version = "0.1.0"
 dependencies = [
  "color-eyre",
  "jsonwebtoken",
+ "minilith-errors",
  "poem",
  "poem-openapi",
  "reqwest",
@@ -2007,6 +2008,7 @@ dependencies = [
  "color-eyre",
  "dotenvy",
  "fed-auth-verifier",
+ "minilith-errors",
  "poem",
  "poem-openapi",
  "rand 0.10.1",
@@ -2018,6 +2020,16 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "minilith-errors"
+version = "0.1.0"
+dependencies = [
+ "poem",
+ "poem-openapi",
+ "tracing",
  "uuid",
 ]
 
