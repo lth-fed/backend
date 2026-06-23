@@ -1,12 +1,13 @@
+use poem_openapi::Object;
 use serde::Serialize;
 use tracing::error;
 
-pub const JWT_AUDIENCE: &str = "teknologappen.se";
-
 pub fn encode(claims: impl Serialize, signing_key: &jsonwebtoken::EncodingKey) -> Option<String> {
+    let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::EdDSA);
+    header.kid = Some("main".to_owned());
     jsonwebtoken::encode(
-        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::EdDSA),
-        &GeneralClaims::new(claims),
+        &header,
+        &claims,
         signing_key,
     )
     .inspect_err(|err| {
@@ -15,26 +16,7 @@ pub fn encode(claims: impl Serialize, signing_key: &jsonwebtoken::EncodingKey) -
     .ok()
 }
 
-#[derive(Serialize, Clone, Debug)]
-pub struct GeneralClaims<T> {
-    exp: u64,
-    nbf: u64,
-    aud: String,
-    #[serde(flatten)]
-    pub other_claims: T,
-}
-impl<T> GeneralClaims<T> {
-    pub fn new(claims: T) -> Self {
-        let now = jsonwebtoken::get_current_timestamp();
-        Self {
-            exp: now + 60 * 60,
-            nbf: now,
-            aud: JWT_AUDIENCE.into(),
-            other_claims: claims,
-        }
-    }
-}
-#[derive(Serialize)]
+#[derive(Object, Serialize)]
 pub struct AccesTokenClaims {
     pub sub: String,
 }

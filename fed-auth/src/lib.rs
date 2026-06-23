@@ -10,24 +10,29 @@ use opentelemetry::trace::TracerProvider as _;
 use poem::EndpointExt as _;
 use poem::endpoint::EmbeddedFilesEndpoint;
 use poem::http::Method;
-use poem::middleware::{CookieJarManager, Cors, OpenTelemetryMetrics, OpenTelemetryTracing};
+<<<<<<< HEAD
+
+use poem::middleware::{SetHeader, Cors, OpenTelemetryMetrics, OpenTelemetryTracing};
 
 use poem::Route;
 use poem_openapi::OpenApiService;
+use reqwest::header::CACHE_CONTROL;
+use sqlx::PgPool;
 
 mod api;
 mod context;
-mod cookie;
 mod jwt;
+mod oidc;
 mod saml2;
 
 pub use bin_common::PgPool;
 pub(crate) use context::Context;
 
 #[cfg(debug_assertions)]
-pub(crate) const DOMAIN: &str = "http://localhost:8001";
+pub(crate) const API_DOMAIN: &str = "http://localhost:8001";
 #[cfg(not(debug_assertions))]
-pub(crate) const DOMAIN: &str = "https://auth.teknologappen.se";
+pub(crate) const API_DOMAIN: &str = "https://auth.teknologappen.se";
+pub(crate) const WEBSITE_DOMAIN: &str = API_DOMAIN;
 
 #[derive(rust_embed::Embed)]
 #[cfg_attr(
@@ -58,9 +63,8 @@ pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl po
     let tracer = get_otel(env!("CARGO_PKG_NAME"), test_db.is_some())?;
 
     let context = Context::new(test_db).await?;
-    let auth_ctx =
-        AuthContext::from_decoding_key(jsonwebtoken::DecodingKey::from_ed_der(&context.public_key));
-    let server_url = DOMAIN;
+    let auth_ctx = AuthContext::from_jwks(context.jwks.clone());
+    let server_url = API_DOMAIN;
     let api_service = OpenApiService::new(
         api::MainRouter {
             context: context.clone(),
@@ -72,6 +76,17 @@ pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl po
     .server(server_url);
     let ui = api_service.swagger_ui();
     let spec = api_service.spec_endpoint();
+    let oidc_service = OpenApiService::new(
+        oidc::MainRouter {
+            context: context.clone(),
+        },
+        env!("CARGO_PKG_NAME"),
+        env!("CARGO_PKG_VERSION"),
+    )
+    // this url is just for the Swagger UI
+    .server(server_url);
+    let oidc_ui = oidc_service.swagger_ui();
+    let oidc_spec = oidc_service.spec_endpoint();
     let saml_service = OpenApiService::new(
         saml2::SamlRouter { context },
         env!("CARGO_PKG_NAME"),
@@ -91,9 +106,20 @@ pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl po
 
     let route = Route::new()
         .nest("/", EmbeddedFilesEndpoint::<Website>::new())
-        .nest("/api/v0", api_service.data(auth_ctx))
+        .nest(
+            "/api/v0",
+            api_service.with(SetHeader::new().overriding(CACHE_CONTROL, "no-cache")),
+        )
         .nest("/api/v0/docs", ui)
         .nest("/api/v0/spec.json", spec)
+        .nest(
+            "/oidc/v1",
+            oidc_service
+                .data(auth_ctx)
+                .with(SetHeader::new().overriding(CACHE_CONTROL, "no-cache")),
+        )
+        .nest("/oidc/v1/docs", oidc_ui)
+        .nest("/oidc/v1/spec.json", oidc_spec)
         .nest("/saml2", saml_service)
         .nest("/saml2/docs", saml_ui)
         .nest("/saml2/spec.json", saml_spec)
@@ -101,7 +127,6 @@ pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl po
         .with(OpenTelemetryTracing::new(
             tracer.tracer(env!("CARGO_PKG_NAME")),
         ))
-        .with(cors)
-        .with(CookieJarManager::new());
+        .with(cors);
     Ok(route)
 }

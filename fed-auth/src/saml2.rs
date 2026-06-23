@@ -16,7 +16,7 @@ use samael::traits::ToXml as _;
 use tracing::error;
 use xmltree::XMLNode;
 
-use crate::{Context, DOMAIN, context};
+use crate::{API_DOMAIN, Context, context};
 
 pub async fn get_service_provider()
 -> color_eyre::Result<(ServiceProvider, openssl::pkey::PKey<openssl::pkey::Private>)> {
@@ -42,7 +42,7 @@ pub async fn get_service_provider()
     let saml_cert = samael::crypto::CertificateDer::from(saml_cert);
 
     let sp = ServiceProviderBuilder::default()
-        .entity_id(format!("{DOMAIN}/saml2/"))
+        .entity_id(format!("{API_DOMAIN}/saml2/"))
         .key(saml_pk.clone())
         .certificate(saml_cert)
         .allow_idp_initiated(false)
@@ -56,9 +56,9 @@ pub async fn get_service_provider()
             telephone_numbers: None,
         })
         .idp_metadata(idp_metadata)
-        .acs_url(format!("{DOMAIN}/saml2/acs"))
+        .acs_url(format!("{API_DOMAIN}/saml2/acs"))
         // doesn't actually exist but is required by samael to exist
-        .slo_url(format!("{DOMAIN}/saml2/slo"))
+        .slo_url(format!("{API_DOMAIN}/saml2/slo"))
         .build()?;
     Ok((sp, saml_pk))
 }
@@ -308,12 +308,8 @@ impl SamlRouter {
                 full_name: "Erika Davidssona".to_owned(),
             });
         self.auth_sessions.insert(request_id.clone(), data.clone());
-        Ok(Response::new(()).status(StatusCode::SEE_OTHER).header(
-            "location",
-            format!(
-                "/confirm-datasharing/?id={}&origin={}",
-                request_id, data.origin
-            ),
-        ))
+        Ok(Response::new(())
+            .status(StatusCode::SEE_OTHER)
+            .header("location", data.provider_callback_next_url(request_id)))
     }
 }

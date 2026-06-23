@@ -29,7 +29,7 @@ tracing = "0.1.44"
 # this is one version higher than opentelemetry which is super odd
 tracing-opentelemetry = "0.31.0"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "tracing-log"] }
-uuid = { version = "1.23.1", features = ["fast-rng", "v4"] }
+uuid = { version = "1.23.1", features = ["fast-rng", "serde", "v4"] }
 
 [workspace.lints.rust]
 ambiguous_negative_literals = "deny"

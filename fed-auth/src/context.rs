@@ -1,16 +1,19 @@
 use std::path::PathBuf;
 
 use bin_common::setup_db;
+use jsonwebtoken::jwk::{Jwk, JwkSet};
 use mini_moka::sync::Cache;
 use poem_openapi::Object;
 use samael::service_provider::ServiceProvider;
 
 use base64::Engine as _;
 use color_eyre::{Section as _, eyre::Context as _};
-use ed25519_dalek::pkcs8::DecodePrivateKey as _;
 use jsonwebtoken::EncodingKey;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use sqlx::migrate::MigrateDatabase as _;
 use sqlx::migrate;
+use sqlx::postgres::PgPoolOptions;
+use sqlx::{PgPool, Postgres};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::LevelFilter;
 
@@ -18,11 +21,44 @@ use crate::{PgPool, api, saml2};
 
 #[derive(Clone, Debug)]
 pub(crate) struct AuthSession {
-    pub origin: String,
+    pub redirect_uri: String,
+    pub client_id: String,
+    pub state: Option<String>,
+    pub nonce: Option<String>,
     pub callback: Option<CallbackUrl>,
-    pub continue_url: String,
+    // PKCE
+    pub code_challenge: String,
 
     pub validated_user: Option<UserData>,
+    pub datasharing_confirmed: bool,
+    pub redirect_requires_datasharing: bool,
+}
+impl AuthSession {
+    pub(crate) fn provider_callback_next_url(&self, code: &str) -> String {
+        if self.redirect_requires_datasharing && !self.datasharing_confirmed {
+            format!(
+                "/confirm-datasharing/?code={code}&host={}",
+                self.redirect_uri
+                    .split('/')
+                    .nth(2)
+                    .unwrap_or(&self.redirect_uri)
+            )
+        } else {
+            let query_start = if self.redirect_uri.contains('?') {
+                '&'
+            } else {
+                '?'
+            };
+            if let Some(state) = &self.state {
+                format!(
+                    "{}{query_start}code={code}&state={}",
+                    self.redirect_uri, state
+                )
+            } else {
+                format!("{}{query_start}code={code}", self.redirect_uri)
+            }
+        }
+    }
 }
 #[derive(Serialize, Clone, Debug)]
 pub(crate) struct UserData {
@@ -41,13 +77,15 @@ impl CallbackUrlVersion<'_> {
         }
     }
 }
-#[derive(Clone, Debug, Object)]
+#[derive(Clone, Debug, Object, Deserialize, Serialize)]
 pub struct CallbackUrl {
-    v1: String,
+    callback_url_v1: String,
 }
 impl CallbackUrl {
     pub fn as_latest(&self) -> CallbackUrlVersion<'_> {
-        CallbackUrlVersion::V1 { url: &self.v1 }
+        CallbackUrlVersion::V1 {
+            url: &self.callback_url_v1,
+        }
     }
 }
 
@@ -63,7 +101,7 @@ pub(crate) struct Context {
 
     // keys
     pub private_key: EncodingKey,
-    pub public_key: Vec<u8>,
+    pub jwks: JwkSet,
     pub saml_private_key: openssl::pkey::PKey<openssl::pkey::Private>,
 
     pub service_provider: ServiceProvider,
@@ -75,17 +113,16 @@ pub(crate) struct Context {
     pub email_token_holding: Cache<String, api::EmailLoginRequest>,
 }
 impl Context {
-    fn get_jwt_keys() -> color_eyre::Result<(EncodingKey, Vec<u8>)> {
+    fn get_jwt_keys() -> color_eyre::Result<(EncodingKey, JwkSet)> {
         let key = std::env::var("PRIVATE_KEY").wrap_err("`PRIVATE_KEY` not detected")?;
         let key = base64::prelude::BASE64_STANDARD
             .decode(key)
             .wrap_err("`PRIVATE_KEY` not base64 encoded")?;
-        let ed_key = ed25519_dalek::SigningKey::from_pkcs8_der(&key)
-            .wrap_err("`PRIVATE_KEY` not valid EdDSA key")?;
-        let verifying_key = ed_key.verifying_key();
         let encoding_key = EncodingKey::from_ed_der(&key);
-        let public_key = verifying_key.as_bytes().to_vec();
-        Ok((encoding_key, public_key))
+        let mut jwk = Jwk::from_encoding_key(&encoding_key, jsonwebtoken::Algorithm::EdDSA)?;
+        jwk.common.key_id = Some("main".to_owned());
+        let keys = JwkSet { keys: vec![jwk] };
+        Ok((encoding_key, keys))
     }
     /// # Errors
     ///
@@ -103,7 +140,7 @@ impl Context {
             )
             .try_init();
 
-        let (private_key, public_key) = Self::get_jwt_keys()?;
+        let (private_key, jwks) = Self::get_jwt_keys()?;
 
         let db = if let Some(db) = db {
             db
@@ -146,7 +183,7 @@ impl Context {
             reqwest_client: reqwest::Client::new(),
             email,
             private_key,
-            public_key,
+            jwks,
             service_provider: sp,
             saml_private_key: saml_pk,
             // keep them for 30 minutes
