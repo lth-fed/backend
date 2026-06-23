@@ -1,60 +1,18 @@
 use std::ops::Deref;
 
-use fed_auth_verifier::User;
 use lettre::AsyncTransport as _;
 use poem::http::StatusCode;
-use poem::http::uri::PathAndQuery;
-use poem::web::cookie::CookieJar;
-use poem_openapi::payload::{Binary, Json, PlainText, Response};
+use poem_openapi::payload::{Json, PlainText};
 use poem_openapi::{Object, OpenApi};
-use tracing::{debug, error, warn};
-use uuid::Uuid;
+use tracing::error;
 
-use crate::{Context, DOMAIN, context, cookie, jwt, random_id};
+use crate::{Context, WEBSITE_DOMAIN, context, random_id};
 
-const ALLOWED_DOMAINS: &[&str] = &[
-    "https://teknologappen.se",
-    "https://api.teknologappen.se",
-    "https://auth.esek.se",
-    "https://fsektionen.se",
-    "https://auth.dsek.se",
-    // ios app
-    "capacitor://localhost",
-    // android app
-    "https://localhost",
-];
-fn is_allowed_domain<'a>(domain: &impl PartialEq<&'a str>) -> bool {
-    #[cfg(debug_assertions)]
-    if *domain == "http://localhost:5173" || *domain == "http://localhost:8000" || *domain == DOMAIN
-    {
-        return true;
-    }
-    ALLOWED_DOMAINS.iter().any(|allowed| *domain == *allowed)
-}
-
-#[derive(Object)]
-struct RefreshResponse {
-    access_token: String,
-}
-#[derive(Object)]
-struct ConfirmRequest {
-    accepted: bool,
-    id: String,
-}
-#[derive(Object, Clone)]
-struct ConfirmResponse {
-    url: String,
-}
-#[derive(Object)]
-pub struct ProviderRequest {
-    continue_url: String,
-    callback: Option<context::CallbackUrl>,
-}
 #[derive(Object, Clone)]
 pub(crate) struct EmailLoginRequest {
     email: String,
     name: String,
-    id: String,
+    code: String,
 }
 #[derive(Object)]
 struct EmailApproveResponse {
@@ -64,7 +22,7 @@ struct EmailApproveResponse {
 struct TestLoginRequest {
     stil_id: String,
     name: String,
-    id: String,
+    code: String,
 }
 
 #[derive(Clone)]
@@ -398,10 +356,13 @@ impl MainRouter {
         body: Json<EmailLoginRequest>,
         headers: &poem::http::HeaderMap,
     ) -> poem::Result<()> {
-        if headers.get("origin").is_some_and(|origin| origin != DOMAIN) {
+        if headers
+            .get("origin")
+            .is_some_and(|origin| origin != WEBSITE_DOMAIN)
+        {
             return Err(StatusCode::BAD_REQUEST.into());
         }
-        if !self.auth_sessions.contains_key(&body.id) {
+        if !self.auth_sessions.contains_key(&body.code) {
             return Err(StatusCode::UNAUTHORIZED.into());
         }
         if !body.name.contains(' ') || body.name.len() < 5 {
@@ -410,7 +371,7 @@ impl MainRouter {
         let token = random_id();
         // having this as format_args made the await point for lettre fail because format_args is
         // not Send??
-        let link = format!("{DOMAIN}/providers/email/approve/?token={token}");
+        let link = format!("{WEBSITE_DOMAIN}/providers/email/approve/?token={token}");
         if let Some((from, email)) = &self.email {
             let html = format!(
                 "<p>Någon har försökt logga in med denna e-post adress. Om detta inte var du bör du slänga detta mailet. Tryck på länken för att logga in.</p><p><a href='{link}'>{link}</a>"
@@ -454,27 +415,29 @@ impl MainRouter {
         body: Json<EmailApproveResponse>,
         headers: &poem::http::HeaderMap,
     ) -> poem::Result<PlainText<String>> {
-        if headers.get("origin").is_some_and(|origin| origin != DOMAIN) {
+        if headers
+            .get("origin")
+            .is_some_and(|origin| origin != WEBSITE_DOMAIN)
+        {
             return Err(StatusCode::BAD_REQUEST.into());
         }
         let Some(login_data) = self.email_token_holding.get(&body.token) else {
             return Err(StatusCode::UNAUTHORIZED.into());
         };
-        let Some(mut data) = self.auth_sessions.get(&login_data.id) else {
+        let Some(mut session) = self.auth_sessions.get(&login_data.code) else {
             return Err(StatusCode::UNAUTHORIZED.into());
         };
-        data.validated_user = Some(context::UserData {
+        session.validated_user = Some(context::UserData {
             sub: format!("mail:{}", login_data.email),
             full_name: login_data.name,
             email: login_data.email,
         });
         self.auth_sessions
-            .insert(login_data.id.clone(), data.clone());
+            .insert(login_data.code.clone(), session.clone());
 
-        Ok(PlainText(format!(
-            "/confirm-datasharing/?id={}&origin={}",
-            login_data.id, data.origin
-        )))
+        Ok(PlainText(
+            session.provider_callback_next_url(&login_data.code),
+        ))
     }
     /// Corresponds to acs in saml
     #[oai(path = "/providers/test/approve", method = "post")]
@@ -483,22 +446,23 @@ impl MainRouter {
         body: Json<TestLoginRequest>,
         headers: &poem::http::HeaderMap,
     ) -> poem::Result<PlainText<String>> {
-        if headers.get("origin").is_some_and(|origin| origin != DOMAIN) {
+        if headers
+            .get("origin")
+            .is_some_and(|origin| origin != WEBSITE_DOMAIN)
+        {
             return Err(StatusCode::BAD_REQUEST.into());
         }
-        let Some(mut data) = self.auth_sessions.get(&body.id) else {
+        let Some(mut session) = self.auth_sessions.get(&body.code) else {
             return Err(StatusCode::UNAUTHORIZED.into());
         };
-        data.validated_user = Some(context::UserData {
+        session.validated_user = Some(context::UserData {
             sub: format!("test:{}", body.stil_id),
             full_name: body.name.clone(),
             email: format!("{}@student.lu.se", body.stil_id),
         });
-        self.auth_sessions.insert(body.id.clone(), data.clone());
+        self.auth_sessions
+            .insert(body.code.clone(), session.clone());
 
-        Ok(PlainText(format!(
-            "/confirm-datasharing/?id={}&origin={}",
-            body.id, data.origin
-        )))
+        Ok(PlainText(session.provider_callback_next_url(&body.code)))
     }
 }

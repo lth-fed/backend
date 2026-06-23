@@ -16,11 +16,12 @@ base64.workspace = true
 bin-common = { version = "0.1.0", path = "../bin-common" }
 color-eyre.workspace = true
 dotenvy.workspace = true
-ed25519-dalek = "2.2.0"
+# ed25519-dalek = "2.2.0"
 fed-auth-verifier.path = "../fed-auth-verifier"
 jsonwebtoken.workspace = true
 lettre.workspace = true
 mini-moka = "0.10.3"
+minilith-errors = { version = "0.1.0", path = "../minilith-errors" }
 openssl = "0.10.79"
 opentelemetry.workspace = true
 poem.workspace = true
@@ -31,6 +32,9 @@ rust-embed.workspace = true
 #samael = "0.0.20"
 samael = { git = "https://github.com/njaremko/samael.git", rev = "f879f1942ec1b34b6d3027ce7e4724ad95d15dfa" }
 serde.workspace = true
+serde_json.workspace = true
+serde_urlencoded = "0.7.1"
+sha2 = "0.11.0"
 sqlx.workspace = true
 sqlx-tracing.workspace = true
 tokio = { workspace = true, features = ["fs", "rt-multi-thread", "macros", "sync"] }

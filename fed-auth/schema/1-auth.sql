@@ -1,6 +1,8 @@
 create table auth_refresh_tokens (
-    user_id text not null,
-    domain text not null,
     refresh_token uuid not null,
-    primary key (refresh_token, domain)
+    client_id text not null,
+    user_id text not null,
+    nonce text,
+    auth_time timestamptz not null,
+    primary key (refresh_token, client_id)
 );

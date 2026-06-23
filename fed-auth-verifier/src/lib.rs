@@ -1,12 +1,14 @@
-use jsonwebtoken::{Algorithm, Validation};
+use jsonwebtoken::jwk::JwkSet;
+use jsonwebtoken::{Algorithm, DecodingKey, TokenData, Validation, decode_header};
 use minilith_errors::{MinilithEndpointError, MinilithErrorResultExt as _};
 use poem::http::StatusCode;
 use poem_openapi::auth::Bearer;
 use poem_openapi::{ApiExtractor, Object, SecurityScheme};
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use tracing::error;
 
-const AUTH_KEY_URL: &str = "https://auth.teknologappen.se/api/v0/verifying-key";
+const AUTH_KEY_URL: &str = "https://auth.teknologappen.se/api/v0/oidc/certs";
 const TESTING: Option<&str> = option_env!("TESTING");
 fn is_testing() -> bool {
     matches!(TESTING, Some("true" | "yes" | "1"))
@@ -15,7 +17,7 @@ fn is_testing() -> bool {
 #[derive(Clone, Debug)]
 #[must_use]
 pub struct AuthContext {
-    auth_key: jsonwebtoken::DecodingKey,
+    jwks: JwkSet,
     validation: Validation,
 }
 impl AuthContext {
@@ -29,22 +31,17 @@ impl AuthContext {
         if resp.status() != StatusCode::OK {
             return Err(color_eyre::eyre::Error::msg("failed getting verifying key"));
         }
-        let der = resp.bytes().await?;
-        if der.len() != 32 {
-            return Err(color_eyre::eyre::Error::msg(
-                "verifying key is wrong length",
-            ));
-        }
-        let auth_key = jsonwebtoken::DecodingKey::from_ed_der(&der);
-        Ok(Self::from_decoding_key(auth_key))
+        let bytes = resp.bytes().await?;
+        let jwks = serde_json::from_slice(&bytes)?;
+        Ok(Self::from_jwks(jwks))
     }
-    pub fn from_decoding_key(auth_key: jsonwebtoken::DecodingKey) -> Self {
+    pub fn from_jwks(jwks: JwkSet) -> Self {
         let mut validation = Validation::new(Algorithm::EdDSA);
         validation.validate_nbf = true;
         validation.set_audience(&["teknologappen.se"]);
 
         Self {
-            auth_key,
+            jwks,
             validation,
         }
     }
@@ -53,6 +50,48 @@ impl AuthContext {
 #[derive(Deserialize)]
 struct Claims {
     sub: String,
+}
+
+fn decode_jwt<T: DeserializeOwned>(
+    token: &str,
+    context: &AuthContext,
+) -> Result<TokenData<T>, MinilithEndpointError> {
+    let header = decode_header(token).map_err(|_| {
+        MinilithEndpointError::unauthorized(
+            "EXTR_NOUSR",
+            "You don't have a valid login-session. \
+            Try logging out and in again or clearing cookies.",
+        )
+    })?;
+
+    let Some(kid) = header.kid else {
+        return Err(MinilithEndpointError::bad_frontend_code(
+            "AUTH_ACCESS_NO_KID",
+            "your access token has no key ID which means we cannot validate it",
+        ));
+    };
+
+    let Some(jwk) = context.jwks.find(&kid) else {
+        return Err(MinilithEndpointError::unauthorized(
+            "ACCESS_KID_INVALID",
+            "your access token has an invalid key ID associated with it",
+        ));
+    };
+    let Ok(key) = DecodingKey::from_jwk(jwk) else {
+        return Err(MinilithEndpointError::internal_error(
+            "AUTH_ACCESS_JWK_INVALID",
+            MinilithErrorKind::Other,
+            "internal error, jwk invalid",
+        ));
+    };
+
+    jsonwebtoken::decode(token, &key, &context.validation).map_err(|_| {
+        MinilithEndpointError::unauthorized(
+            "EXTR_NOUSR",
+            "You don't have a valid login-session. \
+            Try logging out and in again or clearing cookies.",
+        )
+    })
 }
 
 /// Returns the logged in user. Spec says `OAuth2` but it really is OIDC but without automatic
@@ -91,9 +130,7 @@ impl User {
             MinilithEndpointError::internal_error("AuthContext not registered as data!")
         })?;
 
-        let data =
-            jsonwebtoken::decode::<Claims>(&token.token, &context.auth_key, &context.validation)
-                .wrap_err_unauthorized("decode failed")?;
+        let data = decode_jwt::<Claims>(&token.token, context)?;
         Ok(data.claims.sub)
     }
 }
@@ -176,11 +213,8 @@ impl<'a> ApiExtractor<'a> for CallbackDataV1 {
         let body = body
             .into_string()
             .await
-            .wrap_err_bad_user("invalid utf8 body", "<body>")?;
-        let data: CallbackDataV1 =
-            jsonwebtoken::decode(&body, &context.auth_key, &context.validation)
-                .wrap_err_unauthorized("jwt invalid on decode")?
-                .claims;
-        Ok(data)
+            .wrap_err_bad_user("AUTH_CB_BDY_UTF8", "<body>")?;
+        let data = decode_jwt::<CallbackDataV1>(&body, context)?;
+        Ok(data.claims)
     }
 }
