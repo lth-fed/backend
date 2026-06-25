@@ -11,7 +11,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use tracing::error;
 
-const AUTH_KEY_URL: &str = "https://auth.teknologappen.se/api/v0/oidc/certs";
+const AUTH_KEY_URL: &str = "https://auth.teknologappen.se/oidc/v1/certs";
 const TESTING: Option<&str> = option_env!("TESTING");
 fn is_testing() -> bool {
     matches!(TESTING, Some("true" | "yes" | "1"))
