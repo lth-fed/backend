@@ -73,7 +73,7 @@ pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl po
         env!("CARGO_PKG_VERSION"),
     )
     // this url is just for the Swagger UI
-    .server(server_url);
+    .server(format!("{server_url}/api/v0"));
     let ui = api_service.swagger_ui();
     let spec = api_service.spec_endpoint();
     let oidc_service = OpenApiService::new(
@@ -84,7 +84,7 @@ pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl po
         env!("CARGO_PKG_VERSION"),
     )
     // this url is just for the Swagger UI
-    .server(server_url);
+    .server(format!("{server_url}/oidc/v1"));
     let oidc_ui = oidc_service.swagger_ui();
     let oidc_spec = oidc_service.spec_endpoint();
     let saml_service = OpenApiService::new(
@@ -93,7 +93,7 @@ pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl po
         env!("CARGO_PKG_VERSION"),
     )
     // this url is just for the Swagger UI
-    .server(server_url);
+    .server(format!("{server_url}/saml2/"));
     let saml_ui = saml_service.swagger_ui();
     let saml_spec = saml_service.spec_endpoint();
 

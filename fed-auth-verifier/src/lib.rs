@@ -1,4 +1,7 @@
-use jsonwebtoken::jwk::JwkSet;
+use base64::Engine as _;
+use base64::prelude::BASE64_URL_SAFE_NO_PAD;
+use ed25519_dalek::VerifyingKey;
+use jsonwebtoken::jwk::{Jwk, JwkSet};
 use jsonwebtoken::{Algorithm, DecodingKey, TokenData, Validation, decode_header};
 use minilith_errors::{MinilithEndpointError, MinilithErrorResultExt as _};
 use poem::http::StatusCode;
@@ -12,6 +15,30 @@ const AUTH_KEY_URL: &str = "https://auth.teknologappen.se/api/v0/oidc/certs";
 const TESTING: Option<&str> = option_env!("TESTING");
 fn is_testing() -> bool {
     matches!(TESTING, Some("true" | "yes" | "1"))
+}
+
+/// [`jsonwebtoken`] doesn't support `EdDSA` :(
+/// With `kid="main"`.
+///
+/// It can however decode and verify signatures.
+#[must_use]
+pub fn eddsa_to_jwk(key: &VerifyingKey) -> Jwk {
+    // we have to do this bullshit ourselves because Jwk::from_encoding_key doesn't work!
+    let compressed_point = key.to_edwards().compress().to_bytes();
+
+    Jwk {
+        common: jsonwebtoken::jwk::CommonParameters {
+            key_id: Some("main".to_owned()),
+            ..Default::default()
+        },
+        algorithm: jsonwebtoken::jwk::AlgorithmParameters::OctetKeyPair(
+            jsonwebtoken::jwk::OctetKeyPairParameters {
+                key_type: jsonwebtoken::jwk::OctetKeyPairType::OctetKeyPair,
+                curve: jsonwebtoken::jwk::EllipticCurve::Ed25519,
+                x: BASE64_URL_SAFE_NO_PAD.encode(compressed_point),
+            },
+        ),
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -32,7 +59,7 @@ impl AuthContext {
             return Err(color_eyre::eyre::Error::msg("failed getting verifying key"));
         }
         let bytes = resp.bytes().await?;
-        let jwks = serde_json::from_slice(&bytes)?;
+        let jwks: JwkSet = serde_json::from_slice(&bytes)?;
         Ok(Self::from_jwks(jwks))
     }
     pub fn from_jwks(jwks: JwkSet) -> Self {
@@ -40,10 +67,7 @@ impl AuthContext {
         validation.validate_nbf = true;
         validation.set_audience(&["teknologappen.se"]);
 
-        Self {
-            jwks,
-            validation,
-        }
+        Self { jwks, validation }
     }
 }
 
@@ -58,7 +82,7 @@ fn decode_jwt<T: DeserializeOwned>(
 ) -> Result<TokenData<T>, MinilithEndpointError> {
     let header = decode_header(token).map_err(|_| {
         MinilithEndpointError::unauthorized(
-            "EXTR_NOUSR",
+            "MAL_JWT_HEADER",
             "You don't have a valid login-session. \
             Try logging out and in again or clearing cookies.",
         )
@@ -87,7 +111,7 @@ fn decode_jwt<T: DeserializeOwned>(
 
     jsonwebtoken::decode(token, &key, &context.validation).map_err(|_| {
         MinilithEndpointError::unauthorized(
-            "EXTR_NOUSR",
+            "NOUSR",
             "You don't have a valid login-session. \
             Try logging out and in again or clearing cookies.",
         )
@@ -104,16 +128,33 @@ fn decode_jwt<T: DeserializeOwned>(
 ///
 /// [`MinilithEndpointError`]. UK, AUTH.
 #[derive(Debug, SecurityScheme)]
-#[oai(
-    ty = "oauth2",
-    key_in = "header",
-    key_name = "authorization",
-    bearer_format = "JWT",
-    flows(authorization_code(
-        authorization_url = "https://auth.teknologappen.se/oidc/authorize",
-        token_url = "https://auth.teknologappen.se/oidc/token",
-    )),
-    checker = "User::from_token"
+#[cfg_attr(
+    debug_assertions,
+    oai(
+        ty = "oauth2",
+        key_in = "header",
+        key_name = "authorization",
+        bearer_format = "JWT",
+        flows(authorization_code(
+            authorization_url = "http://localhost:8001/oidc/v1/authorize",
+            token_url = "http://localhost:8001/oidc/v1/token",
+        )),
+        checker = "User::from_token"
+    )
+)]
+#[cfg_attr(
+    not(debug_assertions),
+    oai(
+        ty = "oauth2",
+        key_in = "header",
+        key_name = "authorization",
+        bearer_format = "JWT",
+        flows(authorization_code(
+            authorization_url = "https://auth.teknologappen.se/oidc/v1/authorize",
+            token_url = "https://auth.teknologappen.se/oidc/v1/token",
+        )),
+        checker = "User::from_token"
+    )
 )]
 pub struct User(String);
 impl User {
