@@ -2088,6 +2088,7 @@ dependencies = [
  "color-eyre",
  "dotenvy",
  "fed-auth-verifier",
+ "jsonwebtoken",
  "minilith-errors",
  "opentelemetry",
  "opentelemetry-appender-tracing",

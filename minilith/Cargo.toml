@@ -34,6 +34,7 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+jsonwebtoken.workspace = true
 poem = { workspace = true, features = ["test"] }
 
 [lints]
