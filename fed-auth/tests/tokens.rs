@@ -12,18 +12,16 @@ const INITIAL_TOKEN: &str = "2e9c8efc-c612-4fe7-af15-37b381e712fa";
 async fn refresh(db: PgPool) -> color_eyre::Result<()> {
     let app = lib::get_test_client(db).await?;
     let response = app
-        .post("/api/v0/refresh")
-        .header("origin", "https://localhost")
-        .header(
-            "cookie",
-            format!("teknologappen-auth-refresh-token={INITIAL_TOKEN}"),
-        )
+        .get(format!(
+            "/oidc/v1/token?grant_type=refresh_token&refresh_token={INITIAL_TOKEN}"
+        ))
         .send()
         .await;
     response.assert_status_is_ok();
-    response.assert_header_exist("set-cookie");
     let json = response.json().await;
     json.value().object().get("access_token").string();
+    json.value().object().get("refresh_token").string();
+    json.value().object().get("id_token").string();
     Ok(())
 }
 
@@ -31,21 +29,16 @@ async fn refresh(db: PgPool) -> color_eyre::Result<()> {
 async fn valid(db: PgPool) -> color_eyre::Result<()> {
     let app = lib::get_test_client(db).await?;
     let response = app
-        .post("/api/v0/refresh")
-        .header("origin", "https://localhost")
-        .header(
-            "cookie",
-            format!("teknologappen-auth-refresh-token={INITIAL_TOKEN}"),
-        )
+        .get(format!(
+            "/oidc/v1/token?grant_type=refresh_token&refresh_token={INITIAL_TOKEN}"
+        ))
         .send()
         .await;
     response.assert_status_is_ok();
-    response.assert_header_exist("set-cookie");
     let json = response.json().await;
     let access_token = json.value().object().get("access_token").string();
     let response = app
-        .post("/api/v0/verify-access-token")
-        .header("origin", "https://localhost")
+        .post("/oidc/v1/userinfo")
         .header("authorization", format!("Bearer {access_token}"))
         .send()
         .await;
@@ -57,56 +50,38 @@ async fn valid(db: PgPool) -> color_eyre::Result<()> {
 async fn refresh_consumes_token(db: PgPool) -> color_eyre::Result<()> {
     let app = lib::get_test_client(db).await?;
     let response = app
-        .post("/api/v0/refresh")
-        .header("origin", "https://localhost")
-        .header(
-            "cookie",
-            format!("teknologappen-auth-refresh-token={INITIAL_TOKEN}"),
-        )
+        .get(format!(
+            "/oidc/v1/token?grant_type=refresh_token&refresh_token={INITIAL_TOKEN}"
+        ))
         .send()
         .await;
-    response.assert_header_exist("set-cookie");
+    response.assert_status_is_ok();
     let response = app
-        .post("/api/v0/refresh")
-        .header("origin", "https://localhost")
-        .header(
-            "cookie",
-            format!("teknologappen-auth-refresh-token={INITIAL_TOKEN}"),
-        )
+        .get(format!(
+            "/oidc/v1/token?grant_type=refresh_token&refresh_token={INITIAL_TOKEN}"
+        ))
         .send()
         .await;
-    response.assert_status(StatusCode::UNAUTHORIZED);
+    response.assert_status(StatusCode::BAD_REQUEST);
     Ok(())
 }
 #[sqlx::test(fixtures("refresh-token"))]
 async fn refresh_returns_new_refresh(db: PgPool) -> color_eyre::Result<()> {
     let app = lib::get_test_client(db).await?;
     let response = app
-        .post("/api/v0/refresh")
-        .header("origin", "https://localhost")
-        .header(
-            "cookie",
-            format!("teknologappen-auth-refresh-token={INITIAL_TOKEN}"),
-        )
+        .get(format!(
+            "/oidc/v1/token?grant_type=refresh_token&refresh_token={INITIAL_TOKEN}"
+        ))
         .send()
         .await;
-    response.assert_header_exist("set-cookie");
-    let new_token = response.0.header("set-cookie").unwrap();
-    let new_token = new_token
-        .strip_prefix("teknologappen-auth-refresh-token=")
-        .unwrap()
-        .split(';')
-        .next()
-        .unwrap();
+    let body = response.json().await;
+    let new_token = body.value().object().get("refresh_token").string();
     let response = app
-        .post("/api/v0/refresh")
-        .header("origin", "https://localhost")
-        .header(
-            "cookie",
-            format!("teknologappen-auth-refresh-token={new_token}"),
-        )
+        .get(format!(
+            "/oidc/v1/token?grant_type=refresh_token&refresh_token={new_token}"
+        ))
         .send()
         .await;
-    response.assert_header_exist("set-cookie");
+    response.assert_status_is_ok();
     Ok(())
 }

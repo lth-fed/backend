@@ -15,4 +15,12 @@ pub fn encode(claims: impl Serialize, signing_key: &jsonwebtoken::EncodingKey) -
 #[derive(Object, Serialize)]
 pub struct AccesTokenClaims {
     pub sub: String,
+    pub exp: u64,
+    pub iat: u64,
+    pub nbf: u64,
+    pub aud: String,
+}
+#[derive(Object, Serialize)]
+pub struct UserInfoClaims {
+    pub sub: String,
 }

@@ -2,63 +2,45 @@
 #![cfg(test)]
 
 use poem::http::Uri;
-use serde::Serialize;
+use reqwest::StatusCode;
+use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 mod lib;
 
 #[sqlx::test]
 async fn test(db: PgPool) -> color_eyre::Result<()> {
     #[derive(Serialize)]
-    struct RequestBody {
-        continue_url: String,
-    }
-    #[derive(Serialize)]
     struct DataBody {
-        id: String,
+        code: String,
         name: String,
         stil_id: String,
     }
     #[derive(Serialize)]
     struct ConfirmBody {
-        id: String,
+        code: String,
         accepted: bool,
+    }
+    #[derive(Deserialize)]
+    struct ResponseQuery {
+        code: String,
+        state: String,
     }
 
     let app = lib::get_test_client(db).await?;
     let response = app
-        .post("/api/v0/providers/test")
-        .header("content-type", "application/json")
-        .header("origin", "https://auth.esek.se")
-        .body_json(&RequestBody {
-            continue_url: "https://auth.esek.se/auth/return".to_owned(),
-        })
+        .get("/oidc/v1/authorize?client_id=esek&redirect_uri=https%3A%2F%2Fauth.esek.se%2Fcallback&response_type=code&scope=openid&state=d8b16b2b-7270-481b-ad4d-460cf36cde7f&code_challenge=0eEMCayyIHqsvVRCbxGQ_Q1JnuxkIaiInrC7fNndDZg&code_challenge_method=S256&providers=test")
         .send()
         .await;
-    response.assert_status_is_ok();
-    let body = response.0.into_body().into_string().await.unwrap();
-    println!("body: {body}");
-    let url: Uri = body.parse().unwrap();
+    response.assert_status(StatusCode::FOUND);
+    let url: Uri = response.0.header("location").unwrap().parse().unwrap();
     println!("Url: {url}");
     let query = url.query().unwrap();
-    let id = query.strip_prefix("id=").unwrap();
-    println!("{id}");
-    // the test provider doesn't check name
-    // let response = app
-    //     .post("/api/v0/providers/test/approve")
-    //     .header("origin", "https://auth.esek.se")
-    //     .header("content-type", "application/json")
-    //     .body_json(&Body {
-    //         id: id.to_owned(),
-    //         name: "Hej".to_owned(),
-    //         stil_id: "er8380da-s".to_owned(),
-    //     })
-    //     .send()
-    //     .await;
-    // response.assert_status(StatusCode::BAD_REQUEST);
+    let code = query.strip_prefix("code=").unwrap();
+    println!("{code}");
     let response = app
         .post("/api/v0/providers/test/approve")
         .body_json(&DataBody {
-            id: id.to_owned(),
+            code: code.to_owned(),
             name: "Erik Davidsson".to_owned(),
             stil_id: "er8380da-s".to_owned(),
         })
@@ -66,49 +48,49 @@ async fn test(db: PgPool) -> color_eyre::Result<()> {
         .await;
     response.assert_status_is_ok();
     let response = app
-        .post("/api/v0/confirm-datasharing")
+        .post("/oidc/v1/confirm-datasharing")
         .body_json(&ConfirmBody {
-            id: id.to_owned(),
+            code: code.to_owned(),
             accepted: true,
         })
         .send()
         .await;
     response.assert_status_is_ok();
     println!("{:?}", response.0);
-    response.assert_header_exist("set-cookie");
-    let token = response.0.header("set-cookie").unwrap();
-    let token = token
-        .strip_prefix("teknologappen-auth-refresh-token=")
-        .unwrap()
-        .split(';')
-        .next()
-        .unwrap()
-        .to_owned();
-    let json = response.json().await;
-    let url = json.value().object().get("url").string();
-    assert!(url.starts_with("https://auth.esek.se/auth/return?validated=true"));
+    let body = response.json().await;
+    let body_url = body.value().object().get("url").string();
+    println!("body.url: {body_url}");
+    let url: Uri = body_url.parse().unwrap();
+    let query = url.query().unwrap();
+    let params: ResponseQuery = serde_urlencoded::from_str(query).unwrap();
+    let code = &params.code;
+    assert_eq!(params.state, "d8b16b2b-7270-481b-ad4d-460cf36cde7f");
+    assert_eq!(url.host(), Some("auth.esek.se"));
+    assert_eq!(url.path(), "/callback");
 
-    println!("refresh token: {token}");
     let response = app
-        .post("/api/v0/refresh")
-        .header("origin", "https://auth.esek.se")
-        .header(
-            "cookie",
-            format!("teknologappen-auth-refresh-token={token}"),
-        )
+        .get(format!("/oidc/v1/token?code={code}&code_verifier=mCDrfQLIngfAIJo4tr54iKLJKpgWM-jsjX3VGa8YV0U&grant_type=authorization_code&client_id=esek&redirect_uri=https%3A%2F%2Fauth.esek.se%2Fcallback"))
         .send()
         .await;
     response.assert_status_is_ok();
-    response.assert_header_exist("set-cookie");
     let json = response.json().await;
     let access_token = json.value().object().get("access_token").string();
+    println!("at: {access_token}");
+    json.value().object().get("refresh_token").string();
+    json.value().object().get("id_token").string();
 
     let response = app
-        .post("/api/v0/verify-access-token")
-        .header("origin", "https://auth.esek.se")
-        .header("Authorization", format!("Bearer {access_token}"))
+        .post("/oidc/v1/userinfo")
+        .header("authorization", format!("Bearer {access_token}"))
         .send()
         .await;
     response.assert_status_is_ok();
+    response
+        .json()
+        .await
+        .value()
+        .object()
+        .get("sub")
+        .assert_string("test:er8380da-s");
     Ok(())
 }
