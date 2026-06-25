@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into auth_refresh_tokens\n                (refresh_token, client_id, user_id, auth_time, nonce)\n            values ($1, $2, $3, $4, $5)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3fb495f854077f84457a6e47f1490d800107ddf7d99b53e3ddb43cb378922a3b"
+}

@@ -50,22 +50,30 @@ pub struct AuthContext {
 impl AuthContext {
     /// This can not be used by `fed-auth`, since that's the service which this depends on!
     ///
+    /// If audience is empty, it's not checked. Audience is your `client_id`.
+    ///
     /// # Errors
     ///
     /// Returns an error if it was not possible to get the verifying key.
-    pub async fn new() -> color_eyre::Result<Self> {
+    pub async fn new(audience: impl Into<String>) -> color_eyre::Result<Self> {
         let resp = reqwest::get(AUTH_KEY_URL).await?;
         if resp.status() != StatusCode::OK {
             return Err(color_eyre::eyre::Error::msg("failed getting verifying key"));
         }
         let bytes = resp.bytes().await?;
         let jwks: JwkSet = serde_json::from_slice(&bytes)?;
-        Ok(Self::from_jwks(jwks))
+        Ok(Self::from_jwks(audience, jwks))
     }
-    pub fn from_jwks(jwks: JwkSet) -> Self {
+    /// If audience is empty, it's not checked. Audience is your `client_id`.
+    pub fn from_jwks(audience: impl Into<String>, jwks: JwkSet) -> Self {
         let mut validation = Validation::new(Algorithm::EdDSA);
         validation.validate_nbf = true;
-        validation.set_audience(&["teknologappen.se"]);
+        let aud = audience.into();
+        if aud.is_empty() {
+            validation.validate_aud = false;
+        } else {
+            validation.set_audience(&[aud]);
+        }
 
         Self { jwks, validation }
     }
@@ -108,7 +116,6 @@ fn decode_jwt<T: DeserializeOwned>(
             "internal error, jwk invalid",
         ));
     };
-
     jsonwebtoken::decode(token, &key, &context.validation).map_err(|_| {
         MinilithEndpointError::unauthorized(
             "NOUSR",

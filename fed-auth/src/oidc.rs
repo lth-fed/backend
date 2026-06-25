@@ -138,6 +138,7 @@ struct IdTokenClaims {
     sub: String,
     aud: String,
     exp: u64,
+    nbf: u64,
     iat: u64,
     auth_time: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -341,26 +342,32 @@ impl MainRouter {
 
         let new_refresh = Uuid::new_v4();
         sqlx::query!(
-                    "insert into auth_refresh_tokens (refresh_token, client_id, user_id, auth_time, nonce) values ($1, $2, $3, $4, $5)",
-                    new_refresh,
-                    row.client_id,
-                    user_id,
-                    row.auth_time,
-                    None::<String>,
-                )
-                .execute(&mut *conn)
-                .await
-                .map_err(OAuth2ApiResponse::db)?;
+            "insert into auth_refresh_tokens
+                (refresh_token, client_id, user_id, auth_time, nonce)
+            values ($1, $2, $3, $4, $5)",
+            new_refresh,
+            row.client_id,
+            user_id,
+            row.auth_time,
+            None::<String>,
+        )
+        .execute(&mut *conn)
+        .await
+        .map_err(OAuth2ApiResponse::db)?;
 
         conn.commit().await.map_err(OAuth2ApiResponse::db)?;
 
+        let now = jsonwebtoken::get_current_timestamp();
         let claims = jwt::AccesTokenClaims {
             sub: user_id.clone(),
+            aud: row.client_id.clone(),
+            exp: now + ACCESS_TOKEN_VALID_FOR,
+            iat: now,
+            nbf: now,
         };
         let access_token =
             jwt::encode(claims, &self.private_key).ok_or(OAuth2ApiResponse::Internal)?;
 
-        let now = jsonwebtoken::get_current_timestamp();
         #[allow(clippy::cast_sign_loss, reason = "we are taking the abs before!")]
         let id_token = IdTokenClaims {
             iss: WEBSITE_DOMAIN.to_owned(),
@@ -368,6 +375,7 @@ impl MainRouter {
             aud: row.client_id,
             exp: now + ACCESS_TOKEN_VALID_FOR,
             iat: now,
+            nbf: now,
             auth_time: (row.auth_time - OffsetDateTime::UNIX_EPOCH)
                 .whole_seconds()
                 .wrapping_abs() as u64,
@@ -383,6 +391,11 @@ impl MainRouter {
                 .ok_or(OAuth2ApiResponse::Internal)?,
         }))
     }
+    #[allow(
+        clippy::too_many_lines,
+        reason = "it's a linear function and it makes sense, extracting sql
+        calls would not make it much easier to read"
+    )]
     async fn handle_authorize_token(
         &self,
         mut auth: TokenAuthoriationBody,
@@ -398,6 +411,12 @@ impl MainRouter {
             return Err(OAuth2ApiResponse::oauth2error(
                 OAuth2ErrorKind::InvalidRequest,
                 "redirect_uri must match",
+            ));
+        }
+        if session.client_id != auth.client_id {
+            return Err(OAuth2ApiResponse::oauth2error(
+                OAuth2ErrorKind::InvalidRequest,
+                "client_id must match",
             ));
         }
         let mut hash = sha2::Sha256::new();
@@ -459,9 +478,10 @@ impl MainRouter {
         let id_token = IdTokenClaims {
             iss: WEBSITE_DOMAIN.to_owned(),
             sub: user_data.sub.clone(),
-            aud: session.client_id,
+            aud: session.client_id.clone(),
             exp: now + ACCESS_TOKEN_VALID_FOR,
             iat: now,
+            nbf: now,
             auth_time: (row.auth_time - OffsetDateTime::UNIX_EPOCH)
                 .whole_seconds()
                 .wrapping_abs() as u64,
@@ -470,6 +490,10 @@ impl MainRouter {
 
         let claims = jwt::AccesTokenClaims {
             sub: user_data.sub.clone(),
+            aud: session.client_id,
+            exp: now + ACCESS_TOKEN_VALID_FOR,
+            iat: now,
+            nbf: now,
         };
         let access_token =
             jwt::encode(claims, &self.private_key).ok_or(OAuth2ApiResponse::Internal)?;
@@ -485,8 +509,8 @@ impl MainRouter {
     }
 
     #[oai(path = "/userinfo", method = "post", method = "get")]
-    async fn userinfo_post(&self, user: User) -> Json<jwt::AccesTokenClaims> {
-        Json(jwt::AccesTokenClaims {
+    async fn userinfo_post(&self, user: User) -> Json<jwt::UserInfoClaims> {
+        Json(jwt::UserInfoClaims {
             sub: user.get_id().to_owned(),
         })
     }

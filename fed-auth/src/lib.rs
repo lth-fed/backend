@@ -64,7 +64,7 @@ pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl po
     let tracer = get_otel(env!("CARGO_PKG_NAME"), test_db.is_some())?;
 
     let context = Context::new(test_db).await?;
-    let auth_ctx = AuthContext::from_jwks(context.jwks.clone());
+    let auth_ctx = AuthContext::from_jwks("", context.jwks.clone());
     let server_url = API_DOMAIN;
     let api_service = OpenApiService::new(
         api::MainRouter {
@@ -99,7 +99,7 @@ pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl po
     let saml_spec = saml_service.spec_endpoint();
 
     let well_known = OpenApiService::new(
-        WellKnownRouter {},
+        WellKnownRouter,
         env!("CARGO_PKG_NAME"),
         env!("CARGO_PKG_VERSION"),
     )
@@ -176,7 +176,7 @@ impl WellKnownOidc {
     }
 }
 #[derive(Clone)]
-pub(crate) struct WellKnownRouter {}
+pub(crate) struct WellKnownRouter;
 #[OpenApi]
 impl WellKnownRouter {
     #[oai(path = "/openid-configuration", method = "get")]
