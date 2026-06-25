@@ -16,7 +16,7 @@ base64.workspace = true
 bin-common = { version = "0.1.0", path = "../bin-common" }
 color-eyre.workspace = true
 dotenvy.workspace = true
-# ed25519-dalek = "2.2.0"
+ed25519-dalek.workspace = true
 fed-auth-verifier.path = "../fed-auth-verifier"
 jsonwebtoken.workspace = true
 lettre.workspace = true

@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use bin_common::setup_db;
+use ed25519_dalek::pkcs8::DecodePrivateKey as _;
 use jsonwebtoken::jwk::{Jwk, JwkSet};
 use mini_moka::sync::Cache;
 use poem_openapi::Object;
@@ -37,7 +38,7 @@ impl AuthSession {
     pub(crate) fn provider_callback_next_url(&self, code: &str) -> String {
         if self.redirect_requires_datasharing && !self.datasharing_confirmed {
             format!(
-                "/confirm-datasharing/?code={code}&host={}",
+                "/confirm-datasharing/?code={code}&provider={}",
                 self.redirect_uri
                     .split('/')
                     .nth(2)
@@ -50,9 +51,11 @@ impl AuthSession {
                 '?'
             };
             if let Some(state) = &self.state {
+                let encoded = serde_urlencoded::to_string(state);
                 format!(
                     "{}{query_start}code={code}&state={}",
-                    self.redirect_uri, state
+                    self.redirect_uri,
+                    encoded.as_deref().unwrap_or(state)
                 )
             } else {
                 format!("{}{query_start}code={code}", self.redirect_uri)
@@ -118,9 +121,10 @@ impl Context {
         let key = base64::prelude::BASE64_STANDARD
             .decode(key)
             .wrap_err("`PRIVATE_KEY` not base64 encoded")?;
+        let signing_key = ed25519_dalek::SigningKey::from_pkcs8_der(&key)?;
         let encoding_key = EncodingKey::from_ed_der(&key);
-        let mut jwk = Jwk::from_encoding_key(&encoding_key, jsonwebtoken::Algorithm::EdDSA)?;
-        jwk.common.key_id = Some("main".to_owned());
+
+        let jwk = fed_auth_verifier::eddsa_to_jwk(&signing_key.verifying_key());
         let keys = JwkSet { keys: vec![jwk] };
         Ok((encoding_key, keys))
     }

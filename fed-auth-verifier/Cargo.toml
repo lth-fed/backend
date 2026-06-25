@@ -5,7 +5,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+base64.workspace = true
 color-eyre.workspace = true
+ed25519-dalek.workspace = true
 jsonwebtoken.workspace = true
 minilith-errors = { version = "0.1.0", path = "../minilith-errors" }
 poem.workspace = true

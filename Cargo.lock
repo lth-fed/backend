@@ -1020,6 +1020,7 @@ dependencies = [
  "bin-common",
  "color-eyre",
  "dotenvy",
+ "ed25519-dalek",
  "fed-auth-verifier",
  "jsonwebtoken",
  "lettre",
@@ -1050,7 +1051,9 @@ dependencies = [
 name = "fed-auth-verifier"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "color-eyre",
+ "ed25519-dalek",
  "jsonwebtoken",
  "minilith-errors",
  "poem",

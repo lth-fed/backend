@@ -9,7 +9,7 @@ use std::fmt::Display;
 use std::ops::Deref;
 
 use base64::Engine as _;
-use base64::prelude::BASE64_URL_SAFE;
+use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use fed_auth_verifier::User;
 use jsonwebtoken::jwk::JwkSet;
 use poem::http::{StatusCode, Uri};
@@ -40,18 +40,35 @@ const ALLOWED_DOMAINS: &[(&str, &[&str])] = &[
     ("fsek", &["https://fsektionen.se"]),
     ("dsek", &["https://auth.dsek.se", "https://dsek.se"]),
 ];
-fn is_allowed_domain<'a>(client_id: &str, domain: &impl PartialEq<&'a str>) -> bool {
+fn eq_uri_domain(uri: &Uri, domain: &str) -> bool {
+    let (scheme, authority) = domain.split_once("://").unwrap_or(("", ""));
+    uri.scheme_str() == Some(scheme) && uri.authority().is_some_and(|auth| auth == authority)
+}
+fn is_allowed_domain(client_id: &str, domain: &Uri) -> bool {
     #[cfg(debug_assertions)]
-    if *domain == "http://localhost:5173"
-        || *domain == "http://localhost:8000"
-        || *domain == API_DOMAIN
-        || *domain == WEBSITE_DOMAIN
+    if eq_uri_domain(domain, "http://localhost:5173")
+        || eq_uri_domain(domain, "http://localhost:8000")
+        || eq_uri_domain(domain, API_DOMAIN)
+        || eq_uri_domain(domain, WEBSITE_DOMAIN)
     {
         return true;
     }
     ALLOWED_DOMAINS.iter().any(|(cid, allowed)| {
-        *cid == client_id && allowed.iter().any(|allowed| *domain == *allowed)
+        *cid == client_id && allowed.iter().any(|allowed| eq_uri_domain(domain, allowed))
     })
+}
+fn is_teknologappen_domain(domain: &Uri) -> bool {
+    #[cfg(debug_assertions)]
+    if eq_uri_domain(domain, "http://localhost:5173")
+        || eq_uri_domain(domain, "http://localhost:8000")
+        || eq_uri_domain(domain, API_DOMAIN)
+        || eq_uri_domain(domain, WEBSITE_DOMAIN)
+    {
+        return true;
+    }
+    TEKNOLOGAPPEN_ALLOWED_DOMAINS
+        .iter()
+        .any(|allowed| eq_uri_domain(domain, allowed))
 }
 const ACCESS_TOKEN_VALID_FOR: u64 = 15 * 60;
 
@@ -123,6 +140,7 @@ struct IdTokenClaims {
     exp: u64,
     iat: u64,
     auth_time: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
     nonce: Option<String>,
 }
 
@@ -385,9 +403,12 @@ impl MainRouter {
         let mut hash = sha2::Sha256::new();
         hash.update(&auth.code_verifier);
         auth.code_verifier.clear();
-        BASE64_URL_SAFE.encode_string(hash.finalize(), &mut auth.code_verifier);
+        BASE64_URL_SAFE_NO_PAD.encode_string(hash.finalize(), &mut auth.code_verifier);
         if session.code_challenge != auth.code_verifier {
-            return Err(OAuth2ApiResponse::unauth("the PKCE validation failed"));
+            return Err(OAuth2ApiResponse::oauth2error(
+                OAuth2ErrorKind::InvalidGrant,
+                "the PKCE validation failed",
+            ));
         }
         if !session.datasharing_confirmed && session.redirect_requires_datasharing {
             return Err(OAuth2ApiResponse::unauth(
@@ -418,9 +439,9 @@ impl MainRouter {
         let refresh_token = Uuid::new_v4();
         let row = sqlx::query!(
             "insert into auth_refresh_tokens
-                        (refresh_token, client_id, user_id, nonce, auth_time)
-                        values ($1, $2, $3, $4, now())
-                    returning auth_time",
+                (refresh_token, client_id, user_id, nonce, auth_time)
+                values ($1, $2, $3, $4, now())
+            returning auth_time",
             refresh_token,
             session.client_id,
             user_data.sub,
@@ -474,7 +495,7 @@ impl MainRouter {
         body: AuthorizeBody,
         code: String,
         url: String,
-        redirect_host: &str,
+        redirect_uri: &Uri,
     ) -> Response<AuthorizeResponse> {
         // extension of params: provider
         let session = context::AuthSession {
@@ -487,7 +508,7 @@ impl MainRouter {
 
             validated_user: None,
             datasharing_confirmed: false,
-            redirect_requires_datasharing: TEKNOLOGAPPEN_ALLOWED_DOMAINS.contains(&redirect_host),
+            redirect_requires_datasharing: !is_teknologappen_domain(redirect_uri),
         };
         self.auth_sessions.insert(code, session);
 
@@ -594,7 +615,7 @@ impl MainRouter {
             );
         }
 
-        if !is_allowed_domain(&body.client_id, &redirect_uri.host().unwrap_or("")) {
+        if !is_allowed_domain(&body.client_id, &redirect_uri) {
             error!(
                 client_id = body.client_id,
                 redirect_uri = ru,
@@ -620,7 +641,7 @@ impl MainRouter {
                     ru,
                 );
             };
-            if !is_allowed_domain(&body.client_id, &cb_url.host().unwrap_or("")) {
+            if !is_allowed_domain(&body.client_id, &cb_url) {
                 error!(
                     client_id = body.client_id,
                     server_callback = ?body.server_callback,
@@ -639,7 +660,7 @@ impl MainRouter {
             Err(err) => return err,
         };
 
-        self.redirect_provider(body.0, code, redirect, redirect_uri.host().unwrap_or(""))
+        self.redirect_provider(body.0, code, redirect, &redirect_uri)
     }
     #[allow(clippy::result_large_err, reason = "poem requires this type")]
     fn get_provider(
