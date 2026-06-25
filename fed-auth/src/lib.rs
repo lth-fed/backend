@@ -15,7 +15,8 @@ use poem::http::Method;
 use poem::middleware::{SetHeader, Cors, OpenTelemetryMetrics, OpenTelemetryTracing};
 
 use poem::Route;
-use poem_openapi::OpenApiService;
+use poem_openapi::payload::Json;
+use poem_openapi::{Object, OpenApi, OpenApiService};
 use reqwest::header::CACHE_CONTROL;
 use sqlx::PgPool;
 
@@ -97,6 +98,14 @@ pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl po
     let saml_ui = saml_service.swagger_ui();
     let saml_spec = saml_service.spec_endpoint();
 
+    let well_known = OpenApiService::new(
+        WellKnownRouter {},
+        env!("CARGO_PKG_NAME"),
+        env!("CARGO_PKG_VERSION"),
+    )
+    // this url is just for the Swagger UI
+    .server(format!("{server_url}/.well-known/"));
+
     let cors = Cors::new()
         .allow_method(Method::GET)
         .allow_method(Method::POST)
@@ -123,10 +132,55 @@ pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl po
         .nest("/saml2", saml_service)
         .nest("/saml2/docs", saml_ui)
         .nest("/saml2/spec.json", saml_spec)
+        .nest("/.well-known", well_known)
         .with(OpenTelemetryMetrics::new())
         .with(OpenTelemetryTracing::new(
             tracer.tracer(env!("CARGO_PKG_NAME")),
         ))
         .with(cors);
     Ok(route)
+}
+
+#[derive(Object)]
+struct WellKnownOidc {
+    issuer: String,
+    authorization_endpoint: String,
+    token_endpoint: String,
+    userinfo_endpoint: String,
+    jwks_uri: String,
+    response_types_supported: Vec<String>,
+    id_token_signing_alg_values_supported: Vec<String>,
+    scopes_supported: Vec<String>,
+    token_endpoint_auth_methods_supported: Vec<String>,
+    code_challenge_methods_supported: Vec<String>,
+    grant_types_supported: Vec<String>,
+}
+impl WellKnownOidc {
+    fn new() -> Self {
+        Self {
+            issuer: API_DOMAIN.to_owned(),
+            authorization_endpoint: format!("{API_DOMAIN}/oidc/v1/authorize"),
+            token_endpoint: format!("{API_DOMAIN}/oidc/v1/token"),
+            userinfo_endpoint: format!("{API_DOMAIN}/oidc/v1/userinfo"),
+            jwks_uri: format!("{API_DOMAIN}/oidc/v1/certs"),
+            response_types_supported: vec!["code".to_owned()],
+            id_token_signing_alg_values_supported: vec!["EdDSA".to_owned()],
+            scopes_supported: vec!["openid".to_owned()],
+            token_endpoint_auth_methods_supported: vec!["none".to_owned()],
+            code_challenge_methods_supported: vec!["S256".to_owned()],
+            grant_types_supported: vec![
+                "authorization_code".to_owned(),
+                "refresh_token".to_owned(),
+            ],
+        }
+    }
+}
+#[derive(Clone)]
+pub(crate) struct WellKnownRouter {}
+#[OpenApi]
+impl WellKnownRouter {
+    #[oai(path = "/openid-configuration", method = "get")]
+    async fn oidc(&self) -> Json<WellKnownOidc> {
+        Json(WellKnownOidc::new())
+    }
 }
