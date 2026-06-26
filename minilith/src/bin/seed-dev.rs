@@ -505,7 +505,7 @@ async fn seed(ctx: &Context) -> color_eyre::Result<()> {
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
-    let ctx = Context::new(None).await?;
+    let ctx = Context::new(None, false).await?;
     seed(&ctx).await?;
     tracing::info!("seed-dev: done");
     Ok(())

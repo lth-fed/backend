@@ -21,7 +21,7 @@ impl Context {
     /// # Errors
     ///
     /// Returns any errors stemming from setting up the DB or other services.
-    pub async fn new(test_db: Option<PgPool>) -> color_eyre::Result<Self> {
+    pub async fn new(test_db: Option<PgPool>, migrate: bool) -> color_eyre::Result<Self> {
         let _: Result<PathBuf, dotenvy::Error> = dotenvy::dotenv();
 
         let db = if let Some(db) = test_db {
@@ -29,7 +29,7 @@ impl Context {
         } else {
             setup_db(
                 &std::env::var("DATABASE_URL").wrap_err("`DATABASE_URL` not set")?,
-                Some(migrate!("./migrations")),
+                migrate.then_some(migrate!("./migrations")),
             )
             .await
             .wrap_err("Failed to set up the database")
