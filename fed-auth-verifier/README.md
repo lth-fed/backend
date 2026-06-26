@@ -1,1 +1,2 @@
-The environment variable `TESTING` (at compile time!) can be set to `true` or `yes`, which makes the `User` extractor return `lund-university:aa0000bb-s`.
+The auth tries to get certs from the local auth (on port `8001`). If this fails,
+it defaults to always returning the user `lund-university:aa0000bb-s`.
