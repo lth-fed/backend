@@ -11,11 +11,11 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use tracing::error;
 
-const AUTH_KEY_URL: &str = "https://auth.teknologappen.se/oidc/v1/certs";
-const TESTING: Option<&str> = option_env!("TESTING");
-fn is_testing() -> bool {
-    matches!(TESTING, Some("true" | "yes" | "1"))
-}
+const AUTH_KEY_PATH: &str = "/oidc/v1/certs";
+#[cfg(debug_assertions)]
+const AUTH_KEY_BASE: &str = "http://localhost:8001";
+#[cfg(not(debug_assertions))]
+const AUTH_KEY_BASE: &str = "https://auth.teknologappen.se";
 
 /// [`jsonwebtoken`] doesn't support `EdDSA` :(
 /// With `kid="main"`.
@@ -46,6 +46,8 @@ pub fn eddsa_to_jwk(key: &VerifyingKey) -> Jwk {
 pub struct AuthContext {
     jwks: JwkSet,
     validation: Validation,
+    #[cfg(debug_assertions)]
+    testing: bool,
 }
 impl AuthContext {
     /// This can not be used by `fed-auth`, since that's the service which this depends on!
@@ -56,8 +58,26 @@ impl AuthContext {
     ///
     /// Returns an error if it was not possible to get the verifying key.
     pub async fn new(audience: impl Into<String>) -> color_eyre::Result<Self> {
-        let resp = reqwest::get(AUTH_KEY_URL).await?;
-        if resp.status() != StatusCode::OK {
+        let resp = match reqwest::get(format!("{AUTH_KEY_BASE}{AUTH_KEY_PATH}")).await {
+            Ok(resp) => resp,
+            #[allow(unused_variables, reason = "cfg")]
+            Err(err) => {
+                #[cfg(debug_assertions)]
+                {
+                    use tracing::warn;
+
+                    warn!(
+                        "Defaulting authentication, user will always be \
+                        `lund-university:aa0000bb-s` \
+                        (you still have to provide authorization header)"
+                    );
+                    return Ok(Self::from_jwks(audience, JwkSet { keys: vec![] }));
+                }
+                #[cfg(not(debug_assertions))]
+                return Err(err.into());
+            }
+        };
+        if resp.status() != poem::http::StatusCode::OK {
             return Err(color_eyre::eyre::Error::msg("failed getting verifying key"));
         }
         let bytes = resp.bytes().await?;
@@ -75,7 +95,12 @@ impl AuthContext {
             validation.set_audience(&[aud]);
         }
 
-        Self { jwks, validation }
+        Self {
+            #[cfg(debug_assertions)]
+            testing: jwks.keys.is_empty(),
+            jwks,
+            validation,
+        }
     }
 }
 
@@ -171,12 +196,12 @@ impl User {
     }
     #[allow(clippy::unused_async, reason = "poem_openapi wants us to")]
     async fn from_token(req: &poem::Request, token: Bearer) -> poem::Result<String> {
-        if is_testing() {
-            return Ok("lund-university:aa0000bb-s".to_owned());
-        }
         let context: &AuthContext = req.data().ok_or_else(|| {
             MinilithEndpointError::internal_error("AuthContext not registered as data!")
         })?;
+        if context.testing {
+            return Ok("lund-university:aa0000bb-s".to_owned());
+        }
 
         let data = decode_jwt::<Claims>(&token.token, context)?;
         Ok(data.claims.sub)

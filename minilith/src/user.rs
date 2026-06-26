@@ -1,6 +1,7 @@
 use std::ops::Deref;
 
 use fed_auth_verifier::{CallbackDataV1, User};
+use minilith_errors::{MinilithEndpointError, MinilithErrorKind};
 use poem_openapi::{Object, OpenApi, payload::Json};
 use sqlx::postgres::types::PgLTree;
 use sqlx::types::Uuid;
@@ -96,10 +97,17 @@ impl Router {
         .await
         .wrap_err_db()?;
 
-        let user = sqlx::query!("select * from users where id = ($1)", user.get_id())
-            .fetch_one(&self.db)
+        let Some(user) = sqlx::query!("select * from users where id = ($1)", user.get_id())
+            .fetch_optional(&self.db)
             .await
-            .wrap_err_db()?;
+            .wrap_err_db()?
+        else {
+            return Err(MinilithEndpointError::internal_error(
+                "AUTH_NO_USER",
+                MinilithErrorKind::Other,
+                "Your user object doesn't exist. Try logging out and then in again.",
+            ));
+        };
 
         Ok(Json(Me {
             id: user.id,

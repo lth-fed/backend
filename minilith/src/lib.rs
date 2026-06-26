@@ -45,7 +45,8 @@ impl From<DbInternationalizedString> for InternationalizedString {
 /// # Errors
 ///
 /// See [`Context::new`].
-pub async fn get_endpoint(test_db: Option<PgPool>,
+pub async fn get_endpoint(
+    context: Context,
     auth_context: AuthContext,
     ) -> color_eyre::Result<impl Endpoint> {
     let otel = get_otel(env!("CARGO_PKG_NAME"), test_db.is_some())?;
@@ -67,7 +68,7 @@ pub async fn get_endpoint(test_db: Option<PgPool>,
                 context: context.clone(),
             },
             user::Router {
-                context: context.clone(),
+                context,
             },
         ),
         env!("CARGO_PKG_NAME"),
