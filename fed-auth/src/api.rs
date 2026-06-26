@@ -1,12 +1,16 @@
 use std::ops::Deref;
 
 use lettre::AsyncTransport as _;
+use minilith_errors::{MinilithEndpointError, MinilithErrorResultExt as _, MinilithResult};
 use poem::http::StatusCode;
 use poem_openapi::payload::{Json, PlainText};
 use poem_openapi::{Object, OpenApi};
+use sqlx::query;
 use tracing::error;
+use uuid::Uuid;
 
-use crate::{Context, WEBSITE_DOMAIN, context, random_id};
+use crate::oidc::ACCESS_TOKEN_VALID_FOR;
+use crate::{Context, WEBSITE_DOMAIN, context, jwt, random_id};
 
 #[derive(Object, Clone)]
 pub(crate) struct EmailLoginRequest {
@@ -23,6 +27,16 @@ struct TestLoginRequest {
     stil_id: String,
     name: String,
     code: String,
+}
+
+#[derive(Object)]
+struct ApiKeyRequest {
+    key: Uuid,
+}
+#[derive(Object)]
+struct ApiKeyResponse {
+    access_token: String,
+    expires_in: u64,
 }
 
 #[derive(Clone)]
@@ -464,5 +478,31 @@ impl MainRouter {
             .insert(body.code.clone(), session.clone());
 
         Ok(PlainText(session.provider_callback_next_url(&body.code)))
+    }
+    #[oai(path = "/api-key-get-access-token", method = "post")]
+    async fn get_at(&self, body: Json<ApiKeyRequest>) -> MinilithResult<Json<ApiKeyResponse>> {
+        let user_id = query!("select user_id from api_keys where key = $1", body.key)
+            .fetch_one(&self.db)
+            .await
+            .wrap_err_unauthorized("KEY")?;
+        let now = jsonwebtoken::get_current_timestamp();
+        let claims = jwt::AccesTokenClaims {
+            sub: user_id.user_id,
+            aud: "teknologappen".to_owned(),
+            exp: now + ACCESS_TOKEN_VALID_FOR,
+            iat: now,
+            nbf: now,
+        };
+        let access_token = jwt::encode(claims, &self.private_key).ok_or_else(|| {
+            MinilithEndpointError::internal_error(
+                "ENC_KEY_AT",
+                minilith_errors::MinilithErrorKind::Other,
+                "contact app developers",
+            )
+        })?;
+        Ok(Json(ApiKeyResponse {
+            access_token,
+            expires_in: ACCESS_TOKEN_VALID_FOR,
+        }))
     }
 }
