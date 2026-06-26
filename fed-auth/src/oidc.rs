@@ -70,7 +70,7 @@ fn is_teknologappen_domain(domain: &Uri) -> bool {
         .iter()
         .any(|allowed| eq_uri_domain(domain, allowed))
 }
-const ACCESS_TOKEN_VALID_FOR: u64 = 15 * 60;
+pub const ACCESS_TOKEN_VALID_FOR: u64 = 15 * 60;
 
 #[derive(Enum, Clone)]
 #[oai(rename_all = "snake_case")]
