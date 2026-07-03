@@ -46,7 +46,11 @@ impl MinilithEndpointError {
     #[track_caller]
     pub fn bad_frontend_code(error_message: impl AsRef<str>, error: impl Debug) -> Self {
         // to get the trace
-        error!(?error, message = error_message.as_ref(), "Bad frontend code.");
+        error!(
+            ?error,
+            message = error_message.as_ref(),
+            "Bad frontend code."
+        );
         Self::Forbidden(Json(MinilithError {
             message: "contact app developers".into(),
             field: None,
