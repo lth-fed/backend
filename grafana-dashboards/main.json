@@ -5,8 +5,8 @@
     "name": "adrtdhg",
     "namespace": "default",
     "uid": "429b86d8-2e51-494c-b38d-3b15d0d2e1a3",
-    "resourceVersion": "1783039000414015",
-    "generation": 8,
+    "resourceVersion": "1783108581022001",
+    "generation": 9,
     "creationTimestamp": "2026-07-02T22:54:10Z",
     "labels": {
       "grafana.app/deprecatedInternalID": "1160297521197056"
@@ -16,7 +16,7 @@
       "grafana.app/folder": "",
       "grafana.app/saved-from-ui": "Grafana v13.0.3 (3ca0684c7c)",
       "grafana.app/updatedBy": "user:dfqxp38fzf3swe",
-      "grafana.app/updatedTimestamp": "2026-07-03T00:36:40Z"
+      "grafana.app/updatedTimestamp": "2026-07-03T19:56:21Z"
     }
   },
   "spec": {
@@ -785,7 +785,7 @@
                         "queryType": "traceql",
                         "serviceMapUseNativeHistograms": false,
                         "spss": 100,
-                        "tableType": "spans"
+                        "tableType": "traces"
                       }
                     },
                     "refId": "A",
@@ -801,13 +801,12 @@
                     "options": {
                       "include": {
                         "names": [
-                          "Trace Service",
-                          "Trace Name",
-                          "Span ID",
                           "Start time",
                           "Name",
-                          "http.response.status_code",
-                          "Duration"
+                          "Duration",
+                          "Service",
+                          "nested",
+                          "Trace ID"
                         ]
                       }
                     }
@@ -818,16 +817,17 @@
                   "group": "organize",
                   "spec": {
                     "options": {
-                      "excludeByName": {},
+                      "excludeByName": {
+                        "Start time": false
+                      },
                       "includeByName": {},
                       "indexByName": {
-                        "Duration": 6,
-                        "Name": 5,
-                        "Span ID": 1,
-                        "Start time": 4,
-                        "Trace Name": 2,
-                        "Trace Service": 0,
-                        "http.response.status_code": 3
+                        "Duration": 4,
+                        "Name": 3,
+                        "Service": 1,
+                        "Start time": 2,
+                        "Trace ID": 0,
+                        "nested": 5
                       },
                       "renameByName": {
                         "Trace Service": "Service",
@@ -850,8 +850,8 @@
                 "showHeader": true,
                 "sortBy": [
                   {
-                    "desc": false,
-                    "displayName": "http.path_pattern"
+                    "desc": true,
+                    "displayName": "Start time"
                   }
                 ]
               },
@@ -893,7 +893,7 @@
                     "properties": [
                       {
                         "id": "custom.width",
-                        "value": 90
+                        "value": 50
                       }
                     ]
                   },
@@ -905,7 +905,7 @@
                     "properties": [
                       {
                         "id": "custom.width",
-                        "value": 175
+                        "value": 93
                       }
                     ]
                   },
@@ -941,7 +941,7 @@
                     "properties": [
                       {
                         "id": "custom.width",
-                        "value": 84
+                        "value": 71
                       }
                     ]
                   },
@@ -953,7 +953,7 @@
                     "properties": [
                       {
                         "id": "custom.width",
-                        "value": 97
+                        "value": 50
                       }
                     ]
                   },
@@ -978,6 +978,42 @@
                       {
                         "id": "custom.width",
                         "value": 90
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Name"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 215
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "http.path_pattern"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 137
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "http.response.status_code"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 189
                       }
                     ]
                   }
@@ -1015,7 +1051,7 @@
                         "queryType": "traceql",
                         "serviceMapUseNativeHistograms": false,
                         "spss": 100,
-                        "tableType": "spans"
+                        "tableType": "traces"
                       }
                     },
                     "refId": "A",
@@ -1031,12 +1067,12 @@
                     "options": {
                       "include": {
                         "names": [
-                          "Trace Service",
-                          "Trace Name",
-                          "Span ID",
                           "Start time",
-                          "http.response.status_code",
-                          "Duration"
+                          "Duration",
+                          "Service",
+                          "Name",
+                          "nested",
+                          "Trace ID"
                         ]
                       }
                     }
@@ -1050,12 +1086,12 @@
                       "excludeByName": {},
                       "includeByName": {},
                       "indexByName": {
-                        "Duration": 5,
-                        "Span ID": 1,
-                        "Start time": 4,
-                        "Trace Name": 2,
-                        "Trace Service": 0,
-                        "http.response.status_code": 3
+                        "Duration": 4,
+                        "Name": 3,
+                        "Service": 1,
+                        "Start time": 2,
+                        "Trace ID": 0,
+                        "nested": 5
                       },
                       "renameByName": {
                         "Start time": "",
@@ -1171,7 +1207,7 @@
                     "properties": [
                       {
                         "id": "custom.width",
-                        "value": 85
+                        "value": 71
                       }
                     ]
                   },
@@ -1195,7 +1231,7 @@
                     "properties": [
                       {
                         "id": "custom.width",
-                        "value": 200
+                        "value": 91
                       }
                     ]
                   },
@@ -1208,6 +1244,30 @@
                       {
                         "id": "custom.width",
                         "value": 76
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Trace ID"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 50
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Name"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 156
                       }
                     ]
                   }

@@ -22,7 +22,6 @@ services:
       - 55679:55679
     volumes:
       - ./otel-collector.yaml:/etc/otel-collector.yaml:ro
-    network_mode: host
   loki:
     image: "grafana/loki:3.7.0"
     command: "-config.file=/etc/loki/config.yaml -target=all"
@@ -31,7 +30,6 @@ services:
     volumes:
       - ./loki-config.yaml:/etc/loki/config.yaml:ro
       - loki-storage:/var/loki
-    network_mode: host
     depends_on:
       - collector
   grafana:
@@ -46,7 +44,6 @@ services:
     volumes:
       - ./grafana.yml:/etc/grafana/provisioning/datasources/all.yml
       - grafana-storage:/var/lib/grafana
-    network_mode: host
     depends_on:
       - prometheus
       - tempo
@@ -58,7 +55,6 @@ services:
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/var/prometheus
-    network_mode: host
     depends_on:
       - collector
   tempo:
@@ -68,10 +64,6 @@ services:
       - ./tempo.yaml:/etc/tempo.yaml
       - tempo-data:/var/tempo
     ports:
-      - "3200:3200" # tempo
-      - "5317:5317"
-    # environment:
-    #   - OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:5317
-    network_mode: host
+      - "3200:3200"
     depends_on:
       - collector

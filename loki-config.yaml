@@ -46,11 +46,6 @@ pattern_ingester:
   metric_aggregation:
     loki_address: localhost:3100
 
-ruler:
-  alertmanager_url: http://localhost:9093
-  enable_alertmanager_discovery: true
-  enable_api: true
-
 frontend:
   encoding: protobuf
 
