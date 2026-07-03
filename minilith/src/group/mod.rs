@@ -107,7 +107,9 @@ impl Router {
     ///
     /// # Errors
     ///
-    /// DB, AUTH, `BF_GRP_NO_PARENT`, `BF_GRP_NULL_PARENT`, `BF_GRP_EXISTS`.
+    /// - group has no parent
+    /// - group is root, you can't create root group
+    /// - group already exists
     #[oai(path = "/groups", method = "post")]
     async fn create_group(
         &self,
@@ -123,14 +125,13 @@ impl Router {
             limit_membership_visibility,
         } = create_group;
 
-        let parent = path.parent().wrap_err_bad_frontend(
-            "GRP_NO_PARENT",
-            "group has to have a parent; you can't create a root group",
-        )?;
-        let parent_id = id_by_path(&mut *txn, &parent)
+        let parent = path
+            .parent()
+            .wrap_err_bad_frontend("group has to have a parent; you can't create a root group")?;
+        let parent_id = id_by_path(&mut txn.executor(), &parent)
             .await?
-            .wrap_err_bad_frontend("GRP_NULL_PARENT", "parent group doesn't exist")?;
-        check_adminship(&mut *txn, user.get_id(), parent_id).await?;
+            .wrap_err_bad_frontend("parent group doesn't exist")?;
+        check_adminship(&mut txn.executor(), user.get_id(), parent_id).await?;
 
         let group = sqlx::query_as!(
             Group,
@@ -144,7 +145,7 @@ impl Router {
             description.to_json_value(),
             limit_membership_visibility,
         )
-        .fetch_one(&mut *txn)
+        .fetch_one(&mut txn.executor())
         .await
         .map_err(|err| match err {
             sqlx::Error::Database(ref db_err) if let Some(constraint) = db_err.constraint() => {
@@ -173,7 +174,7 @@ impl Router {
     ///
     /// # Errors
     ///
-    /// AUTH, DB.
+    /// - none
     #[oai(path = "/groups/:group_id/members", method = "get")]
     async fn list_members(
         &self,
@@ -181,8 +182,8 @@ impl Router {
         param::Path(group_id): param::Path<Uuid>,
     ) -> MinilithResult<Json<Vec<String>>> {
         let mut txn = self.db.begin().await.wrap_err_db()?;
-        check_adminship(&mut *txn, user.get_id(), group_id).await?;
-        let members = group_members(&mut *txn, group_id).await?;
+        check_adminship(&mut txn.executor(), user.get_id(), group_id).await?;
+        let members = group_members(&mut txn.executor(), group_id).await?;
 
         Ok(Json(members))
     }
@@ -192,7 +193,7 @@ impl Router {
     ///
     /// # Errors
     ///
-    /// AUTH, DB
+    /// - none
     #[oai(path = "/groups/:group_id/admins", method = "get")]
     async fn list_admins(
         &self,
@@ -200,8 +201,8 @@ impl Router {
         param::Path(group_id): param::Path<Uuid>,
     ) -> MinilithResult<Json<Vec<String>>> {
         let mut txn = self.db.begin().await.wrap_err_db()?;
-        check_adminship(&mut *txn, user.get_id(), group_id).await?;
-        let admins = group_admins(&mut *txn, group_id).await?;
+        check_adminship(&mut txn.executor(), user.get_id(), group_id).await?;
+        let admins = group_admins(&mut txn.executor(), group_id).await?;
 
         Ok(Json(admins))
     }
@@ -213,8 +214,8 @@ impl Router {
     ///
     /// # Errors
     ///
-    /// AUTH, DB, `BF_GRP_CK_ADMSHP_PARENT_ACCESS` (not access to do this, you need to be admin),
-    /// `BF_GRP_CK_ADMSHP_PARENT_ROOT` (cannot be admin of root node).
+    /// - root must have no admins
+    /// - the user must be admin of the parent of this group
     #[oai(path = "/groups/:group_id/admins", method = "post")]
     async fn create_adminship(
         &self,
@@ -226,8 +227,8 @@ impl Router {
 
         let mut txn = self.db.begin().await.wrap_err_db()?;
 
-        check_parent_adminship(&mut *txn, user.get_id(), group_id).await?;
-        let adminship = admin::create_adminship(&mut *txn, &user_id, group_id).await?;
+        check_parent_adminship(&mut txn.executor(), user.get_id(), group_id).await?;
+        let adminship = admin::create_adminship(&mut txn.executor(), &user_id, group_id).await?;
         // todo: notify other admins via email
         txn.commit().await.wrap_err_db()?;
 
@@ -241,8 +242,8 @@ impl Router {
     ///
     /// # Errors
     ///
-    /// AUTH, DB, `BF_GRP_CK_ADMSHP_PARENT_ACCESS` (not access to do this, you need to be admin),
-    /// `BF_GRP_CK_ADMSHP_PARENT_ROOT` (cannot be admin of root node).
+    /// - root must have no admins
+    /// - the user must be admin of the parent of this group
     #[oai(path = "/groups/:group_id/admins/:user_id", method = "delete")]
     async fn remove_adminship(
         &self,
@@ -252,8 +253,8 @@ impl Router {
     ) -> MinilithResult<RemoveAdminshipResponse> {
         let mut txn = self.db.begin().await.wrap_err_db()?;
 
-        check_parent_adminship(&mut *txn, user.get_id(), group_id).await?;
-        admin::remove_adminship(&mut *txn, &user_id, group_id).await?;
+        check_parent_adminship(&mut txn.executor(), user.get_id(), group_id).await?;
+        admin::remove_adminship(&mut txn.executor(), &user_id, group_id).await?;
         // todo: notify other admins via email
         txn.commit().await.wrap_err_db()?;
 

@@ -116,7 +116,7 @@ impl MainRouter {
             refresh_token,
             origin,
         )
-        .fetch_one(&mut *conn)
+        .fetch_one(&mut conn.executor())
         .await
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
 
@@ -125,7 +125,7 @@ impl MainRouter {
             refresh_token,
             origin,
         )
-        .execute(&mut *conn)
+        .execute(&mut conn.executor())
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -136,7 +136,7 @@ impl MainRouter {
             get_query.domain,
             new_refresh
         )
-        .execute(&mut *conn)
+        .execute(&mut conn.executor())
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 

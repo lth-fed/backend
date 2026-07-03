@@ -4,15 +4,16 @@
     reason = "we can't add debug to e.g. Context"
 )]
 #![allow(clippy::same_name_method, reason = "rust_embed uses it")]
+use bin_common::get_otel;
 use fed_auth_verifier::AuthContext;
+use opentelemetry::trace::TracerProvider;
 use poem::EndpointExt as _;
 use poem::endpoint::EmbeddedFilesEndpoint;
 use poem::http::Method;
-use poem::middleware::{CookieJarManager, Cors};
+use poem::middleware::{CookieJarManager, Cors, OpenTelemetryMetrics, OpenTelemetryTracing};
 
 use poem::Route;
 use poem_openapi::OpenApiService;
-use sqlx::PgPool;
 
 mod api;
 mod context;
@@ -20,6 +21,7 @@ mod cookie;
 mod jwt;
 mod saml2;
 
+pub use bin_common::PgPool;
 pub(crate) use context::Context;
 
 #[cfg(debug_assertions)]
@@ -53,6 +55,8 @@ fn random_id() -> String {
 ///
 /// If the endpoint fails to set up, often because env variables / database is missing.
 pub async fn get_endpoint(db: Option<PgPool>) -> color_eyre::Result<impl poem::Endpoint> {
+    let tracer = get_otel(env!("CARGO_PKG_NAME"))?;
+
     let context = Context::new(db).await?;
     let auth_ctx =
         AuthContext::from_decoding_key(jsonwebtoken::DecodingKey::from_ed_der(&context.public_key));
@@ -93,6 +97,10 @@ pub async fn get_endpoint(db: Option<PgPool>) -> color_eyre::Result<impl poem::E
         .nest("/saml2", saml_service)
         .nest("/saml2/docs", saml_ui)
         .nest("/saml2/spec.json", saml_spec)
+        .with(OpenTelemetryMetrics::new())
+        .with(OpenTelemetryTracing::new(
+            tracer.tracer(env!("CARGO_PKG_NAME")),
+        ))
         .with(cors)
         .with(CookieJarManager::new());
     Ok(route)

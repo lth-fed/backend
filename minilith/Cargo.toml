@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 base64.workspace = true
+bin-common = { version = "0.1.0", path = "../bin-common" }
 # NOTE: this doesn't verify authenticity: i.e. that the encrypted data comes from someone with the key (us)
 # this is not needed for user data encryption because we don't need to validate the integrity of the data,
 # the only purpose is to anonymise it.
@@ -13,6 +14,10 @@ color-eyre.workspace = true
 dotenvy.workspace = true
 fed-auth-verifier.path = "../fed-auth-verifier"
 minilith-errors = { version = "0.1.0", path = "../minilith-errors" }
+opentelemetry.workspace = true
+opentelemetry-appender-tracing.workspace = true
+opentelemetry-otlp.workspace = true
+opentelemetry_sdk.workspace = true
 poem.workspace = true
 poem-openapi.workspace = true
 rand.workspace = true
@@ -20,9 +25,11 @@ serde.workspace = true
 serde_json = "1.0.149"
 serde_with = "3.20.0"
 sqlx.workspace = true
+sqlx-tracing.workspace = true
 time = { version = "0.3", features = ["parsing", "formatting"] }
 tokio = { workspace = true, features = ["full"] }
 tracing.workspace = true
+tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
 
