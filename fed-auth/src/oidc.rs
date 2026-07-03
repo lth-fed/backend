@@ -72,7 +72,7 @@ fn is_teknologappen_domain(domain: &Uri) -> bool {
 }
 pub const ACCESS_TOKEN_VALID_FOR: u64 = 15 * 60;
 
-#[derive(Enum, Clone)]
+#[derive(Enum, Clone, PartialEq, Eq)]
 #[oai(rename_all = "snake_case")]
 enum OAuth2ErrorKind {
     InvalidRequest,
@@ -237,24 +237,35 @@ impl From<OAuth2ApiResponse> for Response<AuthorizeResponse> {
         Response::new(value.into())
     }
 }
+struct OAuth2ErrorCtx<'a>(&'a String, &'a Context, &'static str);
 #[allow(clippy::needless_pass_by_value, reason = "poem wants us to")]
 fn oauth2error_redirect(
     kind: OAuth2ErrorKind,
     description: impl AsRef<str>,
-    redirect_uri: impl AsRef<str>,
+    ctx: &OAuth2ErrorCtx,
 ) -> Response<AuthorizeResponse> {
+    if kind == OAuth2ErrorKind::Internal {
+        use opentelemetry::KeyValue;
+        use opentelemetry_semantic_conventions::trace;
+
+        let labels = vec![
+            KeyValue::new(trace::URL_FULL, ctx.2),
+            KeyValue::new(trace::HTTP_RESPONSE_STATUS_CODE, 500i64),
+            KeyValue::new(trace::EXCEPTION_MESSAGE, description.as_ref().to_owned()),
+        ];
+        // there will be some double-counting but I'm fine with it, we really just worry about the
+        // 500s
+        ctx.1.request_counter.add(1, &labels);
+        ctx.1.error_counter.add(1, &labels);
+    }
     Response::new(AuthorizeResponse::Redirect(PlainText(String::new())))
         .status(StatusCode::FOUND)
         .header(
             "location",
             format!(
                 "{}{}error={}&error_description={}",
-                redirect_uri.as_ref(),
-                if redirect_uri.as_ref().contains('?') {
-                    '&'
-                } else {
-                    '?'
-                },
+                ctx.0,
+                if ctx.0.contains('?') { '&' } else { '?' },
                 kind.to_json_string(),
                 description.as_ref()
             ),
@@ -331,7 +342,7 @@ impl MainRouter {
                     returning client_id, user_id, auth_time, nonce",
             refresh.refresh_token,
         )
-        .fetch_optional(&mut *conn)
+        .fetch_optional(&mut conn.executor())
         .await
         .map_err(OAuth2ApiResponse::db)?;
 
@@ -351,7 +362,7 @@ impl MainRouter {
             row.auth_time,
             None::<String>,
         )
-        .execute(&mut *conn)
+        .execute(&mut conn.executor())
         .await
         .map_err(OAuth2ApiResponse::db)?;
 
@@ -580,21 +591,22 @@ impl MainRouter {
             .into();
         }
         let ru = &body.redirect_uri;
+        let ctx = OAuth2ErrorCtx(ru, self, "/oidc/v1/authorize");
 
         if body.request.is_some() {
-            return oauth2error_redirect(OAuth2ErrorKind::RequestNotSupported, "", ru);
+            return oauth2error_redirect(OAuth2ErrorKind::RequestNotSupported, "", &ctx);
         }
         if body.request_uri.is_some() {
-            return oauth2error_redirect(OAuth2ErrorKind::RequestUriNotSupported, "", ru);
+            return oauth2error_redirect(OAuth2ErrorKind::RequestUriNotSupported, "", &ctx);
         }
         if body.registration.is_some() {
-            return oauth2error_redirect(OAuth2ErrorKind::RegistrationNotSupported, "", ru);
+            return oauth2error_redirect(OAuth2ErrorKind::RegistrationNotSupported, "", &ctx);
         }
         if body.code_challenge_method != "S256" {
             return oauth2error_redirect(
                 OAuth2ErrorKind::InvalidRequest,
                 "code_challenge_method has to exist and be S256",
-                ru,
+                &ctx,
             );
         }
 
@@ -608,7 +620,7 @@ impl MainRouter {
                 return oauth2error_redirect(
                     OAuth2ErrorKind::InvalidRequest,
                     "some part of the body was not serializable",
-                    ru,
+                    &ctx,
                 );
             };
             // this redirects back with one specified provider
@@ -623,7 +635,7 @@ impl MainRouter {
             return oauth2error_redirect(
                 OAuth2ErrorKind::InvalidScope,
                 "scope has to contain openid",
-                ru,
+                &ctx,
             );
         }
         if body.response_type != "code" {
@@ -635,7 +647,7 @@ impl MainRouter {
             return oauth2error_redirect(
                 OAuth2ErrorKind::InvalidRequest,
                 "only response_type='code' is supported",
-                ru,
+                &ctx,
             );
         }
 
@@ -648,7 +660,7 @@ impl MainRouter {
             return oauth2error_redirect(
                 OAuth2ErrorKind::InvalidClient,
                 "client_id is not allowed to redirect to this uri",
-                ru,
+                &ctx,
             );
         }
         if let Some(cb_url) = &body.server_callback {
@@ -662,7 +674,7 @@ impl MainRouter {
                 return oauth2error_redirect(
                     OAuth2ErrorKind::InvalidRequest,
                     "invalid server_callback",
-                    ru,
+                    &ctx,
                 );
             };
             if !is_allowed_domain(&body.client_id, &cb_url) {
@@ -674,12 +686,12 @@ impl MainRouter {
                 return oauth2error_redirect(
                     OAuth2ErrorKind::InvalidClient,
                     "client_id is not allowed to have a callback to this server",
-                    ru,
+                    &ctx,
                 );
             }
         }
 
-        let (code, redirect) = match self.get_provider(provider, ru) {
+        let (code, redirect) = match self.get_provider(provider, &ctx) {
             Ok(value) => value,
             Err(err) => return err,
         };
@@ -690,7 +702,7 @@ impl MainRouter {
     fn get_provider(
         &self,
         provider: &str,
-        ru: &str,
+        ctx: &OAuth2ErrorCtx,
     ) -> Result<(String, String), Response<AuthorizeResponse>> {
         Ok(match provider {
             "lu" => {
@@ -700,7 +712,7 @@ impl MainRouter {
                     .make_authentication_request("https://mocksaml.com/api/saml/sso")
                     .map_err(|err| {
                         error!(?err, "Failed to make LU SSO request");
-                        oauth2error_redirect(OAuth2ErrorKind::Internal, "lu sso saml2 error", ru)
+                        oauth2error_redirect(OAuth2ErrorKind::Internal, "lu sso saml2 error", ctx)
                     })?;
                 let redirect = req
                     .signed_redirect("", &self.saml_private_key)
@@ -708,7 +720,7 @@ impl MainRouter {
                     .flatten()
                     .ok_or_else(|| {
                         error!("Failed to create LU SSO link");
-                        oauth2error_redirect(OAuth2ErrorKind::Internal, "lu sso saml2 error", ru)
+                        oauth2error_redirect(OAuth2ErrorKind::Internal, "lu sso saml2 error", ctx)
                     })?;
                 self.saml2_request_id_cache.insert(req.id.clone(), ());
                 debug!("Added ID {} to saml2 request id cache", req.id);
@@ -728,7 +740,7 @@ impl MainRouter {
                 return Err(oauth2error_redirect(
                     OAuth2ErrorKind::InvalidRequest,
                     "provider not found",
-                    ru,
+                    ctx,
                 ));
             }
         })
@@ -753,6 +765,7 @@ impl MainRouter {
             .into();
         };
         let ru = &session.redirect_uri;
+        let ctx = OAuth2ErrorCtx(ru, self, "/oidc/v1/confirm-datasharing");
         if headers
             .get("origin")
             .is_some_and(|origin| origin != WEBSITE_DOMAIN)
@@ -760,14 +773,14 @@ impl MainRouter {
             return oauth2error_redirect(
                 OAuth2ErrorKind::InvalidRequest,
                 "you must use the website to use this api",
-                ru,
+                &ctx,
             );
         }
         if !body.accepted {
             return oauth2error_redirect(
                 OAuth2ErrorKind::UnauthorizedClient,
                 "user did not agree to datasharing",
-                ru,
+                &ctx,
             );
         }
         if session.validated_user.is_none() {
@@ -778,7 +791,7 @@ impl MainRouter {
             return oauth2error_redirect(
                 OAuth2ErrorKind::InvalidRequest,
                 "you are not authenticated, try logging in from the start again",
-                ru,
+                &ctx,
             );
         }
         session.datasharing_confirmed = true;

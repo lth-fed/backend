@@ -2,11 +2,9 @@ use std::ops::Deref;
 
 use lettre::AsyncTransport as _;
 use minilith_errors::{MinilithEndpointError, MinilithErrorResultExt as _, MinilithResult};
-use poem::http::StatusCode;
 use poem_openapi::payload::{Json, PlainText};
 use poem_openapi::{Object, OpenApi};
 use sqlx::query;
-use tracing::error;
 use uuid::Uuid;
 
 use crate::oidc::ACCESS_TOKEN_VALID_FOR;
@@ -51,336 +49,32 @@ impl Deref for MainRouter {
 }
 #[OpenApi]
 impl MainRouter {
-    /// Returns the public key as it's raw bytes (32 bytes).
-    #[oai(path = "/verifying-key", method = "get")]
-    async fn get_verify_key(&self) -> Response<Binary<Vec<u8>>> {
-        Response::new(Binary(self.public_key.clone()))
-    }
-    /// Get JWT access token and a new refresh token.
-    #[oai(path = "/refresh", method = "post")]
-    async fn refresh(
-        &self,
-        headers: &poem::http::HeaderMap,
-        cookies: &CookieJar,
-    ) -> poem::Result<Json<RefreshResponse>> {
-        let origin = headers
-            .get("origin")
-            .and_then(|header| header.to_str().ok())
-            .ok_or(StatusCode::BAD_REQUEST)?;
-
-        let Some(refresh_token) = cookies.get(cookie::REFRESH_TOKEN_COOKIE) else {
-            return Err(StatusCode::UNAUTHORIZED.into());
-        };
-        let Ok(refresh_token) = refresh_token.value_str().parse::<Uuid>() else {
-            return Err(StatusCode::UNAUTHORIZED.into());
-        };
-
-        let mut conn = self
-            .db
-            .begin()
-            .await
-            .inspect_err(|err| {
-                error!("failed to open DB transaction: {err}");
-            })
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        let get_query = sqlx::query!(
-            "select * from auth_refresh_tokens where refresh_token = $1 and domain = $2",
-            refresh_token,
-            origin,
-        )
-        .fetch_one(&mut conn.executor())
-        .await
-        .map_err(|_| StatusCode::UNAUTHORIZED)?;
-
-        sqlx::query!(
-            "delete from auth_refresh_tokens where refresh_token = $1 and domain = $2",
-            refresh_token,
-            origin,
-        )
-        .execute(&mut conn.executor())
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-        let new_refresh = Uuid::new_v4();
-        sqlx::query!(
-            "insert into auth_refresh_tokens values ($1, $2, $3)",
-            get_query.user_id,
-            get_query.domain,
-            new_refresh
-        )
-        .execute(&mut conn.executor())
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-        conn.commit()
-            .await
-            .inspect_err(|err| {
-                error!("failed to commit DB transaction: {err}");
-            })
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-        let claims = jwt::AccesTokenClaims {
-            sub: get_query.user_id,
-        };
-        let access_token =
-            jwt::encode(claims, &self.private_key).ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
-
-        cookies.add(cookie::get(new_refresh));
-
-        Ok(Json(RefreshResponse { access_token }))
-    }
-    /// Removes the refresh token.
-    #[oai(path = "/logout", method = "post")]
-    async fn logout(&self, cookies: &CookieJar, headers: &poem::http::HeaderMap) {
-        let origin = headers
-            .get("origin")
-            .and_then(|header| header.to_str().ok());
-        if let (Some(origin), Some(refresh_token)) = (
-            origin,
-            cookies
-                .get(cookie::REFRESH_TOKEN_COOKIE)
-                .and_then(|cookie| cookie.value_str().parse::<Uuid>().ok()),
-        ) {
-            // We don't care if the user was actually logged in!
-            // So just try to remove it
-            let _: Result<_, _> = sqlx::query!(
-                "delete from auth_refresh_tokens where refresh_token = $1 and domain = $2",
-                refresh_token,
-                origin,
-            )
-            .execute(&self.db)
-            .await;
-        }
-        cookies.add(cookie::remove());
-    }
-    /// Verifies that your access token is correct.
-    #[oai(path = "/verify-access-token", method = "post")]
-    async fn verify_access_token(&self, _user: User) {}
-    #[oai(path = "/confirm-datasharing", method = "post")]
-    async fn confirm_datasharing(
-        &self,
-        body: Json<ConfirmRequest>,
-        headers: &poem::http::HeaderMap,
-        cookies: &CookieJar,
-    ) -> poem::Result<Json<ConfirmResponse>> {
-        if headers.get("origin").is_some_and(|origin| origin != DOMAIN) {
-            return Err(StatusCode::BAD_REQUEST.into());
-        }
-        let Some(data) = self.auth_sessions.get(&body.id) else {
-            warn!(
-                "Tried to confirm datasharing with an ID which is not in the database ({})",
-                body.id
-            );
-            return Err(StatusCode::BAD_REQUEST.into());
-        };
-        if !is_allowed_domain(&data.origin.as_str()) {
-            warn!(
-                "Someone tried to log in from a disallowed domain ({})!",
-                data.origin
-            );
-            return Ok(Json(ConfirmResponse {
-                url: format!(
-                    "{}{}validated=false",
-                    data.continue_url,
-                    if data.continue_url.contains('?') {
-                        '&'
-                    } else {
-                        '?'
-                    },
-                ),
-            }));
-        }
-        let Some(user_data) = data.validated_user else {
-            warn!(
-                "Tried to confirm datasharing for a request which was not validated ({})",
-                body.id
-            );
-            return Err(StatusCode::UNAUTHORIZED.into());
-        };
-
-        let refresh_token = if body.accepted {
-            if let Some(cb_url) = &data.callback {
-                let token = jwt::encode(&user_data, &self.private_key)
-                    .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
-                match cb_url.as_latest() {
-                    context::CallbackUrlVersion::V1 { url } => {
-                        self.reqwest_client
-                            .post(url)
-                            .body(token)
-                            .send()
-                            .await
-                            .inspect_err(|err| error!("auth callback POST failed: {err}"))
-                            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-                    }
-                }
-            }
-
-            let refresh_token = Uuid::new_v4();
-            sqlx::query!(
-                "insert into auth_refresh_tokens values ($1, $2, $3)",
-                user_data.sub,
-                data.origin,
-                refresh_token
-            )
-            .execute(&self.db)
-            .await
-            .inspect_err(|err| error!("Error inserting refresh token into DB: {err}"))
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            cookies.add(cookie::get(refresh_token));
-            Some(refresh_token)
-        } else {
-            None
-        };
-
-        self.auth_sessions.invalidate(&body.id);
-        Ok(Json(ConfirmResponse {
-            url: format!(
-                "{}{}validated={}&refresh_token={}",
-                data.continue_url,
-                if data.continue_url.contains('?') {
-                    '&'
-                } else {
-                    '?'
-                },
-                body.accepted,
-                refresh_token.map_or_else(|| "none".into(), |token| token.to_string())
-            ),
-        }))
-    }
-
-    #[allow(clippy::unused_self, reason = "makes the developer experience nicer")]
-    fn check_redirect_provider<'a>(
-        &self,
-        headers: &'a poem::http::HeaderMap,
-        body: &Json<ProviderRequest>,
-    ) -> poem::Result<&'a str> {
-        let origin_str = headers
-            .get("origin")
-            .and_then(|header| header.to_str().ok())
-            .ok_or(StatusCode::BAD_REQUEST)?;
-        if let Some(cb_url) = &body.callback {
-            let cb_url: poem::http::Uri = cb_url
-                .as_latest()
-                .url()
-                .parse()
-                .map_err(|_| StatusCode::BAD_REQUEST)?;
-
-            // Dev-only escape hatch matching the spirit of `is_allowed_domain`'s
-            // localhost branch above: in debug builds, a `localhost` origin paired
-            // with a `localhost` callback passes regardless of port, so a frontend
-            // running on `:5173` can supply a callback to minilith on `:8000`
-            // without a same-origin reverse proxy in vite. Strictly fenced behind
-            // `cfg(debug_assertions)` so it can't reach release builds.
-            #[cfg(debug_assertions)]
-            {
-                let origin: poem::http::Uri =
-                    origin_str.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
-                let dev_localhost_pair =
-                    origin.host() == Some("localhost") || cb_url.host() == Some("localhost");
-
-                if dev_localhost_pair {
-                    return Ok(origin_str);
-                }
-            }
-
-            let mut parts = cb_url.into_parts();
-            parts.path_and_query = Some(PathAndQuery::from_static(""));
-            let cb_url = poem::http::Uri::from_parts(parts).map_err(|_| StatusCode::BAD_REQUEST)?;
-
-            if !is_allowed_domain(&origin_str) || !is_allowed_domain(&cb_url) {
-                return Err(StatusCode::BAD_REQUEST.into());
-            }
-        }
-        Ok(origin_str)
-    }
-    fn redirect_provider(
-        &self,
-        body: &Json<ProviderRequest>,
-        id: &str,
-        origin: &str,
-        url: String,
-    ) -> PlainText<String> {
-        let data = context::AuthSession {
-            origin: origin.to_owned(),
-            callback: body.callback.clone(),
-            continue_url: body.continue_url.clone(),
-
-            validated_user: None,
-        };
-        self.auth_sessions.insert(id.to_owned(), data);
-
-        PlainText(url)
-    }
-    /// Get URL to redirect user to to authenticate by LU SSO
-    #[oai(path = "/providers/lu", method = "post")]
-    async fn lu(
-        &self,
-        headers: &poem::http::HeaderMap,
-        body: Json<ProviderRequest>,
-    ) -> poem::Result<PlainText<String>> {
-        let origin = self.check_redirect_provider(headers, &body)?;
-
-        let req = self
-            .service_provider
-            // .make_authentication_request("https://testidpv4.lu.se/idp/profile/SAML2/Redirect/SSO")
-            .make_authentication_request("https://mocksaml.com/api/saml/sso")
-            .inspect_err(|err| error!("Failed to make LU SSO request {err}"))
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        let redirect = req
-            .signed_redirect("", &self.saml_private_key)
-            .inspect_err(|err| error!("Failed to make LU SSO redirect {err}"))
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            .ok_or_else(|| {
-                error!("Failed to create LU SSO link");
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?;
-        self.saml2_request_id_cache.insert(req.id.clone(), ());
-        debug!("Added ID {} to auth request id cache", req.id);
-
-        Ok(self.redirect_provider(&body, &req.id, origin, redirect.to_string()))
-    }
-    #[oai(path = "/providers/email", method = "post")]
-    async fn email(
-        &self,
-        headers: &poem::http::HeaderMap,
-        body: Json<ProviderRequest>,
-    ) -> poem::Result<PlainText<String>> {
-        let origin = self.check_redirect_provider(headers, &body)?;
-        let id = random_id();
-        let redirect = format!("{DOMAIN}/providers/email/?id={id}");
-
-        Ok(self.redirect_provider(&body, &id, origin, redirect))
-    }
-    #[oai(path = "/providers/test", method = "post")]
-    async fn test_provider(
-        &self,
-        headers: &poem::http::HeaderMap,
-        body: Json<ProviderRequest>,
-    ) -> poem::Result<PlainText<String>> {
-        let origin = self.check_redirect_provider(headers, &body)?;
-        let id = random_id();
-        let redirect = format!("{DOMAIN}/providers/test/?id={id}");
-
-        Ok(self.redirect_provider(&body, &id, origin, redirect))
-    }
     /// Corresponds to the login happening at the `IdP` in `SAML2`.
     #[oai(path = "/providers/email/login", method = "post")]
     async fn email_login(
         &self,
         body: Json<EmailLoginRequest>,
         headers: &poem::http::HeaderMap,
-    ) -> poem::Result<()> {
+    ) -> MinilithResult<()> {
         if headers
             .get("origin")
             .is_some_and(|origin| origin != WEBSITE_DOMAIN)
         {
-            return Err(StatusCode::BAD_REQUEST.into());
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "origin has to be from our domain",
+                "",
+            ));
         }
         if !self.auth_sessions.contains_key(&body.code) {
-            return Err(StatusCode::UNAUTHORIZED.into());
+            return Err(MinilithEndpointError::unauthorized("code not valid", ""));
         }
         if !body.name.contains(' ') || body.name.len() < 5 {
-            return Err(StatusCode::BAD_REQUEST.into());
+            return Err(MinilithEndpointError::bad_user_input(
+                "name invalid",
+                "",
+                "name has to contain both first- and surname and be at least 5 characters long",
+                "name",
+            ));
         }
         let token = random_id();
         // having this as format_args made the await point for lettre fail because format_args is
@@ -398,18 +92,17 @@ impl MainRouter {
                 .to(body
                     .email
                     .parse::<lettre::Address>()
-                    .map_err(|_| StatusCode::BAD_REQUEST)?
+                    .wrap_err_bad_user("please enter a valid email address", "email")?
                     .into())
                 .subject("Logga in med teknologappens inloggningstjänst")
                 .header(lettre::message::header::ContentType::TEXT_HTML)
                 .body(html)
-                .inspect_err(|err| error!("Error when formatting a mail: {err}"))
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-            email
-                .send(message)
-                .await
-                .inspect_err(|err| error!("failed to send email: {err}"))
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+                .map_err(|err| {
+                    MinilithEndpointError::internal_error(format!("format email: {err:?}"))
+                })?;
+            email.send(message).await.map_err(|err| {
+                MinilithEndpointError::internal_error(format!("failed to send mail: {err:?}"))
+            })?;
         } else {
             println!(
                 "Someone tried to log in with the email {}. Click the link below to continue.",
@@ -428,18 +121,21 @@ impl MainRouter {
         &self,
         body: Json<EmailApproveResponse>,
         headers: &poem::http::HeaderMap,
-    ) -> poem::Result<PlainText<String>> {
+    ) -> MinilithResult<PlainText<String>> {
         if headers
             .get("origin")
             .is_some_and(|origin| origin != WEBSITE_DOMAIN)
         {
-            return Err(StatusCode::BAD_REQUEST.into());
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "origin has to be from our domain",
+                "",
+            ));
         }
         let Some(login_data) = self.email_token_holding.get(&body.token) else {
-            return Err(StatusCode::UNAUTHORIZED.into());
+            return Err(MinilithEndpointError::unauthorized("token not valid", ""));
         };
         let Some(mut session) = self.auth_sessions.get(&login_data.code) else {
-            return Err(StatusCode::UNAUTHORIZED.into());
+            return Err(MinilithEndpointError::unauthorized("session not valid", ""));
         };
         session.validated_user = Some(context::UserData {
             sub: format!("mail:{}", login_data.email),
@@ -459,15 +155,18 @@ impl MainRouter {
         &self,
         body: Json<TestLoginRequest>,
         headers: &poem::http::HeaderMap,
-    ) -> poem::Result<PlainText<String>> {
+    ) -> MinilithResult<PlainText<String>> {
         if headers
             .get("origin")
             .is_some_and(|origin| origin != WEBSITE_DOMAIN)
         {
-            return Err(StatusCode::BAD_REQUEST.into());
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "origin has to be from our domain",
+                "",
+            ));
         }
         let Some(mut session) = self.auth_sessions.get(&body.code) else {
-            return Err(StatusCode::UNAUTHORIZED.into());
+            return Err(MinilithEndpointError::unauthorized("code not valid", ""));
         };
         session.validated_user = Some(context::UserData {
             sub: format!("test:{}", body.stil_id),
@@ -493,13 +192,8 @@ impl MainRouter {
             iat: now,
             nbf: now,
         };
-        let access_token = jwt::encode(claims, &self.private_key).ok_or_else(|| {
-            MinilithEndpointError::internal_error(
-                "ENC_KEY_AT",
-                minilith_errors::MinilithErrorKind::Other,
-                "contact app developers",
-            )
-        })?;
+        let access_token = jwt::encode(claims, &self.private_key)
+            .ok_or_else(|| MinilithEndpointError::internal_error("contact app developers"))?;
         Ok(Json(ApiKeyResponse {
             access_token,
             expires_in: ACCESS_TOKEN_VALID_FOR,

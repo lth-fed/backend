@@ -46,13 +46,14 @@ impl From<DbInternationalizedString> for InternationalizedString {
 ///
 /// See [`Context::new`].
 pub async fn get_endpoint(
-    context: Context,
-    auth_context: AuthContext,
-    ) -> color_eyre::Result<impl Endpoint> {
+    test_db: Option<PgPool>,
+    auth_context: impl Future<Output = color_eyre::Result<AuthContext>>,
+) -> color_eyre::Result<impl Endpoint> {
     let otel = get_otel(env!("CARGO_PKG_NAME"), test_db.is_some())?;
 
     let context = Context::new(test_db, true).await?;
-    let auth_context = AuthContext::new("teknologappen").await?;
+    let auth_context = auth_context.await?;
+
     let api_service = OpenApiService::new(
         (
             activities::Router {
@@ -67,9 +68,7 @@ pub async fn get_endpoint(
             healthcheck::Router {
                 context: context.clone(),
             },
-            user::Router {
-                context,
-            },
+            user::Router { context },
         ),
         env!("CARGO_PKG_NAME"),
         env!("CARGO_PKG_VERSION"),

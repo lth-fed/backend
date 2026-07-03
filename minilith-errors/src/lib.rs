@@ -213,11 +213,7 @@ impl<T, E: Debug> MinilithErrorResultExt<T, E> for Result<T, E> {
     }
     #[track_caller]
     fn wrap_err_db(self) -> MinilithResult<T> {
-        // inlined so track_caller works as expected
-        match self {
-            Ok(value) => Ok(value),
-            Err(error) => Err(MinilithEndpointError::db(error)),
-        }
+        self.map_err(MinilithEndpointError::db)
     }
 }
 impl<T> MinilithErrorOptionExt<T> for Option<T> {
