@@ -4,7 +4,7 @@ use ed25519_dalek::VerifyingKey;
 use jsonwebtoken::jwk::{Jwk, JwkSet};
 use jsonwebtoken::{Algorithm, DecodingKey, TokenData, Validation, decode_header};
 use minilith_errors::{MinilithEndpointError, MinilithErrorResultExt as _};
-use poem::http::StatusCode;
+use opentelemetry::trace::TraceContextExt as _;
 use poem_openapi::auth::Bearer;
 use poem_openapi::{ApiExtractor, Object, SecurityScheme};
 use serde::Deserialize;
@@ -113,18 +113,18 @@ fn decode_jwt<T: DeserializeOwned>(
     token: &str,
     context: &AuthContext,
 ) -> Result<TokenData<T>, MinilithEndpointError> {
-    let header = decode_header(token).map_err(|_| {
+    let header = decode_header(token).map_err(|error| {
         MinilithEndpointError::unauthorized(
-            "MAL_JWT_HEADER",
             "You don't have a valid login-session. \
             Try logging out and in again or clearing cookies.",
+            error,
         )
     })?;
 
     let Some(kid) = header.kid else {
         return Err(MinilithEndpointError::bad_frontend_code(
-            "AUTH_ACCESS_NO_KID",
             "your access token has no key ID which means we cannot validate it",
+            "",
         ));
     };
 
@@ -136,16 +136,14 @@ fn decode_jwt<T: DeserializeOwned>(
     };
     let Ok(key) = DecodingKey::from_jwk(jwk) else {
         return Err(MinilithEndpointError::internal_error(
-            "AUTH_ACCESS_JWK_INVALID",
-            MinilithErrorKind::Other,
             "internal error, jwk invalid",
         ));
     };
-    jsonwebtoken::decode(token, &key, &context.validation).map_err(|_| {
+    jsonwebtoken::decode(token, &key, &context.validation).map_err(|error| {
         MinilithEndpointError::unauthorized(
-            "NOUSR",
             "You don't have a valid login-session. \
             Try logging out and in again or clearing cookies.",
+            error,
         )
     })
 }
@@ -199,11 +197,21 @@ impl User {
         let context: &AuthContext = req.data().ok_or_else(|| {
             MinilithEndpointError::internal_error("AuthContext not registered as data!")
         })?;
+        let cx = opentelemetry::Context::current();
+        let span = cx.span();
         if context.testing {
+            span.set_attribute(opentelemetry::KeyValue::new(
+                opentelemetry_semantic_conventions::attribute::USER_ID,
+                "lund-university:aa0000bb-s",
+            ));
             return Ok("lund-university:aa0000bb-s".to_owned());
         }
 
         let data = decode_jwt::<Claims>(&token.token, context)?;
+        span.set_attribute(opentelemetry::KeyValue::new(
+            opentelemetry_semantic_conventions::attribute::USER_ID,
+            data.claims.sub.clone(),
+        ));
         Ok(data.claims.sub)
     }
 }

@@ -10,15 +10,13 @@ use opentelemetry::trace::TracerProvider as _;
 use poem::EndpointExt as _;
 use poem::endpoint::EmbeddedFilesEndpoint;
 use poem::http::Method;
-<<<<<<< HEAD
 
-use poem::middleware::{SetHeader, Cors, OpenTelemetryMetrics, OpenTelemetryTracing};
+use poem::middleware::{Cors, OpenTelemetryMetrics, OpenTelemetryTracing, SetHeader};
 
 use poem::Route;
 use poem_openapi::payload::Json;
 use poem_openapi::{Object, OpenApi, OpenApiService};
 use reqwest::header::CACHE_CONTROL;
-use sqlx::PgPool;
 
 mod api;
 mod context;

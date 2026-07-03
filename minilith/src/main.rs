@@ -5,12 +5,8 @@ use poem::{Server, listener::TcpListener};
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
-    let context = minilith::Context::new(None).await?;
     Server::new(TcpListener::bind("[::]:8000"))
-        .run(get_endpoint(
-            context,
-            AuthContext::new("teknologappen").await?,
-        )?)
+        .run(get_endpoint(None, AuthContext::new("teknologappen")).await?)
         .await?;
 
     Ok(())
