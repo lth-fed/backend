@@ -5,8 +5,8 @@
     "name": "adrtdhg",
     "namespace": "default",
     "uid": "429b86d8-2e51-494c-b38d-3b15d0d2e1a3",
-    "resourceVersion": "1783036265286988",
-    "generation": 7,
+    "resourceVersion": "1783039000414015",
+    "generation": 8,
     "creationTimestamp": "2026-07-02T22:54:10Z",
     "labels": {
       "grafana.app/deprecatedInternalID": "1160297521197056"
@@ -16,7 +16,7 @@
       "grafana.app/folder": "",
       "grafana.app/saved-from-ui": "Grafana v13.0.3 (3ca0684c7c)",
       "grafana.app/updatedBy": "user:dfqxp38fzf3swe",
-      "grafana.app/updatedTimestamp": "2026-07-02T23:51:05Z"
+      "grafana.app/updatedTimestamp": "2026-07-03T00:36:40Z"
     }
   },
   "spec": {
@@ -218,11 +218,11 @@
                     "options": {
                       "include": {
                         "names": [
-                          "Service",
+                          "Trace ID",
                           "Name",
                           "Duration",
                           "nested",
-                          "Trace ID"
+                          "Service"
                         ]
                       }
                     }
@@ -298,7 +298,7 @@
                     "properties": [
                       {
                         "id": "custom.width",
-                        "value": 74
+                        "value": 59
                       }
                     ]
                   },
@@ -310,7 +310,19 @@
                     "properties": [
                       {
                         "id": "custom.width",
-                        "value": 267
+                        "value": 292
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Duration"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 93
                       }
                     ]
                   }
@@ -733,7 +745,7 @@
         "kind": "Panel",
         "spec": {
           "id": 8,
-          "title": "New panel",
+          "title": "500s",
           "description": "",
           "links": [],
           "data": {
@@ -769,11 +781,11 @@
                         ],
                         "limit": 100,
                         "metricsQueryType": "range",
-                        "query": "{status=error} | rate() by (name)",
+                        "query": "{ span.http.response.status_code >= 500 } | select(span.http.path_pattern)",
                         "queryType": "traceql",
                         "serviceMapUseNativeHistograms": false,
                         "spss": 100,
-                        "tableType": "traces"
+                        "tableType": "spans"
                       }
                     },
                     "refId": "A",
@@ -781,31 +793,67 @@
                   }
                 }
               ],
-              "transformations": [],
+              "transformations": [
+                {
+                  "kind": "Transformation",
+                  "group": "filterFieldsByName",
+                  "spec": {
+                    "options": {
+                      "include": {
+                        "names": [
+                          "Trace Service",
+                          "Trace Name",
+                          "Span ID",
+                          "Start time",
+                          "Name",
+                          "http.response.status_code",
+                          "Duration"
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "kind": "Transformation",
+                  "group": "organize",
+                  "spec": {
+                    "options": {
+                      "excludeByName": {},
+                      "includeByName": {},
+                      "indexByName": {
+                        "Duration": 6,
+                        "Name": 5,
+                        "Span ID": 1,
+                        "Start time": 4,
+                        "Trace Name": 2,
+                        "Trace Service": 0,
+                        "http.response.status_code": 3
+                      },
+                      "renameByName": {
+                        "Trace Service": "Service",
+                        "http.response.status_code": "Status Code"
+                      }
+                    }
+                  }
+                }
+              ],
               "queryOptions": {}
             }
           },
           "vizConfig": {
             "kind": "VizConfig",
-            "group": "timeseries",
+            "group": "table",
             "version": "13.0.3",
             "spec": {
               "options": {
-                "annotations": {
-                  "clustering": -1,
-                  "multiLane": false
-                },
-                "legend": {
-                  "calcs": [],
-                  "displayMode": "list",
-                  "placement": "bottom",
-                  "showLegend": true
-                },
-                "tooltip": {
-                  "hideZeros": false,
-                  "mode": "single",
-                  "sort": "none"
-                }
+                "cellHeight": "sm",
+                "showHeader": true,
+                "sortBy": [
+                  {
+                    "desc": false,
+                    "displayName": "http.path_pattern"
+                  }
+                ]
               },
               "fieldConfig": {
                 "defaults": {
@@ -826,41 +874,114 @@
                     "mode": "palette-classic"
                   },
                   "custom": {
-                    "axisBorderShow": false,
-                    "axisCenteredZero": false,
-                    "axisColorMode": "text",
-                    "axisLabel": "",
-                    "axisPlacement": "auto",
-                    "barAlignment": 0,
-                    "barWidthFactor": 0.6,
-                    "drawStyle": "line",
-                    "fillOpacity": 0,
-                    "gradientMode": "none",
-                    "hideFrom": {
-                      "legend": false,
-                      "tooltip": false,
-                      "viz": false
+                    "align": "auto",
+                    "cellOptions": {
+                      "type": "auto"
                     },
-                    "insertNulls": false,
-                    "lineInterpolation": "linear",
-                    "lineWidth": 1,
-                    "pointSize": 5,
-                    "scaleDistribution": {
-                      "type": "linear"
+                    "footer": {
+                      "reducers": []
                     },
-                    "showPoints": "auto",
-                    "showValues": false,
-                    "spanNulls": false,
-                    "stacking": {
-                      "group": "A",
-                      "mode": "none"
-                    },
-                    "thresholdsStyle": {
-                      "mode": "off"
-                    }
+                    "inspect": false
                   }
                 },
-                "overrides": []
+                "overrides": [
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Trace ID"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 90
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Start time"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 175
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Trace Service"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 132
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Trace Name"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 177
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Service"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 84
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Span ID"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 97
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Status Code"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 110
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Duration"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 90
+                      }
+                    ]
+                  }
+                ]
               }
             }
           }
@@ -870,7 +991,7 @@
         "kind": "Panel",
         "spec": {
           "id": 9,
-          "title": "New panel",
+          "title": "400s",
           "description": "",
           "links": [],
           "data": {
@@ -888,69 +1009,81 @@
                         "name": "P8D6546721A1D106C"
                       },
                       "spec": {
-                        "limit": 1000,
+                        "limit": 100,
                         "metricsQueryType": "range",
-                        "query": "{ span:name =~ \"sqlx.*\" } | rate()",
+                        "query": "{ span.http.response.status_code >= 400 && span.http.response.status_code < 500 } | select(span.http.path_pattern)",
                         "queryType": "traceql",
                         "serviceMapUseNativeHistograms": false,
-                        "spss": 1000,
+                        "spss": 100,
                         "tableType": "spans"
                       }
                     },
                     "refId": "A",
                     "hidden": false
                   }
+                }
+              ],
+              "transformations": [
+                {
+                  "kind": "Transformation",
+                  "group": "filterFieldsByName",
+                  "spec": {
+                    "options": {
+                      "include": {
+                        "names": [
+                          "Trace Service",
+                          "Trace Name",
+                          "Span ID",
+                          "Start time",
+                          "http.response.status_code",
+                          "Duration"
+                        ]
+                      }
+                    }
+                  }
                 },
                 {
-                  "kind": "PanelQuery",
+                  "kind": "Transformation",
+                  "group": "organize",
                   "spec": {
-                    "query": {
-                      "kind": "DataQuery",
-                      "group": "tempo",
-                      "version": "v0",
-                      "datasource": {
-                        "name": "P8D6546721A1D106C"
+                    "options": {
+                      "excludeByName": {},
+                      "includeByName": {},
+                      "indexByName": {
+                        "Duration": 5,
+                        "Span ID": 1,
+                        "Start time": 4,
+                        "Trace Name": 2,
+                        "Trace Service": 0,
+                        "http.response.status_code": 3
                       },
-                      "spec": {
-                        "limit": 1000,
-                        "metricsQueryType": "range",
-                        "query": "{ span:name !~ \"sqlx.*\" } | rate()",
-                        "queryType": "traceql",
-                        "serviceMapUseNativeHistograms": false,
-                        "spss": 1000,
-                        "tableType": "spans"
+                      "renameByName": {
+                        "Start time": "",
+                        "Trace Name": "",
+                        "Trace Service": "Service",
+                        "http.response.status_code": "Status Code"
                       }
-                    },
-                    "refId": "B",
-                    "hidden": false
+                    }
                   }
                 }
               ],
-              "transformations": [],
               "queryOptions": {}
             }
           },
           "vizConfig": {
             "kind": "VizConfig",
-            "group": "timeseries",
+            "group": "table",
             "version": "13.0.3",
             "spec": {
               "options": {
-                "annotations": {
-                  "clustering": -1,
-                  "multiLane": false
-                },
-                "legend": {
-                  "calcs": [],
-                  "displayMode": "list",
-                  "placement": "bottom",
-                  "showLegend": true
-                },
-                "tooltip": {
-                  "hideZeros": false,
-                  "mode": "single",
-                  "sort": "none"
-                }
+                "cellHeight": "sm",
+                "showHeader": true,
+                "sortBy": [
+                  {
+                    "desc": true,
+                    "displayName": "Start time"
+                  }
+                ]
               },
               "fieldConfig": {
                 "defaults": {
@@ -971,41 +1104,114 @@
                     "mode": "palette-classic"
                   },
                   "custom": {
-                    "axisBorderShow": false,
-                    "axisCenteredZero": false,
-                    "axisColorMode": "text",
-                    "axisLabel": "",
-                    "axisPlacement": "auto",
-                    "barAlignment": 0,
-                    "barWidthFactor": 0.6,
-                    "drawStyle": "line",
-                    "fillOpacity": 25,
-                    "gradientMode": "none",
-                    "hideFrom": {
-                      "legend": false,
-                      "tooltip": false,
-                      "viz": false
+                    "align": "auto",
+                    "cellOptions": {
+                      "type": "auto"
                     },
-                    "insertNulls": false,
-                    "lineInterpolation": "linear",
-                    "lineWidth": 1,
-                    "pointSize": 5,
-                    "scaleDistribution": {
-                      "type": "linear"
+                    "footer": {
+                      "reducers": []
                     },
-                    "showPoints": "auto",
-                    "showValues": false,
-                    "spanNulls": false,
-                    "stacking": {
-                      "group": "A",
-                      "mode": "normal"
-                    },
-                    "thresholdsStyle": {
-                      "mode": "off"
-                    }
+                    "inspect": false
                   }
                 },
-                "overrides": []
+                "overrides": [
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "traceIdHidden"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 134
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Trace Service"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 87
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Trace Name"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 171
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Span ID"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 78
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Service"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 85
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Status Code"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 115
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Start time"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 200
+                      }
+                    ]
+                  },
+                  {
+                    "matcher": {
+                      "id": "byName",
+                      "options": "Duration"
+                    },
+                    "properties": [
+                      {
+                        "id": "custom.width",
+                        "value": 76
+                      }
+                    ]
+                  }
+                ]
               }
             }
           }
@@ -1107,7 +1313,7 @@
           {
             "kind": "RowsLayoutRow",
             "spec": {
-              "title": "New row",
+              "title": "Error traces",
               "collapse": false,
               "layout": {
                 "kind": "AutoGridLayout",
