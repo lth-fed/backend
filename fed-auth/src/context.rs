@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use bin_common::setup_db;
 use mini_moka::sync::Cache;
 use poem_openapi::Object;
 use samael::service_provider::ServiceProvider;
@@ -9,13 +10,10 @@ use color_eyre::{Section as _, eyre::Context as _};
 use ed25519_dalek::pkcs8::DecodePrivateKey as _;
 use jsonwebtoken::EncodingKey;
 use serde::Serialize;
-use sqlx::migrate::MigrateDatabase as _;
-use sqlx::postgres::PgPoolOptions;
-use sqlx::{PgPool, Postgres};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::LevelFilter;
 
-use crate::{api, saml2};
+use crate::{PgPool, api, saml2};
 
 #[derive(Clone, Debug)]
 pub(crate) struct AuthSession {
@@ -74,6 +72,8 @@ pub(crate) struct Context {
     // provider auth data
     pub saml2_request_id_cache: Cache<String, ()>,
     pub email_token_holding: Cache<String, api::EmailLoginRequest>,
+
+    pub error_counter: opentelemetry::metrics::Counter<u64>,
 }
 impl Context {
     fn get_jwt_keys() -> color_eyre::Result<(EncodingKey, Vec<u8>)> {
@@ -87,27 +87,6 @@ impl Context {
         let encoding_key = EncodingKey::from_ed_der(&key);
         let public_key = verifying_key.as_bytes().to_vec();
         Ok((encoding_key, public_key))
-    }
-    async fn setup_db(db_url: &str) -> color_eyre::Result<PgPool> {
-        if !Postgres::database_exists(db_url)
-            .await
-            .wrap_err("Failed to check if database exists")?
-        {
-            Postgres::create_database(db_url).await?;
-        }
-
-        let db = PgPoolOptions::new()
-            .max_connections(50)
-            .connect(db_url)
-            .await
-            .wrap_err("Failed to create database pool")?;
-
-        sqlx::migrate!("./migrations")
-            .run(&db)
-            .await
-            .wrap_err("Failed to run migrations")?;
-
-        Ok(db)
     }
     /// # Errors
     ///
@@ -130,10 +109,13 @@ impl Context {
         let db = if let Some(db) = db {
             db
         } else {
-            Self::setup_db(&std::env::var("DATABASE_URL").wrap_err("`DATABASE_URL` not set")?)
-                .await
-                .wrap_err("Failed to set up the database")
-                .suggestion("Start the database with `docker compose up -d`")?
+            setup_db(
+                &std::env::var("DATABASE_URL").wrap_err("`DATABASE_URL` not set")?,
+                Some(migrate!("./migrations")),
+            )
+            .await
+            .wrap_err("Failed to set up the database")
+            .suggestion("Start the database with `docker compose up -d`")?
         };
 
         let (sp, saml_pk) = saml2::get_service_provider().await?;
@@ -160,6 +142,9 @@ impl Context {
             None
         };
 
+        // so they are grouped with the usual poem errors:
+        // https://docs.rs/poem/latest/src/poem/middleware/opentelemetry_metrics.rs.html
+        let meter = opentelemetry::global::meter("poem");
         let context = Context {
             db,
             reqwest_client: reqwest::Client::new(),
@@ -177,6 +162,11 @@ impl Context {
                 .build(),
             email_token_holding: Cache::builder()
                 .time_to_live(std::time::Duration::from_mins(30))
+                .build(),
+
+            error_counter: meter
+                .u64_counter("poem_errors_count")
+                .with_description("failed request count (since start of service)")
                 .build(),
         };
         Ok(context)

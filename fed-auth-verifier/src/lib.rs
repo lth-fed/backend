@@ -1,5 +1,5 @@
 use jsonwebtoken::{Algorithm, Validation};
-use minilith_errors::{MinilithEndpointError, MinilithErrorKind, MinilithErrorResultExt as _};
+use minilith_errors::{MinilithEndpointError, MinilithErrorResultExt as _};
 use poem::http::StatusCode;
 use poem_openapi::auth::Bearer;
 use poem_openapi::{ApiExtractor, Object, SecurityScheme};
@@ -88,20 +88,12 @@ impl User {
             return Ok("lund-university:aa0000bb-s".to_owned());
         }
         let context: &AuthContext = req.data().ok_or_else(|| {
-            error!("AuthContext not registered as data!");
-            MinilithEndpointError::internal_error(
-                "AUTH_EXTR",
-                MinilithErrorKind::Other,
-                "contact app developers",
-            )
+            MinilithEndpointError::internal_error("AuthContext not registered as data!")
         })?;
 
         let data =
             jsonwebtoken::decode::<Claims>(&token.token, &context.auth_key, &context.validation)
-                .map_err(|_| MinilithEndpointError::unauthorized(
-                "EXTR_NOUSR",
-                "You don't have a valid login-session. Try logging out and in again or clearing cookies.",
-            ))?;
+                .wrap_err_unauthorized("decode failed")?;
         Ok(data.claims.sub)
     }
 }
@@ -175,28 +167,19 @@ impl<'a> ApiExtractor<'a> for CallbackDataV1 {
         _param_opts: poem_openapi::ExtractParamOptions<()>,
     ) -> poem::Result<Self> {
         let context: &AuthContext = request.data().ok_or_else(|| {
-            error!("AuthContext not registered as data!");
-            MinilithEndpointError::internal_error(
-                "AUTH_CB_AC",
-                MinilithErrorKind::Other,
-                "contact app developers",
-            )
+            MinilithEndpointError::internal_error("AuthContext not registered as data!")
         })?;
         let body = body.take().map_err(|err| {
-            error!("Somebody took our body: {err}");
-            MinilithEndpointError::internal_error(
-                "AUTH_CB_BDY",
-                MinilithErrorKind::Other,
-                "contact app developers",
-            )
+            error!(?err, "Somebody took our body!");
+            MinilithEndpointError::internal_error("")
         })?;
         let body = body
             .into_string()
             .await
-            .wrap_err_bad_user("AUTH_CB_BDY_UTF8", "<body>")?;
+            .wrap_err_bad_user("invalid utf8 body", "<body>")?;
         let data: CallbackDataV1 =
             jsonwebtoken::decode(&body, &context.auth_key, &context.validation)
-                .wrap_err_unauthorized("INVALID_TOKEN")?
+                .wrap_err_unauthorized("jwt invalid on decode")?
                 .claims;
         Ok(data)
     }

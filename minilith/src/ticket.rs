@@ -166,15 +166,15 @@ impl Router {
     ) -> MinilithResult<Json<PurchasedTicket>> {
         let mut txn = self.db.begin().await.wrap_err_db()?;
 
-        validate_addons(&mut *txn, &req.addons, req.ticket_kind).await?;
-        ensure_user_may_purchase_ticket(&mut *txn, &user, req.ticket_kind).await?;
+        validate_addons(&mut txn.executor(), &req.addons, req.ticket_kind).await?;
+        ensure_user_may_purchase_ticket(&mut txn.executor(), &user, req.ticket_kind).await?;
 
         let ticket_id = sqlx::query_scalar!(
             "insert into purchased_tickets (ticket_kind_id, purchaser_id, owner_id) values ($1, $2, $2) returning id",
             req.ticket_kind,
             user.get_id(),
         )
-        .fetch_one(&mut *txn)
+        .fetch_one(&mut txn.executor())
         .await
         .wrap_err_db()?;
 
@@ -184,7 +184,7 @@ impl Router {
                 addon,
                 ticket_id
             )
-            .execute(&mut *txn)
+            .execute(&mut txn.executor())
             .await
             .wrap_err_db()?;
         }
@@ -195,7 +195,7 @@ impl Router {
             "update ticket_kinds set reserved_or_purchased_tickets = reserved_or_purchased_tickets + 1, has_been_purchased = true where id = $1",
             req.ticket_kind
         )
-        .execute(&mut *txn)
+        .execute(&mut txn.executor())
         .await
             .wrap_err_db()?;
 
@@ -297,7 +297,8 @@ async fn ensure_user_may_purchase_ticket(
 
     if !may_purchase {
         return Err(MinilithEndpointError::bad_user_input(
-            "TKS_VALD_PURCH",
+            "doublette purchase",
+            "",
             "not allowed to purchase this ticket kind OR \
             you have already purchased one ticket for this activity",
             "ticket_kind",

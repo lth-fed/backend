@@ -147,7 +147,7 @@ impl Router {
     }
     /// # Errors
     ///
-    /// `BF_ACT_USER_ACCESS` (user access to activity).
+    /// - user might not be allowed to access this activity
     async fn test_activity_access(&self, user: &str, id: &Uuid) -> MinilithResult<()> {
         // this clusterfuck is the same logic as above, which checks if this activity should be
         // visible
@@ -170,15 +170,16 @@ impl Router {
             user,
             id
         )
-        .fetch_one(&self.context.db)
+        .fetch_optional(&self.context.db)
         .await
-        .wrap_err_bad_frontend("ACT_USER_ACCESS")?;
+        .wrap_err_db()?
+        .wrap_err_bad_frontend("user not allowed to access this activity")?;
         Ok(())
     }
     /// # Errors
     ///
-    /// DB, AUTH, `BF_ACT_USER_ACCESS` (user access to activity), NF (activity not found), ENC
-    /// (decryption).
+    /// - user might not be allowed to access this activity
+    /// - activity not found
     #[oai(path = "/:id", method = "get")]
     async fn details(&self, user: User, id: Path<Uuid>) -> MinilithResult<Json<Activity>> {
         self.test_activity_access(user.get_id(), &id.0).await?;
@@ -205,8 +206,9 @@ impl Router {
             "#,
             *id
         )
-        .fetch_one(&self.context.db)
+        .fetch_optional(&self.context.db)
         .await
+        .wrap_err_db()?
         .wrap_err_not_found()?;
         let other_hosts = sqlx::query!(
             r#"select hosts.id, path, name as "name!: DIS", url
@@ -255,7 +257,7 @@ impl Router {
                 id: activity.responsible_id,
                 name: self
                     .decrypt_string(activity.responsible_name, &activity.responsible_nonce)
-                    .wrap_err_encryption("ACT_USER_DETAILS_RESPONSIBLE_NAME")?,
+                    .wrap_err_encryption("responsible_name")?,
             },
             title: activity.title.0,
             description: activity.description.0,
@@ -271,7 +273,7 @@ impl Router {
     }
     /// # Errors
     ///
-    /// AUTH, `BF_ACT_USER_ACCESS` (access to activity), DB.
+    /// - user might not be allowed to access this activity
     #[oai(path = "/:id/ticket-kinds", method = "get")]
     async fn kinds(&self, user: User, id: Path<Uuid>) -> MinilithResult<Json<Vec<TicketKind>>> {
         self.test_activity_access(user.get_id(), &id.0).await?;

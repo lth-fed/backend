@@ -44,7 +44,7 @@ pub async fn closest_user_adminship(
 ///
 /// # Errors
 ///
-/// DB, `BF_GRP_CK_ADMSHP_ACCESS`.
+/// - the user has to be an admin of this group
 pub async fn check_adminship(
     db: impl PgExecutor<'_>,
     user_id: &str,
@@ -68,8 +68,8 @@ pub async fn check_adminship(
     match row {
         None => Err(MinilithEndpointError::not_found()),
         Some(row) if !row.is_admin => Err(MinilithEndpointError::bad_frontend_code(
-            "GRP_CK_ADMSHP_ACCESS",
-            format!("must be an admin of group `{group_id}`"),
+            format!("must be an admin of the group {group_id}"),
+            "",
         )),
         Some(_) => Ok(()),
     }
@@ -80,7 +80,8 @@ pub async fn check_adminship(
 ///
 /// # Errors
 ///
-/// DB, `BF_GRP_CK_ADMSHP_PARENT_ROOT`, `BF_GRP_CK_ADMSHP_PARENT_ACCESS`.
+/// - root must have no admins
+/// - the user must be admin of the parent of this group
 pub async fn check_parent_adminship(
     db: impl PgExecutor<'_>,
     user_id: &str,
@@ -106,12 +107,12 @@ pub async fn check_parent_adminship(
     match row {
         None => Err(MinilithEndpointError::not_found()),
         Some(row) if row.parent_path.is_none() => Err(MinilithEndpointError::bad_frontend_code(
-            "GRP_CK_ADMSHP_PARENT_ROOT",
             "nobody may become admin of the root group",
+            "",
         )),
         Some(row) if !row.is_admin => Err(MinilithEndpointError::bad_frontend_code(
-            "GRP_CK_ADMSHP_PARENT_ACCESS",
-            format!("you must be an admin of the parent of group `{group_id}`"),
+            format!("you must be an admin of the parent of the group {group_id}"),
+            "",
         )),
         Some(_) => Ok(()),
     }

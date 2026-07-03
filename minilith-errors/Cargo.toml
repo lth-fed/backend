@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+opentelemetry.workspace = true
 poem.workspace = true
 poem-openapi.workspace = true
 tracing.workspace = true

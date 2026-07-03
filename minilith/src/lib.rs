@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 
+use bin_common::get_otel;
 use fed_auth_verifier::AuthContext;
+use opentelemetry::trace::TracerProvider as _;
 use poem::http::Method;
-use poem::middleware::Cors;
+use poem::middleware::{Cors, OpenTelemetryMetrics, OpenTelemetryTracing};
 use poem::{Endpoint, EndpointExt as _, Route};
 use poem_openapi::OpenApiService;
-use sqlx::PgPool;
 
 pub mod activities;
 pub mod context;
@@ -14,11 +15,13 @@ pub mod healthcheck;
 pub mod ticket;
 pub mod user;
 
+pub use bin_common::PgPool;
 pub use context::Context;
 pub use minilith_errors::*;
 
 pub type DbInternationalizedString = sqlx::types::Json<InternationalizedString>;
-#[derive(Debug, Clone, poem_openapi::NewType, serde::Serialize, serde::Deserialize)] // eventually implement Deserialize ourselves
+// eventually implement Deserialize ourselves with restrictions
+#[derive(Debug, Clone, poem_openapi::NewType, serde::Serialize, serde::Deserialize)]
 #[oai(from_multipart = false, from_parameter = false, to_header = false)]
 #[serde(transparent)]
 pub struct InternationalizedString(HashMap<String, String>);
@@ -43,6 +46,8 @@ impl From<DbInternationalizedString> for InternationalizedString {
 ///
 /// See [`Context::new`].
 pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl Endpoint> {
+    let otel = get_otel(env!("CARGO_PKG_NAME"))?;
+
     let context = Context::new(test_db).await?;
     let auth_context = AuthContext::new().await?;
     let api_service = OpenApiService::new(
@@ -82,5 +87,9 @@ pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl En
         .nest("/v0", api_service.data(auth_context))
         .nest("/v0/docs", ui)
         .nest("/v0/spec.json", spec)
+        .with(OpenTelemetryMetrics::new())
+        .with(OpenTelemetryTracing::new(
+            otel.tracer(env!("CARGO_PKG_NAME")),
+        ))
         .with(cors))
 }
