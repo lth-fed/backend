@@ -1,0 +1,35 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+exporters:
+  # Data sources: metrics
+  otlp_grpc:
+    endpoint: localhost:5317
+    tls:
+      insecure: true
+  prometheus:
+    endpoint: localhost:8889
+    namespace: default
+  otlphttp/logs:
+    endpoint: "http://localhost:3100/otlp"
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      exporters: [prometheus]
+    traces:
+      receivers: [otlp]
+      exporters: [otlp_grpc]
+    logs:
+      receivers: [otlp]
+      exporters: [otlphttp/logs]
+
+extensions:
+  zpages:
+    endpoint: 0.0.0.0:55679
