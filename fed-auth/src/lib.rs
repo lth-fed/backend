@@ -6,7 +6,7 @@
 #![allow(clippy::same_name_method, reason = "rust_embed uses it")]
 use bin_common::get_otel;
 use fed_auth_verifier::AuthContext;
-use opentelemetry::trace::TracerProvider;
+use opentelemetry::trace::TracerProvider as _;
 use poem::EndpointExt as _;
 use poem::endpoint::EmbeddedFilesEndpoint;
 use poem::http::Method;
@@ -54,10 +54,10 @@ fn random_id() -> String {
 /// # Errors
 ///
 /// If the endpoint fails to set up, often because env variables / database is missing.
-pub async fn get_endpoint(db: Option<PgPool>) -> color_eyre::Result<impl poem::Endpoint> {
-    let tracer = get_otel(env!("CARGO_PKG_NAME"))?;
+pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl poem::Endpoint> {
+    let tracer = get_otel(env!("CARGO_PKG_NAME"), test_db.is_some())?;
 
-    let context = Context::new(db).await?;
+    let context = Context::new(test_db).await?;
     let auth_ctx =
         AuthContext::from_decoding_key(jsonwebtoken::DecodingKey::from_ed_der(&context.public_key));
     let server_url = DOMAIN;

@@ -46,7 +46,7 @@ impl From<DbInternationalizedString> for InternationalizedString {
 ///
 /// See [`Context::new`].
 pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl Endpoint> {
-    let otel = get_otel(env!("CARGO_PKG_NAME"))?;
+    let otel = get_otel(env!("CARGO_PKG_NAME"), test_db.is_some())?;
 
     let context = Context::new(test_db).await?;
     let auth_context = AuthContext::new().await?;

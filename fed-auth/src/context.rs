@@ -10,6 +10,7 @@ use color_eyre::{Section as _, eyre::Context as _};
 use ed25519_dalek::pkcs8::DecodePrivateKey as _;
 use jsonwebtoken::EncodingKey;
 use serde::Serialize;
+use sqlx::migrate;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::LevelFilter;
 
@@ -72,8 +73,6 @@ pub(crate) struct Context {
     // provider auth data
     pub saml2_request_id_cache: Cache<String, ()>,
     pub email_token_holding: Cache<String, api::EmailLoginRequest>,
-
-    pub error_counter: opentelemetry::metrics::Counter<u64>,
 }
 impl Context {
     fn get_jwt_keys() -> color_eyre::Result<(EncodingKey, Vec<u8>)> {
@@ -142,9 +141,6 @@ impl Context {
             None
         };
 
-        // so they are grouped with the usual poem errors:
-        // https://docs.rs/poem/latest/src/poem/middleware/opentelemetry_metrics.rs.html
-        let meter = opentelemetry::global::meter("poem");
         let context = Context {
             db,
             reqwest_client: reqwest::Client::new(),
@@ -162,11 +158,6 @@ impl Context {
                 .build(),
             email_token_holding: Cache::builder()
                 .time_to_live(std::time::Duration::from_mins(30))
-                .build(),
-
-            error_counter: meter
-                .u64_counter("poem_errors_count")
-                .with_description("failed request count (since start of service)")
                 .build(),
         };
         Ok(context)

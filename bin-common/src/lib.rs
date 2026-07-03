@@ -45,7 +45,10 @@ pub async fn setup_db(db_url: &str, migrator: Option<Migrator>) -> color_eyre::R
 /// # Errors
 ///
 /// Errors if we fail to connect to OTEL collector.
-pub fn get_otel(service_name: &'static str) -> color_eyre::Result<opentelemetry_sdk::trace::SdkTracerProvider> {
+pub fn get_otel(
+    service_name: &'static str,
+    test: bool,
+) -> color_eyre::Result<opentelemetry_sdk::trace::SdkTracerProvider> {
     let resource = opentelemetry_sdk::Resource::builder()
         .with_service_name(service_name)
         .with_attributes([opentelemetry::KeyValue::new(
@@ -56,6 +59,13 @@ pub fn get_otel(service_name: &'static str) -> color_eyre::Result<opentelemetry_
             "production",
         )])
         .build();
+
+    if test {
+        return Ok(opentelemetry_sdk::trace::SdkTracerProvider::builder()
+            .with_resource(resource.clone())
+            .with_simple_exporter(opentelemetry_sdk::testing::trace::NoopSpanExporter::new())
+            .build());
+    }
 
     let span_exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_tonic()
@@ -90,7 +100,8 @@ pub fn get_otel(service_name: &'static str) -> color_eyre::Result<opentelemetry_
         .build();
     let otel_layer =
         opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(&logger);
-    let otel_span_appender = tracing_opentelemetry::layer().with_tracer(tracer.tracer(service_name));
+    let otel_span_appender =
+        tracing_opentelemetry::layer().with_tracer(tracer.tracer(service_name));
     let _: Result<(), _> = tracing_subscriber::registry()
         .with(env_filter)
         .with(otel_layer)
