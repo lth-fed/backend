@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select user_id\n        from ticket_reservation_queuers queuers\n        where ticket_id = $1\n        order by placement asc\n        limit $2\n        for update skip locked",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "639658a8094b4d8125e2c8701da61c9c18ad033d6644d898e7226d9ed39bcb61"
+}

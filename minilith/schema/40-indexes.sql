@@ -10,4 +10,11 @@ create index activity_time_start on activities using btree (time_start);
 create index activity_time_end on activities using btree (time_end);
 create index activity_hosts_by_activity on activity_hosts using hash (activity_id);
 create index ticket_kind_by_activity on ticket_kinds using hash (activity_id);
-create index ticket_kind_allowed_groups_by_group on ticket_kind_allowed_groups using hash (group_id)
+create index ticket_kind_allowed_groups_by_group on ticket_kind_allowed_groups using hash (group_id);
+
+-- tickets
+create index ticket_kind_start on ticket_kinds using btree (purchasing_available_start);
+create index ticket_queuer_placement on ticket_reservation_queuers using btree (placement);
+create index ticket_queuer_timeout on ticket_release_queuers using btree (started_queueing);
+create index ticket_reservation_timeout on ticket_reservations using btree (timeout);
+create index ticket_release_queuers_ticket_id on ticket_release_queuers using hash (ticket_id);

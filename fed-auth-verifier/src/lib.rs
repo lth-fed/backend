@@ -186,6 +186,7 @@ fn decode_jwt<T: DeserializeOwned>(
         checker = "User::from_token"
     )
 )]
+#[derive(Clone)]
 pub struct User(String);
 impl User {
     #[must_use]

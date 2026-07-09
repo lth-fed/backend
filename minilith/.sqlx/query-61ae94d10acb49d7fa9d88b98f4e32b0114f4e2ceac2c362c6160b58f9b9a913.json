@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from ticket_reservation_queuers\n        where user_id = (\n            select user_id\n            from ticket_reservation_queuers\n            inner join ticket_kinds kind on (kind.id = ticket_id)\n            where max_tickets = reserved_or_purchased_tickets\n            and (select count(id) from purchased_tickets where ticket_id = kind.id) = max_tickets\n            for update skip locked\n        )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "61ae94d10acb49d7fa9d88b98f4e32b0114f4e2ceac2c362c6160b58f9b9a913"
+}

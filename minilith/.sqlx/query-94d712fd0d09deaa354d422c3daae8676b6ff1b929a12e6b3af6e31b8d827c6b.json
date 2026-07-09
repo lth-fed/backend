@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select placement, reserved_or_purchased_tickets, ticket_id\n            from ticket_reservation_queuers\n            inner join ticket_kinds on (ticket_kinds.id = ticket_reservation_queuers.ticket_id)\n            where user_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "placement",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "reserved_or_purchased_tickets",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "ticket_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "94d712fd0d09deaa354d422c3daae8676b6ff1b929a12e6b3af6e31b8d827c6b"
+}

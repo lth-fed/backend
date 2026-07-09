@@ -25,7 +25,8 @@ create table ticket_kinds (
     -- allows tickets to be transferred to users which do not pass the `ticket_kind_allowed_groups` check
     allow_transfer_ticket_bypass_allowed_groups boolean not null,
     -- when this is set nothing is allowed to be changed, except the bookkeeping on table:options & purchasing_available
-    has_been_purchased boolean not null
+    has_been_purchased boolean not null,
+    has_been_released boolean not null
 );
 -- which groups are allowed to buy this ticket kind
 create table ticket_kind_allowed_groups (
@@ -71,11 +72,10 @@ create table ticket_addon_options (
 -- then start a worker which pops the user with the highest placement as long as there are tickets available
 -- but for efficiency, don't put the N people with highest placement in `ticket_queue`, just move all of them to
 -- `ticket_reservations` directly & initiate transactions
-create table ticket_queuers (
-    id uuid primary key,
+create table ticket_release_queuers (
+    user_id text primary key references users(id),
     -- a biljettsläpp is only per ticket_kind, not per activity
     ticket_id uuid not null references ticket_kinds(id),
-    user_id text not null references users(id),
     -- remove after 20 minutes, should refresh after 15 minutes
     started_queueing timestamptz not null
 
@@ -92,18 +92,21 @@ create table ticket_queuers (
 -- Upon server startup, check if there are any people in this queue, for every ticket_kind, and if there is,
 --     start the worker.
 -- The worker should start after the biljettsläpp if there were more people interested than there was tickets
-create table ticket_queue (
-    id uuid primary key,
+create table ticket_reservation_queuers (
+    user_id text primary key references users(id),
     ticket_id uuid not null references ticket_kinds(id),
-    user_id text not null references users(id),
-    placement integer not null check (placement >= 0)
+    -- this value is based on total placement. To get relative placement (i.e. until one can buy a ticket),
+    -- subtract the ticket_id->reserved_or_purchased_tickets value
+    placement integer not null check (placement >= 0),
+    unique (ticket_id, placement)
 );
 
 -- people who have reserved a ticket
 create table ticket_reservations (
-    id uuid primary key,
+    user_id text primary key references users(id),
     ticket_id uuid not null references ticket_kinds(id),
-    user_id text not null references users(id),
+    -- could be null before transaction is initiated
+    transaction_id uuid,
     -- remove after this!
     -- or if transaction is currently happening and not cancellable wait for max an hour or smth
     timeout timestamptz not null

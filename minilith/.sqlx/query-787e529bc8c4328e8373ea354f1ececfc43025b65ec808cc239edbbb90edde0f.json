@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into ticket_reservation_queuers (user_id, ticket_id, placement) values ($1, $2,\n                    -- take last placement, add one\n                    (select placement\n                     from ticket_reservation_queuers\n                     order by placement desc limit 1) + 1\n                )\n                on conflict (user_id) do update\n                set ticket_id = excluded.ticket_id, placement = excluded.placement",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "787e529bc8c4328e8373ea354f1ececfc43025b65ec808cc239edbbb90edde0f"
+}

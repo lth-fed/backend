@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select has_been_released from ticket_kinds where id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "has_been_released",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "fdf760b7f7d3e7679a4616ee71621ee22c88424729b99a34f083c53902ff2c32"
+}

@@ -14,6 +14,7 @@ use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::util::SubscriberInitExt as _;
 
 pub type PgPool = sqlx_tracing::Pool<Postgres>;
+pub type Transaction<'a> = sqlx_tracing::Transaction<'a, Postgres>;
 
 /// # Errors
 ///
