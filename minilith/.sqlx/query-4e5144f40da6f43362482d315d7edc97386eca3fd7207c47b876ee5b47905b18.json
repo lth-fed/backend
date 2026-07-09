@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into ticket_reservations (user_id, ticket_id, transaction_id, timeout)\n        select user_id, $2 as ticket_id, null as transaction_id, (from_now + now()) as timeout\n        from unnest($1::text[], $3::interval[]) as t(user_id, from_now)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "Uuid",
+        "IntervalArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4e5144f40da6f43362482d315d7edc97386eca3fd7207c47b876ee5b47905b18"
+}

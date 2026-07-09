@@ -1,0 +1,100 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select *\n        from ticket_kinds \n        where id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "activity_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "name",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 3,
+        "name": "price",
+        "type_info": "Money"
+      },
+      {
+        "ordinal": 4,
+        "name": "purchasing_available_start",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "purchasing_available_stop",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "max_tickets",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 7,
+        "name": "min_tickets",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 8,
+        "name": "reserved_or_purchased_tickets",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 9,
+        "name": "allow_transfer_ticket_start",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 10,
+        "name": "allow_transfer_ticket_stop",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 11,
+        "name": "allow_transfer_ticket_bypass_allowed_groups",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 12,
+        "name": "has_been_purchased",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 13,
+        "name": "has_been_released",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "2cb57cafd2e633023dc51176c6dbad6615d35b5d0ea386d90149bace1cc2e60d"
+}
