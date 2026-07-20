@@ -75,12 +75,12 @@ create table ticket_addon_options (
 create table ticket_release_queuers (
     user_id text primary key references users(id),
     -- a biljettsläpp is only per ticket_kind, not per activity
-    ticket_id uuid not null references ticket_kinds(id),
+    ticket_kind_id uuid not null references ticket_kinds(id),
     -- remove after 20 minutes, should refresh after 15 minutes
     started_queueing timestamptz not null
 
     -- can't check this since it requires an INNER JOIN on ticket_kinds (BACKEND HAS TO CHECK!)
-    -- constraint not_queuing_for_multiple_ticket_types unique (ticket_id->activity_id, user_id)
+    -- constraint not_queuing_for_multiple_ticket_types unique (ticket_kind_id->activity_id, user_id)
 );
 -- there should be a worker that every second or so checks if there are any available tickets,
 -- then pop the user with the best placement & converts it into a reservation & decrements available
@@ -94,17 +94,18 @@ create table ticket_release_queuers (
 -- The worker should start after the biljettsläpp if there were more people interested than there was tickets
 create table ticket_reservation_queuers (
     user_id text primary key references users(id),
-    ticket_id uuid not null references ticket_kinds(id),
+    ticket_kind_id uuid not null references ticket_kinds(id),
     -- this value is based on total placement. To get relative placement (i.e. until one can buy a ticket),
-    -- subtract the ticket_id->reserved_or_purchased_tickets value
+    -- subtract the ticket_kind_id->reserved_or_purchased_tickets value
     placement integer not null check (placement >= 0),
-    unique (ticket_id, placement)
+    unique (ticket_kind_id, placement)
 );
 
 -- people who have reserved a ticket
 create table ticket_reservations (
-    user_id text primary key references users(id),
-    ticket_id uuid not null references ticket_kinds(id),
+    id uuid primary key default uuidv4(),
+    user_id text unique references users(id),
+    ticket_kind_id uuid not null references ticket_kinds(id),
     -- could be null before transaction is initiated
     transaction_id uuid,
     -- remove after this!
@@ -112,7 +113,16 @@ create table ticket_reservations (
     timeout timestamptz not null
 
     -- can't check this since it requires an INNER JOIN on ticket_kinds (BACKEND HAS TO CHECK!)
-    --constraint not_reserve_multiple_ticket_kinds unique (ticket_id->activity_id, user_id)
+    --constraint not_reserve_multiple_ticket_kinds unique (ticket_kind_id->activity_id, user_id)
+);
+-- the addons for the reserved ticket
+create table ticket_reservation_addons (
+    addon_id uuid not null references ticket_addons(id),
+    ticket_id uuid not null references ticket_reservations(id),
+    ---
+    selected_options integer[] not null,
+    selected_text text not null,
+    primary key (ticket_id, addon_id)
 );
 
 -- ONE PERSON CAN ONLY OWN ONE TICKET KIND PER ACTIVITY
@@ -122,8 +132,9 @@ create table purchased_tickets (
     ticket_kind_id uuid not null references ticket_kinds(id),
     -- if these are not the same the ticket is clearly transferred
     purchaser_id text not null references users(id),
-    owner_id text not null references users(id)
+    owner_id text not null references users(id),
     -- could have price here, since it's not allowed to be changed once a ticket has been purchased, but it's just unnecessary because it's easy to calculate
+    transaction_id uuid not null
 );
 create table purchased_ticket_addons (
     addon_id uuid not null references ticket_addons(id),

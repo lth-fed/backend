@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use base64::Engine as _;
 use bin_common::setup_db;
@@ -11,10 +12,20 @@ use sqlx::migrate;
 
 use crate::PgPool;
 
+#[allow(
+    clippy::module_name_repetitions,
+    reason = "it's imported and should contain the name"
+)]
+pub type ContextWrapper = Arc<Context>;
+
 #[derive(Debug, Clone)]
 pub struct Context {
     pub db: PgPool,
     encryption_key: [u8; 32],
+
+    transactions_api: String,
+    transactions_client: reqwest::Client,
+    transactions_token: String,
 }
 
 impl Context {
@@ -44,7 +55,21 @@ impl Context {
             "Error: Env variable 'ENCRYPTION_KEY' is of wrong size. Expected: 32 bytes.",
         )?;
 
-        let context = Self { db, encryption_key };
+        let transactions_token = std::env::var("TRANSACTIONS_TOKEN")
+            .wrap_err("Error: Missing env variable: 'TRANSACTIONS_TOKEN'.")?;
+
+        #[cfg(debug_assertions)]
+        let transactions_api = "http://localhost:8002";
+        #[cfg(not(debug_assertions))]
+        let transactions_api = "https://transactions.teknologappen.se";
+
+        let context = Self {
+            db,
+            encryption_key,
+            transactions_api: transactions_api.to_owned(),
+            transactions_client: reqwest::Client::new(),
+            transactions_token,
+        };
         Ok(context)
     }
 
@@ -137,5 +162,22 @@ impl Context {
     pub fn decrypt_string(&self, mut encrypted_data: Vec<u8>, nonce: &[u8]) -> Option<String> {
         self.endecrypt_mut_slice(&mut encrypted_data, nonce.try_into().ok()?);
         String::from_utf8(encrypted_data).ok()
+    }
+
+    pub fn transactions_get(&self, endpoint: impl AsRef<str>) -> reqwest::RequestBuilder {
+        self.transactions_client
+            .get(format!("{}{}", self.transactions_api, endpoint.as_ref()))
+            .header(
+                "authorization",
+                format!("Bearer {}", self.transactions_token),
+            )
+    }
+    pub fn transactions_post(&self, endpoint: impl AsRef<str>) -> reqwest::RequestBuilder {
+        self.transactions_client
+            .post(format!("{}{}", self.transactions_api, endpoint.as_ref()))
+            .header(
+                "authorization",
+                format!("Bearer {}", self.transactions_token),
+            )
     }
 }

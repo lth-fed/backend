@@ -3,14 +3,14 @@ use std::ops::Deref;
 use minilith_errors::{MinilithErrorResultExt as _, MinilithResult};
 use poem_openapi::{OpenApi, payload::PlainText};
 
-use crate::context::Context;
+use crate::context::ContextWrapper;
 
 #[derive(Clone, Debug)]
 pub struct Router {
-    pub context: Context,
+    pub context: ContextWrapper,
 }
 impl Deref for Router {
-    type Target = Context;
+    type Target = ContextWrapper;
     fn deref(&self) -> &Self::Target {
         &self.context
     }

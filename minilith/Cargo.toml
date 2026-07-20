@@ -21,13 +21,14 @@ opentelemetry_sdk.workspace = true
 poem.workspace = true
 poem-openapi.workspace = true
 rand.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json = "1.0.149"
 serde_with = "3.20.0"
 sqlx.workspace = true
 sqlx-tracing.workspace = true
-time = { version = "0.3", features = ["parsing", "formatting"] }
-tokio = { workspace = true, features = ["full"] }
+time.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }
 tracing.workspace = true
 tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true

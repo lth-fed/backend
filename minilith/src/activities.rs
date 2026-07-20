@@ -8,7 +8,7 @@ use sqlx::postgres::types::PgPoint;
 use sqlx::types::Uuid;
 use sqlx::types::time::OffsetDateTime;
 
-use crate::context::Context;
+use crate::context::ContextWrapper;
 use crate::{
     DbInternationalizedString as DIS, InternationalizedString, MinilithErrorOptionExt as _,
     MinilithErrorResultExt as _, MinilithResult,
@@ -107,10 +107,10 @@ struct TicketKind {
 
 #[derive(Clone, Debug)]
 pub struct Router {
-    pub context: Context,
+    pub context: ContextWrapper,
 }
 impl Deref for Router {
-    type Target = Context;
+    type Target = ContextWrapper;
     fn deref(&self) -> &Self::Target {
         &self.context
     }
