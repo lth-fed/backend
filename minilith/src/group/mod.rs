@@ -19,7 +19,7 @@ use crate::{
     MinilithErrorOptionExt as _, MinilithErrorResultExt as _, MinilithResult,
 };
 use crate::{
-    context::Context,
+    context::ContextWrapper,
     group::{
         admin::{Adminship, check_adminship, check_parent_adminship, group_admins},
         member::{group_members, user_groups},
@@ -40,11 +40,11 @@ pub async fn id_by_path(db: impl PgExecutor<'_>, path: &Path) -> MinilithResult<
 
 #[derive(Clone, Debug)]
 pub struct Router {
-    pub context: Context,
+    pub context: ContextWrapper,
 }
 
 impl Deref for Router {
-    type Target = Context;
+    type Target = ContextWrapper;
 
     fn deref(&self) -> &Self::Target {
         &self.context

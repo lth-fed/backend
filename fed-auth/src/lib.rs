@@ -5,7 +5,7 @@
 )]
 #![allow(clippy::same_name_method, reason = "rust_embed uses it")]
 use bin_common::get_otel;
-use fed_auth_verifier::AuthContext;
+use fed_auth_verifier::{AuthUrl, JwkContext};
 use opentelemetry::trace::TracerProvider as _;
 use poem::EndpointExt as _;
 use poem::endpoint::EmbeddedFilesEndpoint;
@@ -62,7 +62,7 @@ pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl po
     let tracer = get_otel(env!("CARGO_PKG_NAME"), test_db.is_some())?;
 
     let context = Context::new(test_db).await?;
-    let auth_ctx = AuthContext::from_jwks("", context.jwks.clone());
+    let auth_ctx = JwkContext::<AuthUrl>::from_jwks("", context.jwks.clone());
     let server_url = API_DOMAIN;
     let api_service = OpenApiService::new(
         api::MainRouter {

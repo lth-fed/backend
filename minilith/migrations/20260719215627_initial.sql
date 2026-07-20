@@ -1,7 +1,5 @@
 create extension if not exists "ltree" with schema "public" version '1.3';
 
-create type "public"."notification_level" as enum ('none', 'personalized', 'all');
-
 create type "public"."location" as (
     "name" jsonb,
     "directions" jsonb,
@@ -103,7 +101,8 @@ create table "public"."purchased_tickets" (
     "id" uuid not null default uuidv4(),
     "ticket_kind_id" uuid not null,
     "purchaser_id" text not null,
-    "owner_id" text not null
+    "owner_id" text not null,
+    "transaction_id" uuid not null
 );
 
 
@@ -154,21 +153,30 @@ create table "public"."ticket_kinds" (
 
 create table "public"."ticket_release_queuers" (
     "user_id" text not null,
-    "ticket_id" uuid not null,
+    "ticket_kind_id" uuid not null,
     "started_queueing" timestamp with time zone not null
+);
+
+
+create table "public"."ticket_reservation_addons" (
+    "addon_id" uuid not null,
+    "ticket_id" uuid not null,
+    "selected_options" integer[] not null,
+    "selected_text" text not null
 );
 
 
 create table "public"."ticket_reservation_queuers" (
     "user_id" text not null,
-    "ticket_id" uuid not null,
+    "ticket_kind_id" uuid not null,
     "placement" integer not null
 );
 
 
 create table "public"."ticket_reservations" (
-    "user_id" text not null,
-    "ticket_id" uuid not null,
+    "id" uuid not null default uuidv4(),
+    "user_id" text,
+    "ticket_kind_id" uuid not null,
     "transaction_id" uuid,
     "timeout" timestamp with time zone not null
 );
@@ -247,11 +255,29 @@ CREATE INDEX ticket_kind_start ON public.ticket_kinds USING btree (purchasing_av
 
 CREATE UNIQUE INDEX ticket_kinds_pkey ON public.ticket_kinds USING btree (id);
 
+CREATE INDEX ticket_purchased_transaction ON public.purchased_tickets USING hash (transaction_id);
+
+CREATE INDEX ticket_queuer_placement ON public.ticket_reservation_queuers USING btree (placement);
+
+CREATE INDEX ticket_queuer_timeout ON public.ticket_release_queuers USING btree (started_queueing);
+
 CREATE UNIQUE INDEX ticket_release_queuers_pkey ON public.ticket_release_queuers USING btree (user_id);
+
+CREATE INDEX ticket_release_queuers_ticket_id ON public.ticket_release_queuers USING hash (ticket_kind_id);
+
+CREATE UNIQUE INDEX ticket_reservation_addons_pkey ON public.ticket_reservation_addons USING btree (ticket_id, addon_id);
 
 CREATE UNIQUE INDEX ticket_reservation_queuers_pkey ON public.ticket_reservation_queuers USING btree (user_id);
 
-CREATE UNIQUE INDEX ticket_reservations_pkey ON public.ticket_reservations USING btree (user_id);
+CREATE UNIQUE INDEX ticket_reservation_queuers_ticket_kind_id_placement_key ON public.ticket_reservation_queuers USING btree (ticket_kind_id, placement);
+
+CREATE INDEX ticket_reservation_timeout ON public.ticket_reservations USING btree (timeout);
+
+CREATE UNIQUE INDEX ticket_reservations_pkey ON public.ticket_reservations USING btree (id);
+
+CREATE UNIQUE INDEX ticket_reservations_user_id_key ON public.ticket_reservations USING btree (user_id);
+
+CREATE INDEX ticket_reserved_transaction ON public.ticket_reservations USING hash (transaction_id);
 
 CREATE INDEX user_group_settings_by_group ON public.user_group_settings USING hash (group_id);
 
@@ -294,6 +320,8 @@ alter table "public"."ticket_kind_allowed_groups" add constraint "ticket_kind_al
 alter table "public"."ticket_kinds" add constraint "ticket_kinds_pkey" PRIMARY KEY using index "ticket_kinds_pkey";
 
 alter table "public"."ticket_release_queuers" add constraint "ticket_release_queuers_pkey" PRIMARY KEY using index "ticket_release_queuers_pkey";
+
+alter table "public"."ticket_reservation_addons" add constraint "ticket_reservation_addons_pkey" PRIMARY KEY using index "ticket_reservation_addons_pkey";
 
 alter table "public"."ticket_reservation_queuers" add constraint "ticket_reservation_queuers_pkey" PRIMARY KEY using index "ticket_reservation_queuers_pkey";
 
@@ -457,33 +485,45 @@ alter table "public"."ticket_kinds" add constraint "ticket_kinds_price_check" CH
 
 alter table "public"."ticket_kinds" validate constraint "ticket_kinds_price_check";
 
-alter table "public"."ticket_release_queuers" add constraint "ticket_release_queuers_ticket_id_fkey" FOREIGN KEY ("ticket_id") REFERENCES "public"."ticket_kinds"("id") NOT VALID;
+alter table "public"."ticket_release_queuers" add constraint "ticket_release_queuers_ticket_kind_id_fkey" FOREIGN KEY ("ticket_kind_id") REFERENCES "public"."ticket_kinds"("id") NOT VALID;
 
-alter table "public"."ticket_release_queuers" validate constraint "ticket_release_queuers_ticket_id_fkey";
+alter table "public"."ticket_release_queuers" validate constraint "ticket_release_queuers_ticket_kind_id_fkey";
 
 alter table "public"."ticket_release_queuers" add constraint "ticket_release_queuers_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") NOT VALID;
 
 alter table "public"."ticket_release_queuers" validate constraint "ticket_release_queuers_user_id_fkey";
 
+alter table "public"."ticket_reservation_addons" add constraint "ticket_reservation_addons_addon_id_fkey" FOREIGN KEY ("addon_id") REFERENCES "public"."ticket_addons"("id") NOT VALID;
+
+alter table "public"."ticket_reservation_addons" validate constraint "ticket_reservation_addons_addon_id_fkey";
+
+alter table "public"."ticket_reservation_addons" add constraint "ticket_reservation_addons_ticket_id_fkey" FOREIGN KEY ("ticket_id") REFERENCES "public"."ticket_reservations"("id") NOT VALID;
+
+alter table "public"."ticket_reservation_addons" validate constraint "ticket_reservation_addons_ticket_id_fkey";
+
 alter table "public"."ticket_reservation_queuers" add constraint "ticket_reservation_queuers_placement_check" CHECK ((placement >= 0)) not valid;
 
 alter table "public"."ticket_reservation_queuers" validate constraint "ticket_reservation_queuers_placement_check";
 
-alter table "public"."ticket_reservation_queuers" add constraint "ticket_reservation_queuers_ticket_id_fkey" FOREIGN KEY ("ticket_id") REFERENCES "public"."ticket_kinds"("id") NOT VALID;
+alter table "public"."ticket_reservation_queuers" add constraint "ticket_reservation_queuers_ticket_kind_id_fkey" FOREIGN KEY ("ticket_kind_id") REFERENCES "public"."ticket_kinds"("id") NOT VALID;
 
-alter table "public"."ticket_reservation_queuers" validate constraint "ticket_reservation_queuers_ticket_id_fkey";
+alter table "public"."ticket_reservation_queuers" validate constraint "ticket_reservation_queuers_ticket_kind_id_fkey";
+
+alter table "public"."ticket_reservation_queuers" add constraint "ticket_reservation_queuers_ticket_kind_id_placement_key" UNIQUE using index "ticket_reservation_queuers_ticket_kind_id_placement_key";
 
 alter table "public"."ticket_reservation_queuers" add constraint "ticket_reservation_queuers_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") NOT VALID;
 
 alter table "public"."ticket_reservation_queuers" validate constraint "ticket_reservation_queuers_user_id_fkey";
 
-alter table "public"."ticket_reservations" add constraint "ticket_reservations_ticket_id_fkey" FOREIGN KEY ("ticket_id") REFERENCES "public"."ticket_kinds"("id") NOT VALID;
+alter table "public"."ticket_reservations" add constraint "ticket_reservations_ticket_kind_id_fkey" FOREIGN KEY ("ticket_kind_id") REFERENCES "public"."ticket_kinds"("id") NOT VALID;
 
-alter table "public"."ticket_reservations" validate constraint "ticket_reservations_ticket_id_fkey";
+alter table "public"."ticket_reservations" validate constraint "ticket_reservations_ticket_kind_id_fkey";
 
 alter table "public"."ticket_reservations" add constraint "ticket_reservations_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") NOT VALID;
 
 alter table "public"."ticket_reservations" validate constraint "ticket_reservations_user_id_fkey";
+
+alter table "public"."ticket_reservations" add constraint "ticket_reservations_user_id_key" UNIQUE using index "ticket_reservations_user_id_key";
 
 alter table "public"."user_group_settings" add constraint "user_group_settings_group_id_fkey" FOREIGN KEY ("group_id") REFERENCES "public"."groups"("id") NOT VALID;
 

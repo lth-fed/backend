@@ -1,13 +1,13 @@
 use std::ops::Deref;
 
-use fed_auth_verifier::{CallbackDataV1, User};
+use fed_auth_verifier::{User, callbacks::AuthCallbackDataV1};
 use minilith_errors::MinilithEndpointError;
 use poem_openapi::{Object, OpenApi, payload::Json};
 use sqlx::postgres::types::PgLTree;
 use sqlx::types::Uuid;
 use sqlx::types::time::OffsetDateTime;
 
-use crate::context::Context;
+use crate::context::ContextWrapper;
 use crate::group::Path;
 use crate::{
     DbInternationalizedString as DIS, InternationalizedString, MinilithErrorOptionExt as _,
@@ -16,10 +16,10 @@ use crate::{
 
 #[derive(Clone, Debug)]
 pub struct Router {
-    pub context: Context,
+    pub context: ContextWrapper,
 }
 impl Deref for Router {
-    type Target = Context;
+    type Target = ContextWrapper;
     fn deref(&self) -> &Self::Target {
         &self.context
     }
@@ -123,7 +123,7 @@ impl Router {
     ///
     /// DB, PARAM.
     #[oai(path = "/auth-callback/v1", method = "post")]
-    async fn auth_callback_v1(&self, cb_data: CallbackDataV1) -> MinilithResult<()> {
+    async fn auth_callback_v1(&self, cb_data: AuthCallbackDataV1) -> MinilithResult<()> {
         let nonce: [u8; 12] = rand::random();
         // this means we're leaking the name's length & lang's length, but I'm (Erik Davisson) is
         // pretty sure that's fine.

@@ -1,0 +1,36 @@
+[package]
+name = "transactions"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+async-stripe = { version = "1.0.0-rc.6", default-features = false, features = ["rustls-ring", "rustls-tls-webpki-roots"] }
+async-stripe-core = { version = "1.0.0-rc.6", default-features = false, features = ["customer"] }
+async-stripe-payment = { version = "1.0.0-rc.6", features = ["card", "payment_link"] }
+async-stripe-webhook = "1.0.0-rc.6"
+base64.workspace = true
+bin-common = { path = "../bin-common" }
+color-eyre.workspace = true
+dotenvy.workspace = true
+ed25519-dalek.workspace = true
+fed-auth-verifier = { path = "../fed-auth-verifier" }
+jsonwebtoken.workspace = true
+minilith-errors = { version = "0.1.0", path = "../minilith-errors" }
+opentelemetry.workspace = true
+poem.workspace = true
+poem-openapi.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+time.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+tracing.workspace = true
+typst = "0.15.1"
+typst-kit = { version = "0.15.1", features = ["datetime", "embedded-fonts"] }
+typst-layout = "0.15.1"
+typst-pdf = "0.15.1"
+uuid.workspace = true
+
+[lints]
+workspace = true

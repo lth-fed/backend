@@ -20,9 +20,10 @@
 )]
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use color_eyre::eyre::WrapErr as _;
-use minilith::Context;
+use minilith::{Context, ContextWrapper};
 use sqlx::postgres::types::{PgLTree, PgMoney};
 use sqlx::types::Json;
 use sqlx::types::time::OffsetDateTime;
@@ -34,7 +35,7 @@ const LOGO_IMG: Uuid = Uuid::from_u128(0x7c315a13_eff7_4268_89b9_5e072611ea21);
 /// Shared image id every seed group + activity points at, to avoid
 /// re-uploading the same placeholder per row. Matches the one
 /// `populate_tlth` in `user.rs` already inserts.
-async fn seed_image(ctx: &Context) -> color_eyre::Result<()> {
+async fn seed_image(ctx: &ContextWrapper) -> color_eyre::Result<()> {
     sqlx::query!(
         "insert into images (id, size, url) values ($1, 0, 'https://icelk.dev/tappen-icon.png') on conflict do nothing",
         LOGO_IMG
@@ -55,7 +56,7 @@ async fn seed_image(ctx: &Context) -> color_eyre::Result<()> {
 /// # Errors
 ///
 /// Return an error if the DB connection fails.
-pub async fn seed_groups(ctx: &Context) -> color_eyre::Result<()> {
+pub async fn seed_groups(ctx: &ContextWrapper) -> color_eyre::Result<()> {
     let groups: &[(&str, &str, &str, &str)] = &[
         (
             "tlth",
@@ -151,7 +152,7 @@ pub async fn seed_groups(ctx: &Context) -> color_eyre::Result<()> {
 }
 
 /// Look up a group id by path. Groups must already be seeded.
-async fn group_id(ctx: &Context, path: &str) -> color_eyre::Result<Uuid> {
+async fn group_id(ctx: &ContextWrapper, path: &str) -> color_eyre::Result<Uuid> {
     let path = path.parse::<PgLTree>().wrap_err("parse path")?;
     let row = sqlx::query!("select id from groups where path = $1", path)
         .fetch_one(&ctx.db)
@@ -167,7 +168,7 @@ async fn group_id(ctx: &Context, path: &str) -> color_eyre::Result<Uuid> {
 /// so every seeded user can immediately see seeded activities without
 /// the demo-csv detour — the activity-list query requires membership in
 /// a group that's allowed to purchase one of the activity's kinds.
-async fn seed_users(ctx: &Context) -> color_eyre::Result<()> {
+async fn seed_users(ctx: &ContextWrapper) -> color_eyre::Result<()> {
     let users: &[(&str, &str, &str)] = &[
         ("test:si1234mc-s", "Simon Mechler", "tlth.d"),
         ("test:ma5657ed-s", "Max Edman", "tlth.e"),
@@ -239,7 +240,7 @@ fn dt(rfc3339: &str) -> OffsetDateTime {
     OffsetDateTime::parse(rfc3339, &Rfc3339).expect("valid rfc3339 datetime")
 }
 
-async fn seed_activities(ctx: &Context) -> color_eyre::Result<()> {
+async fn seed_activities(ctx: &ContextWrapper) -> color_eyre::Result<()> {
     let activities: &[ActivitySeed] = &[
         ActivitySeed {
             id: Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_000a),
@@ -494,7 +495,7 @@ async fn seed_activities(ctx: &Context) -> color_eyre::Result<()> {
     Ok(())
 }
 
-async fn seed(ctx: &Context) -> color_eyre::Result<()> {
+async fn seed(ctx: &ContextWrapper) -> color_eyre::Result<()> {
     seed_image(ctx).await?;
     seed_groups(ctx).await?;
     seed_users(ctx).await?;
@@ -505,7 +506,7 @@ async fn seed(ctx: &Context) -> color_eyre::Result<()> {
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
-    let ctx = Context::new(None, false).await?;
+    let ctx = Arc::new(Context::new(None, false).await?);
     seed(&ctx).await?;
     tracing::info!("seed-dev: done");
     Ok(())

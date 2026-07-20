@@ -1,15 +1,18 @@
+use std::marker::PhantomData;
+
 use base64::Engine as _;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use ed25519_dalek::VerifyingKey;
 use jsonwebtoken::jwk::{Jwk, JwkSet};
 use jsonwebtoken::{Algorithm, DecodingKey, TokenData, Validation, decode_header};
-use minilith_errors::{MinilithEndpointError, MinilithErrorResultExt as _};
+use minilith_errors::MinilithEndpointError;
 use opentelemetry::trace::TraceContextExt as _;
+use poem_openapi::SecurityScheme;
 use poem_openapi::auth::Bearer;
-use poem_openapi::{ApiExtractor, Object, SecurityScheme};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
-use tracing::error;
+
+pub mod callbacks;
 
 const AUTH_KEY_PATH: &str = "/oidc/v1/certs";
 #[cfg(debug_assertions)]
@@ -41,15 +44,41 @@ pub fn eddsa_to_jwk(key: &VerifyingKey) -> Jwk {
     }
 }
 
+/// Trait to allow multiple [`AuthContext`]s to be attached to an endpoint.
+///
+/// We need both an [`AuthContext`] for the auth provider ([`AuthUrl`]) and the transactions api
+/// ([`TransactionsUrl`]).
+pub trait AuthContextProvider: Clone {
+    /// This MUST be an url which returns a set of Json Web Keys.
+    /// This MUST use HTTPS in production.
+    fn url() -> String;
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct AuthUrl;
+impl AuthContextProvider for AuthUrl {
+    fn url() -> String {
+        "https://auth.teknologappen.se/api/v0/verifying-key".to_owned()
+    }
+}
+#[derive(Clone, Copy, Debug)]
+pub struct TransactionsUrl;
+impl AuthContextProvider for TransactionsUrl {
+    fn url() -> String {
+        "https://transactions.teknologappen.se/v0/jwks".to_owned()
+    }
+}
+
 #[derive(Clone, Debug)]
 #[must_use]
-pub struct AuthContext {
+pub struct JwkContext<Url: Clone> {
     jwks: JwkSet,
     validation: Validation,
     #[cfg(debug_assertions)]
     testing: bool,
+    phantom: PhantomData<Url>,
 }
-impl AuthContext {
+impl<Url: AuthContextProvider> JwkContext<Url> {
     /// This can not be used by `fed-auth`, since that's the service which this depends on!
     ///
     /// If audience is empty, it's not checked. Audience is your `client_id`.
@@ -100,6 +129,7 @@ impl AuthContext {
             testing: jwks.keys.is_empty(),
             jwks,
             validation,
+            phantom: PhantomData,
         }
     }
 }
@@ -111,7 +141,7 @@ struct Claims {
 
 fn decode_jwt<T: DeserializeOwned>(
     token: &str,
-    context: &AuthContext,
+    context: &JwkContext<impl AuthContextProvider>,
 ) -> Result<TokenData<T>, MinilithEndpointError> {
     let header = decode_header(token).map_err(|error| {
         MinilithEndpointError::unauthorized(
@@ -152,7 +182,7 @@ fn decode_jwt<T: DeserializeOwned>(
 /// discovery. Does return a string instead of the full error if the header `authorization` is not
 /// defined.
 ///
-/// [`AuthContext`] MUST BE registered using [`poem::EndpointExt::data`].
+/// [`AuthContext`] with [`AuthUrl`] MUST BE registered using [`poem::EndpointExt::data`].
 ///
 /// # Errors
 ///
@@ -195,7 +225,7 @@ impl User {
     }
     #[allow(clippy::unused_async, reason = "poem_openapi wants us to")]
     async fn from_token(req: &poem::Request, token: Bearer) -> poem::Result<String> {
-        let context: &AuthContext = req.data().ok_or_else(|| {
+        let context: &JwkContext<AuthUrl> = req.data().ok_or_else(|| {
             MinilithEndpointError::internal_error("AuthContext not registered as data!")
         })?;
         let cx = opentelemetry::Context::current();
@@ -214,89 +244,5 @@ impl User {
             data.claims.sub.clone(),
         ));
         Ok(data.claims.sub)
-    }
-}
-
-#[derive(Debug, Object, Deserialize)]
-pub struct CallbackDataV1 {
-    pub sub: String,
-    pub email: String,
-    pub full_name: String,
-}
-
-/// [`AuthContext`] MUST BE registered using [`poem::EndpointExt::data`].
-///
-/// # Example
-///
-/// ```no_compile
-/// # use poem_openapi::OpenApi;
-/// # use fed_auth_verifier::CallbackDataV1;
-/// pub struct Context {
-///     db: sqlx::PgPool,
-/// }
-/// pub struct Router {
-///     context: Context,
-/// }
-/// #[OpenApi]
-/// impl Router {
-///     #[oai(path = "/callback/v1", method = "post")]
-///     async fn callback(&self, data: CallbackDataV1) {
-///         sqlx::query!(
-///             "insert into users values ($1, $2, $3)",
-///             data.sub, data.full_name, data.mail,
-///         )
-///         .execute(&self.context.db)
-///         .await
-///         .unwrap();
-///     }
-/// }
-/// ```
-impl<'a> ApiExtractor<'a> for CallbackDataV1 {
-    // to make the OpenApi look pretty
-    // inspired by the impl of PlainText<String>
-    type ParamType = ();
-    type ParamRawType = ();
-
-    const TYPES: &'static [poem_openapi::ApiExtractorType] =
-        &[poem_openapi::ApiExtractorType::RequestObject];
-    const PARAM_IS_REQUIRED: bool = false;
-
-    fn request_meta() -> Option<poem_openapi::registry::MetaRequest> {
-        let mut jwt = poem_openapi::registry::MetaSchema::new("string");
-        jwt.example = Some(
-            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.\
-            eyJsb2dnZWRJbkFzIjoiYWRtaW4iLCJpYXQiOjE0MjI3Nzk2Mzh9.\
-            gzSraSYS8EXBxLN_oWnFSRgCzcmJmMjLiuyu5CSpyHI"
-                .into(),
-        );
-
-        Some(poem_openapi::registry::MetaRequest {
-            description: None,
-            content: vec![poem_openapi::registry::MetaMediaType {
-                content_type: "application/jwt",
-                schema: poem_openapi::registry::MetaSchemaRef::Inline(Box::new(jwt)),
-            }],
-            required: true,
-        })
-    }
-
-    async fn from_request(
-        request: &'a poem::Request,
-        body: &mut poem::RequestBody,
-        _param_opts: poem_openapi::ExtractParamOptions<()>,
-    ) -> poem::Result<Self> {
-        let context: &AuthContext = request.data().ok_or_else(|| {
-            MinilithEndpointError::internal_error("AuthContext not registered as data!")
-        })?;
-        let body = body.take().map_err(|err| {
-            error!(?err, "Somebody took our body!");
-            MinilithEndpointError::internal_error("")
-        })?;
-        let body = body
-            .into_string()
-            .await
-            .wrap_err_bad_user("AUTH_CB_BDY_UTF8", "<body>")?;
-        let data = decode_jwt::<CallbackDataV1>(&body, context)?;
-        Ok(data.claims)
     }
 }

@@ -1,0 +1,17 @@
+services:
+  postgres:
+    image: "postgres:18"
+    ports:
+      - 9832:5432
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: dev
+  postgres-2:
+    image: "postgres:18"
+    ports:
+      - 9833:5432
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: dev

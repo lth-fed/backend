@@ -1,11 +1,12 @@
 [workspace]
 resolver = "3"
-members = ["bin-common","fed-auth", "fed-auth-verifier", "minilith", "minilith-errors"]
+members = ["bin-common","fed-auth", "fed-auth-verifier", "minilith", "minilith-errors", "transactions"]
 
 [workspace.dependencies]
 base64 = "0.22.1"
 color-eyre = "0.6.5"
 dotenvy = "0.15.7"
+# ed25519-dalek = { version = "3.0.0", features = ["pkcs8"] }
 ed25519-dalek = "2.2.0"
 jsonwebtoken = { version = "10.3.0", default-features = false, features = ["rust_crypto", "use_pem"] }
 lettre = { version = "0.11.22", default-features = false, features = ["builder", "pool", "ring", "smtp-transport", "tokio1-rustls", "webpki-roots"] }
@@ -20,12 +21,13 @@ poem = { version = "3.1.12", features = ["cookie", "embed", "opentelemetry"] }
 # since it pulls in the mysql & sqlite drivers which makes compile time be slow
 poem-openapi = { version = "5.1.16", features = ["swagger-ui", "uuid", "time"] }
 rand = "0.10.1"
-reqwest = "0.13.3"
+reqwest = { version = "0.13.3", features = ["json"] }
 rust-embed = "8.11.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 sqlx = { version = "0.8.6", features = ["postgres", "runtime-tokio", "migrate", "time", "uuid"] }
 sqlx-tracing = { version = "0.2.1", features = ["postgres"] }
+time = { version = "0.3", features = ["parsing", "formatting"] }
 tokio = { version = "1.52.1" }
 tracing = "0.1.44"
 # this is one version higher than opentelemetry which is super odd

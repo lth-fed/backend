@@ -42,6 +42,15 @@ pub enum MinilithEndpointError {
     InternalServerError(Json<MinilithError>),
 }
 impl MinilithEndpointError {
+    pub fn inner(&self) -> &MinilithError {
+        match self {
+            MinilithEndpointError::BadRequest(json)
+            | MinilithEndpointError::Unauthorized(json)
+            | MinilithEndpointError::Forbidden(json)
+            | MinilithEndpointError::NotFound(json)
+            | MinilithEndpointError::InternalServerError(json) => &json.0,
+        }
+    }
     /// For when the frontend didn't uphold a contract.
     #[track_caller]
     pub fn bad_frontend_code(error_message: impl AsRef<str>, error: impl Debug) -> Self {

@@ -3,6 +3,7 @@ use std::ops::{ControlFlow, Deref};
 
 use bin_common::{PgPool, Transaction};
 use fed_auth_verifier::User;
+use fed_auth_verifier::callbacks::TransactionState;
 use poem_openapi::Enum;
 use poem_openapi::{Object, OpenApi, payload::Json};
 use rand::seq::SliceRandom as _;
@@ -15,17 +16,17 @@ use uuid::Uuid;
 
 use crate::activities::{Location, PoemLocation};
 use crate::{
-    Context, DbInternationalizedString as DIS, EmptyJson, InternationalizedString as IS,
+    ContextWrapper, DbInternationalizedString as DIS, InternationalizedString as IS,
     MinilithEndpointError, MinilithErrorResultExt as _, MinilithResult,
 };
 
 #[derive(Debug, Clone)]
 pub struct Router {
-    pub context: Context,
+    pub context: ContextWrapper,
 }
 
 impl Deref for Router {
-    type Target = Context;
+    type Target = ContextWrapper;
 
     fn deref(&self) -> &Self::Target {
         &self.context
@@ -61,6 +62,19 @@ pub struct QueueResponse {
 #[derive(Debug, Clone, Copy, Object)]
 pub struct PurchaseStatusRequest {
     activity: Uuid,
+}
+
+#[derive(Debug, Clone, Copy, Enum)]
+pub enum DropStatus {
+    Dropped,
+    /// Transaction is in the state of being cancelled. Poll every ~5s the status of the queue to
+    /// see when it has been successfully cancelled.
+    /// The transaction may still go through if you have accepted payment.
+    TransactionCancelling,
+}
+#[derive(Debug, Clone, Copy, Object)]
+pub struct DropReservationResponse {
+    status: DropStatus,
 }
 
 #[derive(Debug, Clone, Copy, Enum)]
@@ -289,7 +303,7 @@ impl Router {
             let row = sqlx::query!(
                 "select
                 (select count(user_id) from ticket_reservation_queuers
-                 where ticket_id = $1) as \"count!\",
+                 where ticket_kind_id = $1) as \"count!\",
                 reserved_or_purchased_tickets, max_tickets
                 from ticket_kinds where id = $1",
                 req.ticket_kind
@@ -311,7 +325,7 @@ impl Router {
                 {
                     // give reservation
                     sqlx::query!(
-                    "insert into ticket_reservations (user_id, ticket_id, transaction_id, timeout)
+                    "insert into ticket_reservations (user_id, ticket_kind_id, transaction_id, timeout)
                     values ($1, $2, null, now() + $3)",
                     user.get_id(),
                     req.ticket_kind,
@@ -329,7 +343,7 @@ impl Router {
             }
 
             sqlx::query!(
-                "insert into ticket_reservation_queuers (user_id, ticket_id, placement) \
+                "insert into ticket_reservation_queuers (user_id, ticket_kind_id, placement) \
                 values ($1, $2,
                     -- take last placement, add one
                     (select placement
@@ -337,7 +351,7 @@ impl Router {
                      order by placement desc limit 1) + 1
                 )
                 on conflict (user_id) do update
-                set ticket_id = excluded.ticket_id, placement = excluded.placement",
+                set ticket_kind_id = excluded.ticket_kind_id, placement = excluded.placement",
                 user.get_id(),
                 req.ticket_kind
             )
@@ -353,10 +367,10 @@ impl Router {
             // we can only be in 1 type of queue
             let _: Result<_, _> = self.drop_reservation(user.clone()).await;
             sqlx::query!(
-                "insert into ticket_release_queuers (user_id, ticket_id, started_queueing) \
+                "insert into ticket_release_queuers (user_id, ticket_kind_id, started_queueing) \
                 values ($1, $2, now())
                 on conflict (user_id) do update
-                set ticket_id = excluded.ticket_id, started_queueing = excluded.started_queueing",
+                set ticket_kind_id = excluded.ticket_kind_id, started_queueing = excluded.started_queueing",
                 user.get_id(),
                 req.ticket_kind
             )
@@ -374,7 +388,7 @@ impl Router {
     ///
     /// - not found when the user is not release queued
     #[oai(path = "/queue", method = "delete")]
-    async fn unqueue(&self, user: User) -> MinilithResult<EmptyJson> {
+    async fn unqueue(&self, user: User) -> MinilithResult<()> {
         let rows = sqlx::query_scalar!(
             "delete from ticket_release_queuers where user_id = $1",
             user.get_id()
@@ -385,7 +399,7 @@ impl Router {
         if rows.rows_affected() == 0 {
             Err(MinilithEndpointError::not_found())
         } else {
-            Ok(EmptyJson::default())
+            Ok(())
         }
     }
     /// Get the status of the queue.
@@ -396,7 +410,7 @@ impl Router {
     #[oai(path = "/queue", method = "get")]
     async fn queue_status(&self, user: User) -> MinilithResult<Json<QueueResponse>> {
         let reservation = sqlx::query!(
-            "select ticket_id, timeout
+            "select ticket_kind_id, timeout
             from ticket_reservations
             where user_id = $1",
             user.get_id()
@@ -406,16 +420,16 @@ impl Router {
         .wrap_err_db()?;
         if let Some(row) = reservation {
             return Ok(Json(QueueResponse {
-                ticket_kind: row.ticket_id,
+                ticket_kind: row.ticket_kind_id,
                 placement: Some(0),
                 timeout: Some(row.timeout),
                 latest_transaction: Some(row.timeout - 1 * time::Duration::MINUTE),
             }));
         }
         let reservation_queue = sqlx::query!(
-            "select placement, reserved_or_purchased_tickets, ticket_id
+            "select placement, reserved_or_purchased_tickets, ticket_kind_id
             from ticket_reservation_queuers
-            inner join ticket_kinds on (ticket_kinds.id = ticket_reservation_queuers.ticket_id)
+            inner join ticket_kinds on (ticket_kinds.id = ticket_reservation_queuers.ticket_kind_id)
             where user_id = $1",
             user.get_id()
         )
@@ -424,14 +438,14 @@ impl Router {
         .wrap_err_db()?;
         if let Some(row) = reservation_queue {
             return Ok(Json(QueueResponse {
-                ticket_kind: row.ticket_id,
+                ticket_kind: row.ticket_kind_id,
                 placement: Some((row.placement - row.reserved_or_purchased_tickets).max(0)),
                 timeout: None,
                 latest_transaction: None,
             }));
         }
         let queuer = sqlx::query_scalar!(
-            "select ticket_id from ticket_release_queuers where user_id = $1",
+            "select ticket_kind_id from ticket_release_queuers where user_id = $1",
             user.get_id()
         )
         .fetch_optional(&self.db)
@@ -454,34 +468,178 @@ impl Router {
     ///
     /// - 404 not found when the user doesn't have a reservation
     #[oai(path = "/reservation", method = "delete")]
-    async fn drop_reservation(&self, user: User) -> MinilithResult<EmptyJson> {
+    async fn drop_reservation(&self, user: User) -> MinilithResult<Json<DropReservationResponse>> {
         let mut txn = self.db.begin().await.wrap_err_db()?;
         let Some(row) = sqlx::query!(
             "delete from ticket_reservations where user_id = $1
-            returning ticket_id, transaction_id",
+            returning ticket_kind_id, transaction_id",
             user.get_id(),
         )
         .fetch_optional(&mut txn.executor())
         .await
         .wrap_err_db()?
-        // TODO: send to transaction api
         else {
             return Err(MinilithEndpointError::not_found());
         };
+        // try to cancel transaction instead
+        if let Some(id) = row.transaction_id {
+            let resp = match self
+                .transactions_post(format!("/v0/{id}/cancel"))
+                .send()
+                .await
+            {
+                Ok(resp) => resp,
+                Err(err) => {
+                    // ALERT LEVEL 2
+                    error!(
+                        ?err,
+                        "failed to cancel transaction due to connection issues"
+                    );
+                    return Ok(Json(DropReservationResponse {
+                        status: DropStatus::TransactionCancelling,
+                    }));
+                }
+            };
+            if !resp.status().is_success() {
+                // ALERT LEVEL 1
+                error!(
+                    status_code=%resp.status(),
+                    "transaction cancel failed!"
+                );
+            }
+            return Ok(Json(DropReservationResponse {
+                status: DropStatus::TransactionCancelling,
+            }));
+        }
         sqlx::query!(
             "update ticket_kinds
             set reserved_or_purchased_tickets = reserved_or_purchased_tickets - 1
             where id = $1",
-            row.ticket_id,
+            row.ticket_kind_id,
         )
         .execute(&mut txn.executor())
         .await
         .wrap_err_db()?;
         txn.commit().await.wrap_err_db()?;
         let mut txn = self.db.begin().await.wrap_err_db()?;
-        give_reservations(row.ticket_id, 1, &mut txn).await?;
+        give_reservations(row.ticket_kind_id, 1, &mut txn).await?;
         txn.commit().await.wrap_err_db()?;
-        Ok(EmptyJson::default())
+        Ok(Json(DropReservationResponse {
+            status: DropStatus::Dropped,
+        }))
+    }
+
+    /// `/v0/tickets/callback`
+    ///
+    /// # Errors
+    ///
+    /// DB errors.
+    #[oai(path = "/callback", method = "post")]
+    pub async fn callback(
+        &self,
+        events: fed_auth_verifier::callbacks::TransactionsCallbackDataV1,
+    ) -> MinilithResult<()> {
+        for data in &*events {
+            match data.inner.state {
+                TransactionState::Pending => {}
+                TransactionState::Paid => {
+                    let mut txn = self.db.begin().await.wrap_err_db()?;
+                    let affected = sqlx::query!(
+                        "insert into purchased_tickets
+                        (purchaser_id, owner_id, ticket_kind_id, transaction_id)
+                        select user_id as purchaser_id, user_id as owner_id,
+                        ticket_kind_id, transaction_id
+                        from ticket_reservations
+                            where transaction_id = $1",
+                        data.transaction_id
+                    )
+                    .execute(&mut txn.executor())
+                    .await
+                    .wrap_err_db()?;
+                    // has this already been marked as purchased?
+                    if affected.rows_affected() != 1 {
+                        let exists_purchased_ticket = sqlx::query_scalar!(
+                            "select exists (
+                                select 1 from purchased_tickets where transaction_id = $1
+                            ) as \"exists!\"",
+                            data.transaction_id
+                        )
+                        .fetch_one(&mut txn.executor())
+                        .await
+                        .wrap_err_db()?;
+                        if !exists_purchased_ticket {
+                            // ono somebody paid for a non-existing ticket!!
+                            error!(transaction_id = %data.transaction_id,
+                                "tried to pay for an unaccounted-for ticket"
+                            );
+                            // ALERT LEVEL 1
+                        }
+                        // otherwise, we're golden, this is just a second "person has paid" callback.
+                        txn.rollback().await.wrap_err_db()?;
+                        continue;
+                    }
+                    let affected = sqlx::query!(
+                        "delete from ticket_reservations where transaction_id = $1",
+                        data.transaction_id
+                    )
+                    .execute(&mut txn.executor())
+                    .await
+                    .wrap_err_db()?;
+                    if affected.rows_affected() != 1 {
+                        error!(transaction_id = %data.transaction_id,
+                            "1 row not affected when purchase complete!"
+                        );
+                        // ALERT LEVEL 1
+                        txn.rollback().await.wrap_err_db()?;
+                        continue;
+                    }
+                    txn.commit().await.wrap_err_db()?;
+                }
+                TransactionState::Refunded => {
+                    let affected = sqlx::query!(
+                        "update purchased_tickets set owner_id = 'refunded:'
+                    where transaction_id = $1",
+                        data.transaction_id
+                    )
+                    .execute(&self.db)
+                    .await
+                    .wrap_err_db()?;
+                    if affected.rows_affected() != 1 {
+                        error!(transaction_id=%data.transaction_id,
+                            "1 row not affected when purchase refunded!"
+                        );
+                        // ALERT LEVEL 1
+                    }
+                }
+                TransactionState::Cancelled => {
+                    let mut txn = self.db.begin().await.wrap_err_db()?;
+                    let Some(row) = sqlx::query!(
+                        "update ticket_reservations
+                        set transaction_id = null 
+                        returning id, timeout < now() as \"has_timed_out!\""
+                    )
+                    .fetch_optional(&mut txn.executor())
+                    .await
+                    .wrap_err_db()?
+                    else {
+                        error!(
+                            transaction_id = %data.transaction_id,
+                            "transaction which we do not track is cancelled"
+                        );
+                        // ALERT LEVEL 2
+                        continue;
+                    };
+                    if row.has_timed_out {
+                        sqlx::query!("delete from ticket_reservations where id = $1", row.id)
+                            .execute(&mut txn.executor())
+                            .await
+                            .wrap_err_db()?;
+                    }
+                    txn.commit().await.wrap_err_db()?;
+                }
+            }
+        }
+        Ok(())
     }
 }
 /// # Panics
@@ -512,7 +670,7 @@ pub async fn release(db: &mut Transaction<'_>, id: Uuid) -> MinilithResult<()> {
 
     let mut queuers = sqlx::query_scalar!(
         "select user_id from ticket_release_queuers
-        where ticket_id = $1",
+        where ticket_kind_id = $1",
         id
     )
     .fetch_all(&mut db.executor())
@@ -543,8 +701,8 @@ pub async fn release(db: &mut Transaction<'_>, id: Uuid) -> MinilithResult<()> {
         .collect();
 
     sqlx::query!(
-        "insert into ticket_reservations (user_id, ticket_id, transaction_id, timeout)
-        select user_id, $2 as ticket_id, null as transaction_id, (from_now + now()) as timeout
+        "insert into ticket_reservations (user_id, ticket_kind_id, transaction_id, timeout)
+        select user_id, $2 as ticket_kind_id, null as transaction_id, (from_now + now()) as timeout
         from unnest($1::text[], $3::interval[]) as t(user_id, from_now)",
         reservations,
         id,
@@ -554,8 +712,8 @@ pub async fn release(db: &mut Transaction<'_>, id: Uuid) -> MinilithResult<()> {
     .await
     .wrap_err_db()?;
     sqlx::query!(
-        "insert into ticket_reservation_queuers (user_id, ticket_id, placement)
-        select user_id, $2 as ticket_id, placement
+        "insert into ticket_reservation_queuers (user_id, ticket_kind_id, placement)
+        select user_id, $2 as ticket_kind_id, placement
         from unnest($1::text[], $3::integer[]) as t(user_id, placement)",
         reservations,
         id,
@@ -625,8 +783,8 @@ pub async fn check_all_tickets(db: &PgPool) -> MinilithResult<()> {
         // take one release job
         // this works concurrently too!
         let ticket_kind = sqlx::query!(
-            "select user_id, ticket_id from ticket_reservation_queuers
-            inner join ticket_kinds kind on (kind.id = ticket_id)
+            "select user_id, ticket_kind_id from ticket_reservation_queuers
+            inner join ticket_kinds kind on (kind.id = ticket_kind_id)
             where kind.has_been_released = true
             limit 1
             for update skip locked"
@@ -635,7 +793,7 @@ pub async fn check_all_tickets(db: &PgPool) -> MinilithResult<()> {
         .await
         .wrap_err_db()?;
         if let Some(row) = ticket_kind {
-            update_misplaced_queuer(&row.user_id, row.ticket_id, &mut txn).await?;
+            update_misplaced_queuer(&row.user_id, row.ticket_kind_id, &mut txn).await?;
             txn.commit().await.wrap_err_db()?;
         } else {
             // there may in certain circumstances be "jobs" left, but they will be taken care of
@@ -647,10 +805,10 @@ pub async fn check_all_tickets(db: &PgPool) -> MinilithResult<()> {
     while remove_reservation(db).await?.is_continue() {}
     // give_reservations:
     let mut reservations = sqlx::query!(
-        "select id as \"ticket_id!\", -- count(user_id),
+        "select id as \"ticket_kind_id!\", -- count(user_id),
         (max_tickets - reserved_or_purchased_tickets) as \"available_tickets!\"
         from ticket_reservation_queuers
-        inner join ticket_kinds kind on (kind.id = ticket_id)
+        inner join ticket_kinds kind on (kind.id = ticket_kind_id)
         where max_tickets > reserved_or_purchased_tickets
         group by id"
     )
@@ -663,7 +821,7 @@ pub async fn check_all_tickets(db: &PgPool) -> MinilithResult<()> {
     for reservation in reservations {
         let mut txn = db.begin().await.wrap_err_db()?;
         give_reservations(
-            reservation.ticket_id,
+            reservation.ticket_kind_id,
             reservation.available_tickets,
             &mut txn,
         )
@@ -678,9 +836,9 @@ pub async fn check_all_tickets(db: &PgPool) -> MinilithResult<()> {
         where user_id = (
             select user_id
             from ticket_reservation_queuers
-            inner join ticket_kinds kind on (kind.id = ticket_id)
+            inner join ticket_kinds kind on (kind.id = ticket_kind_id)
             where max_tickets = reserved_or_purchased_tickets
-            and (select count(id) from purchased_tickets where ticket_id = kind.id) = max_tickets
+            and (select count(id) from purchased_tickets where ticket_kind_id = kind.id) = max_tickets
             for update skip locked
         )"
     )
@@ -702,10 +860,10 @@ pub async fn update_misplaced_queuer(
     db: &mut Transaction<'_>,
 ) -> MinilithResult<()> {
     sqlx::query!(
-        "insert into ticket_reservation_queuers (user_id, ticket_id, placement)
-        select $1 as user_id, $2 as ticket_id, queuers.placement + 1 as placement
+        "insert into ticket_reservation_queuers (user_id, ticket_kind_id, placement)
+        select $1 as user_id, $2 as ticket_kind_id, queuers.placement + 1 as placement
         from ticket_reservation_queuers queuers
-        where queuers.ticket_id = $2
+        where queuers.ticket_kind_id = $2
         order by placement desc 
         limit 1",
         user_id,
@@ -731,10 +889,12 @@ pub async fn update_misplaced_queuer(
 /// Failures from cancelling transactions.
 pub async fn remove_reservation(db: &PgPool) -> MinilithResult<ControlFlow<()>> {
     let mut txn = db.begin().await.wrap_err_db()?;
+    // only remove reservations which are not in the purchase of buying!
     let removed_reservation = sqlx::query!(
-        "select transaction_id, user_id, ticket_id
+        "select transaction_id, user_id, ticket_kind_id
         from ticket_reservations
         where timeout < now()
+        and transaction_id is null
         limit 1
         for update skip locked",
     )
@@ -743,22 +903,19 @@ pub async fn remove_reservation(db: &PgPool) -> MinilithResult<ControlFlow<()>> 
     .wrap_err_db()?;
     let do_continue = removed_reservation.is_some();
     if let Some(reservation) = removed_reservation {
-        // TODO: call transaction API!
-        // TODO: error the fuck out of it if it fails!
-        // if it gives back that it's already purchased, just abort txn!
         sqlx::query!(
             "update ticket_kinds
             set reserved_or_purchased_tickets = reserved_or_purchased_tickets - 1
             where id = $1",
-            reservation.ticket_id,
+            reservation.ticket_kind_id,
         )
         .execute(&mut txn.executor())
         .await
         .wrap_err_db()?;
         sqlx::query!(
-            "delete from ticket_reservations where user_id = $1 and ticket_id = $2",
+            "delete from ticket_reservations where user_id = $1 and ticket_kind_id = $2",
             reservation.user_id,
-            reservation.ticket_id,
+            reservation.ticket_kind_id,
         )
         .execute(&mut txn.executor())
         .await
@@ -786,7 +943,7 @@ pub async fn give_reservations(
     let removed_reservations = sqlx::query_scalar!(
         "select user_id
         from ticket_reservation_queuers queuers
-        where ticket_id = $1
+        where ticket_kind_id = $1
         order by placement asc
         limit $2
         for update skip locked",
@@ -803,8 +960,8 @@ pub async fn give_reservations(
         .take(removed_reservations.len())
         .collect();
     sqlx::query!(
-        "insert into ticket_reservations (user_id, ticket_id, transaction_id, timeout)
-        select user_id, $2 as ticket_id, null as transaction_id, (from_now + now()) as timeout
+        "insert into ticket_reservations (user_id, ticket_kind_id, transaction_id, timeout)
+        select user_id, $2 as ticket_kind_id, null as transaction_id, (from_now + now()) as timeout
         from unnest($1::text[], $3::interval[]) as t(user_id, from_now)",
         &removed_reservations,
         ticket_kind,
@@ -836,7 +993,7 @@ pub async fn give_reservations(
 
     sqlx::query!(
         "delete from ticket_reservation_queuers
-        where ticket_id = $1
+        where ticket_kind_id = $1
         and user_id = any($2)",
         ticket_kind,
         &removed_reservations
