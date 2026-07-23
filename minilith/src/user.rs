@@ -1,7 +1,6 @@
 use std::ops::Deref;
 
 use fed_auth_verifier::{User, callbacks::AuthCallbackDataV1};
-use minilith_errors::MinilithEndpointError;
 use poem_openapi::{Object, OpenApi, payload::Json};
 use sqlx::postgres::types::PgLTree;
 use sqlx::types::Uuid;
@@ -94,18 +93,14 @@ impl Router {
             logo_url: group.logo_url,
         })
         .fetch_all(&self.db)
-        .await
-        .wrap_err_db()?;
+        .await?;
 
-        let Some(user) = sqlx::query!("select * from users where id = ($1)", user.get_id())
+        let user = sqlx::query!("select * from users where id = ($1)", user.get_id())
             .fetch_optional(&self.db)
-            .await
-            .wrap_err_db()?
-        else {
-            return Err(MinilithEndpointError::internal_error(
+            .await?
+            .wrap_err_internal(
                 "Your user object doesn't exist. Try logging out and then in again.",
-            ));
-        };
+            )?;
 
         Ok(Json(Me {
             id: user.id,
@@ -139,17 +134,17 @@ impl Router {
             &nonce
         )
         .execute(&self.db)
-        .await
-        .wrap_err_db()?;
+        .await?;
 
         if let Some(guild) = get_guild(cb_data.sub.strip_prefix("test:").unwrap_or(&cb_data.sub)) {
             let id = sqlx::query!(
                 "select id from groups where groups.path = $1",
-                format!("tlth.{guild}").parse::<PgLTree>().wrap_err_db()?
+                format!("tlth.{guild}")
+                    .parse::<PgLTree>()
+                    .wrap_err_internal("guild invalid PgLTree")?
             )
             .fetch_one(&self.db)
-            .await
-            .wrap_err_db()?;
+            .await?;
             let id = id.id;
             sqlx::query!(
                 "insert into group_memberships (group_id, user_id)
@@ -158,8 +153,7 @@ impl Router {
                 cb_data.sub
             )
             .execute(&self.db)
-            .await
-            .wrap_err_db()?;
+            .await?;
         }
 
         Ok(())

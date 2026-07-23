@@ -8,7 +8,9 @@ use chacha20::cipher::KeyIvInit as _;
 use chacha20::cipher::StreamCipher as _;
 use color_eyre::Section as _;
 use color_eyre::eyre::Context as _;
+use minilith_errors::{MinilithErrorOptionExt as _, MinilithResult};
 use sqlx::migrate;
+use uuid::Uuid;
 
 use crate::PgPool;
 
@@ -179,5 +181,36 @@ impl Context {
                 "authorization",
                 format!("Bearer {}", self.transactions_token),
             )
+    }
+
+    /// # Errors
+    ///
+    /// - user might not be allowed to access this activity
+    pub async fn test_activity_access(&self, user: &str, activity_id: &Uuid) -> MinilithResult<()> {
+        // this clusterfuck is the same logic as in `./activities.rs`, which checks if this
+        // activity should be visible
+        sqlx::query!(
+            r#"select exists (select 1
+            from group_memberships
+            inner join groups member_group on member_group.id = group_memberships.group_id
+            -- get the ticket_kinds we're allowed to purchase
+            inner join groups allowed_group on allowed_group.path @> member_group.path
+            inner join ticket_kind_allowed_groups tk_ag on tk_ag.group_id = allowed_group.id
+            inner join ticket_kinds kind on kind.id = tk_ag.ticket_kind_id
+
+            where group_memberships.user_id = $1
+            and kind.activity_id = $2
+            and (
+                member_group.limit_membership_visibility = false
+                or tk_ag.group_id = group_memberships.group_id
+            ))
+            "#,
+            user,
+            activity_id
+        )
+        .fetch_optional(&self.db)
+        .await?
+        .wrap_err_bad_frontend("user not allowed to access this activity")?;
+        Ok(())
     }
 }

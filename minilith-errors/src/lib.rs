@@ -113,9 +113,10 @@ impl MinilithEndpointError {
     }
     /// An internal error happened! You MUST nog an error too.
     #[track_caller]
-    pub fn internal_error(error_message: impl AsRef<str>) -> Self {
+    pub fn internal_error(error_message: impl AsRef<str>, error: impl Debug) -> Self {
+        // ALERT LEVEL 2
         // to get the trace
-        error!(message = error_message.as_ref(), "Internal error.");
+        error!(message = error_message.as_ref(), ?error, "Internal error.");
         Self::InternalServerError(Json(MinilithError {
             message: "Something went very wrong. Contact app developers.".to_owned(),
             field: None,
@@ -131,6 +132,14 @@ impl MinilithEndpointError {
         }))
     }
 }
+#[cfg(feature = "sqlx")]
+impl From<sqlx::Error> for MinilithEndpointError {
+    #[track_caller]
+    fn from(error: sqlx::Error) -> Self {
+        // ALERT LEVEL 2
+        Self::db(error)
+    }
+}
 /// Poem thing.
 #[allow(
     clippy::needless_pass_by_value,
@@ -141,9 +150,8 @@ fn bad_request_handler(error: poem::Error) -> MinilithEndpointError {
     // the errors we get from poem are when it's parsing the parameters
     MinilithEndpointError::bad_frontend_code("Param error", error)
 }
-/// Trait to make `.wrap_err_db()` work on [`Result`] types. Implemented for all [`Result`]s which
-/// has an error which implements [`Display`].
-pub trait MinilithErrorResultExt<T, E> {
+/// Implemented for all [`Result`]s which has an error which implements [`Debug`].
+pub trait MinilithErrorResultExt<T, E>: Sized {
     /// Calls [`MinilithEndpointError::bad_frontend_code`].
     ///
     /// # Errors
@@ -169,17 +177,18 @@ pub trait MinilithErrorResultExt<T, E> {
     /// Maps the error to a [`MinilithEndpointError`].
     /// Does not leak the [`Display`] impl of the error to the client.
     fn wrap_err_unauthorized(self, error_message: impl AsRef<str>) -> MinilithResult<T>;
-    /// Calls [`MinilithEndpointError::internal_error`] with [`MinilithErrorKind::Database`].
+    /// Calls [`MinilithEndpointError::internal_error`].
+    /// Use `?` instead for [`sqlx::Error`].
     ///
     /// # Errors
     ///
     /// Maps the error to a [`MinilithEndpointError`].
     /// Does not leak the [`Display`] impl of the error to the client.
-    fn wrap_err_db(self) -> MinilithResult<T>;
+    fn wrap_err_internal(self, error_message: impl AsRef<str>) -> MinilithResult<T>;
 }
 /// Trait to make `.wrap_err_encryption()` work on [`Option`] types. Implemented for all
 /// [`Option`]s.
-pub trait MinilithErrorOptionExt<T> {
+pub trait MinilithErrorOptionExt<T>: Sized {
     /// # Errors
     ///
     /// Returns a [`MinilithEndpointError::BadRequest`] with the appropriate metadata.
@@ -194,7 +203,19 @@ pub trait MinilithErrorOptionExt<T> {
     /// # Errors
     ///
     /// Returns a [`MinilithEndpointError::InternalServerError`] with the appropriate metadata.
-    fn wrap_err_encryption(self, error_message: impl AsRef<str>) -> MinilithResult<T>;
+    fn wrap_err_internal(self, error_message: impl AsRef<str>) -> MinilithResult<T>;
+    /// Same as [`MinilithErrorOptionExt::wrap_err_internal`] but with an encryption error message
+    /// attached.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`MinilithEndpointError::InternalServerError`] with the appropriate metadata.
+    fn wrap_err_encryption(self, error_message: impl AsRef<str>) -> MinilithResult<T> {
+        self.wrap_err_internal(format!(
+            "encryption / decryption error: {}",
+            error_message.as_ref()
+        ))
+    }
 }
 impl<T, E: Debug> MinilithErrorResultExt<T, E> for Result<T, E> {
     #[track_caller]
@@ -221,8 +242,12 @@ impl<T, E: Debug> MinilithErrorResultExt<T, E> for Result<T, E> {
         self.map_err(|error| MinilithEndpointError::unauthorized(error_message, error))
     }
     #[track_caller]
-    fn wrap_err_db(self) -> MinilithResult<T> {
-        self.map_err(MinilithEndpointError::db)
+    fn wrap_err_internal(self, error_message: impl AsRef<str>) -> MinilithResult<T> {
+        // inlined so track_caller works as expected
+        match self {
+            Ok(value) => Ok(value),
+            Err(error) => Err(MinilithEndpointError::internal_error(error_message, error)),
+        }
     }
 }
 impl<T> MinilithErrorOptionExt<T> for Option<T> {
@@ -235,12 +260,7 @@ impl<T> MinilithErrorOptionExt<T> for Option<T> {
         self.ok_or_else(|| MinilithEndpointError::not_found())
     }
     #[track_caller]
-    fn wrap_err_encryption(self, error_message: impl AsRef<str>) -> MinilithResult<T> {
-        self.ok_or_else(|| {
-            MinilithEndpointError::internal_error(format!(
-                "encryption / decryption error: {}",
-                error_message.as_ref()
-            ))
-        })
+    fn wrap_err_internal(self, error_message: impl AsRef<str>) -> MinilithResult<T> {
+        self.ok_or_else(|| MinilithEndpointError::internal_error(error_message, ""))
     }
 }

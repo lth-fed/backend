@@ -3086,6 +3086,7 @@ dependencies = [
  "opentelemetry",
  "poem",
  "poem-openapi",
+ "sqlx",
  "tracing",
  "uuid",
 ]

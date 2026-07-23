@@ -1,11 +1,9 @@
-#![allow(
-    clippy::unwrap_used,
-    reason = "we control all the inputs except the json inputs, therefore unwraps in typst is safe"
-)]
-
 use std::fmt::Debug;
 
+use minilith_errors::{MinilithErrorResultExt as _, MinilithResult};
+use poem_openapi::Enum;
 use serde::Serialize;
+use tracing::error;
 use tracing::{info_span, warn};
 use typst::diag::{FileError, FileResult, PackageError};
 use typst::foundations::Bytes;
@@ -20,8 +18,19 @@ use crate::api::Ware;
 
 const TYPST_DOC: &str = include_str!("./receipt.typ");
 
+#[derive(Serialize, Debug, Clone, Copy, Enum)]
+pub enum Language {
+    #[serde(rename = "sv")]
+    #[oai(rename = "sv")]
+    Swedish,
+    #[serde(rename = "en")]
+    #[oai(rename = "en")]
+    English,
+}
+
 #[derive(Serialize, Debug, Clone)]
 pub struct Data {
+    pub language: Language,
     /// Ordernummer.
     pub transaction_id: String,
     pub purchase_date: String,
@@ -30,7 +39,7 @@ pub struct Data {
     /// Betalningsreferens.
     pub payment_reference: String,
     /// Returreferens.
-    pub refund_refrence: Option<String>,
+    pub refund_reference: Option<String>,
     /// Varor.
     pub wares: Vec<Ware>,
 
@@ -41,6 +50,7 @@ pub struct Data {
     pub merchant_org_id: String,
     pub merchant_email: String,
     pub merchant_address: String,
+    pub merchant_svg_icon: Option<String>,
 }
 
 pub struct OurWonderfulTypstWorldBase {
@@ -81,10 +91,14 @@ impl typst::World for OurWonderfulTypstWorld<'_> {
         self.inner.fonts.font(index)
     }
 
+    #[allow(
+        clippy::unwrap_used,
+        reason = "we can't error handle here + it's guaranteed not to panic"
+    )]
     fn main(&self) -> FileId {
         FileId::new(RootedPath::new(
             VirtualRoot::Project,
-            VirtualPath::new("main.typ").unwrap(),
+            VirtualPath::new("receipt.typ").unwrap(),
         ))
     }
 
@@ -93,7 +107,7 @@ impl typst::World for OurWonderfulTypstWorld<'_> {
             return Err(FileError::Package(PackageError::Other(None)));
         }
         let data = match id.vpath().get_without_slash() {
-            "main.typ" => Source::new(id, TYPST_DOC.to_owned()),
+            "receipt.typ" => Source::new(id, TYPST_DOC.to_owned()),
             "data.json" => return Err(FileError::NotSource),
             _ => return Err(FileError::NotFound(id.vpath().get_without_slash().into())),
         };
@@ -105,8 +119,12 @@ impl typst::World for OurWonderfulTypstWorld<'_> {
             return Err(FileError::Package(PackageError::Other(None)));
         }
         let data = match id.vpath().get_without_slash() {
-            "main.typ" => Bytes::new(TYPST_DOC),
-            "data.json" => Bytes::new(serde_json::to_string(&self.data).unwrap()),
+            "receipt.typ" => Bytes::new(TYPST_DOC),
+            "data.json" => Bytes::new(serde_json::to_string(&self.data).map_err(|error| {
+                // ALERT LEVEL 2
+                error!(?error, "Failed to serialize data.json for receipt.");
+                FileError::Other(None)
+            })?),
             _ => return Err(FileError::NotFound(id.vpath().get_without_slash().into())),
         };
         Ok(data)
@@ -126,11 +144,11 @@ impl typst::World for OurWonderfulTypstWorld<'_> {
 ///
 /// PDF.
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics if the typst compilation fails (which should never happen; we control the typst
+/// Errors if the typst compilation fails (which should never happen; we control the typst
 /// document).
-pub fn compile(world: &OurWonderfulTypstWorldBase, data: &Data) -> Vec<u8> {
+pub fn compile(world: &OurWonderfulTypstWorldBase, data: &Data) -> MinilithResult<Vec<u8>> {
     let _span = info_span!("typst receipt compilation").entered();
 
     let mut fonts = typst_kit::fonts::FontStore::default();
@@ -151,12 +169,10 @@ pub fn compile(world: &OurWonderfulTypstWorldBase, data: &Data) -> Vec<u8> {
             );
         }
     }
-    let doc = output.output.unwrap();
+    let doc = output.output.wrap_err_internal("typst: compile")?;
     let pdf_opts = typst_pdf::PdfOptions {
-        timestamp: Some(typst_pdf::Timestamp::new_utc(
-            world.now.today(None).unwrap(),
-        )),
+        timestamp: world.now.today(None).map(typst_pdf::Timestamp::new_utc),
         ..Default::default()
     };
-    typst_pdf::pdf(&doc, &pdf_opts).unwrap()
+    typst_pdf::pdf(&doc, &pdf_opts).wrap_err_internal("typst: pdf")
 }

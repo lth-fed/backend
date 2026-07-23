@@ -97,12 +97,11 @@ impl MainRouter {
                 .subject("Logga in med teknologappens inloggningstjänst")
                 .header(lettre::message::header::ContentType::TEXT_HTML)
                 .body(html)
-                .map_err(|err| {
-                    MinilithEndpointError::internal_error(format!("format email: {err:?}"))
-                })?;
-            email.send(message).await.map_err(|err| {
-                MinilithEndpointError::internal_error(format!("failed to send mail: {err:?}"))
-            })?;
+                .wrap_err_internal("format email")?;
+            email
+                .send(message)
+                .await
+                .wrap_err_internal("failed to send email")?;
         } else {
             println!(
                 "Someone tried to log in with the email {}. Click the link below to continue.",
@@ -180,20 +179,20 @@ impl MainRouter {
     }
     #[oai(path = "/api-key-get-access-token", method = "post")]
     async fn get_at(&self, body: Json<ApiKeyRequest>) -> MinilithResult<Json<ApiKeyResponse>> {
-        let user_id = query!("select user_id from api_keys where key = $1", body.key)
-            .fetch_one(&self.db)
-            .await
-            .wrap_err_unauthorized("KEY")?;
-        let now = jsonwebtoken::get_current_timestamp();
-        let claims = jwt::AccesTokenClaims {
-            sub: user_id.user_id,
-            aud: "teknologappen".to_owned(),
-            exp: now + ACCESS_TOKEN_VALID_FOR,
-            iat: now,
-            nbf: now,
-        };
-        let access_token = jwt::encode(claims, &self.private_key)
-            .ok_or_else(|| MinilithEndpointError::internal_error("contact app developers"))?;
+        let row = query!(
+            "select user_id, client_id from api_keys where key = $1",
+            body.key
+        )
+        .fetch_one(&self.db)
+        .await
+        .wrap_err_unauthorized("KEY")?;
+        let claims = jwt::StandardClaims::new(
+            row.client_id,
+            ACCESS_TOKEN_VALID_FOR,
+            jwt::AccesTokenClaims { sub: row.user_id },
+        );
+        let access_token =
+            jwt::encode(&claims, &self.private_key).wrap_err_internal("auth jwt encode at")?;
         Ok(Json(ApiKeyResponse {
             access_token,
             expires_in: ACCESS_TOKEN_VALID_FOR,

@@ -9,5 +9,6 @@ create table auth_refresh_tokens (
 
 create table api_keys (
     key uuid primary key,
-    user_id text not null
+    user_id text not null,
+    client_id text not null
 );

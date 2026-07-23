@@ -5,7 +5,9 @@ use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use ed25519_dalek::VerifyingKey;
 use jsonwebtoken::jwk::{Jwk, JwkSet};
 use jsonwebtoken::{Algorithm, DecodingKey, TokenData, Validation, decode_header};
-use minilith_errors::MinilithEndpointError;
+use minilith_errors::{
+    MinilithEndpointError, MinilithErrorOptionExt as _, MinilithErrorResultExt as _,
+};
 use opentelemetry::trace::TraceContextExt as _;
 use poem_openapi::SecurityScheme;
 use poem_openapi::auth::Bearer;
@@ -143,39 +145,25 @@ fn decode_jwt<T: DeserializeOwned>(
     token: &str,
     context: &JwkContext<impl AuthContextProvider>,
 ) -> Result<TokenData<T>, MinilithEndpointError> {
-    let header = decode_header(token).map_err(|error| {
-        MinilithEndpointError::unauthorized(
-            "You don't have a valid login-session. \
+    let header = decode_header(token).wrap_err_unauthorized(
+        "You don't have a valid login-session. \
             Try logging out and in again or clearing cookies.",
-            error,
-        )
-    })?;
+    )?;
 
-    let Some(kid) = header.kid else {
-        return Err(MinilithEndpointError::bad_frontend_code(
-            "your access token has no key ID which means we cannot validate it",
-            "",
-        ));
-    };
+    let kid = header.kid.wrap_err_bad_frontend(
+        "your access token has no key ID which means we cannot validate it",
+    )?;
 
-    let Some(jwk) = context.jwks.find(&kid) else {
-        return Err(MinilithEndpointError::unauthorized(
-            "ACCESS_KID_INVALID",
-            "your access token has an invalid key ID associated with it",
-        ));
-    };
-    let Ok(key) = DecodingKey::from_jwk(jwk) else {
-        return Err(MinilithEndpointError::internal_error(
-            "internal error, jwk invalid",
-        ));
-    };
-    jsonwebtoken::decode(token, &key, &context.validation).map_err(|error| {
-        MinilithEndpointError::unauthorized(
-            "You don't have a valid login-session. \
+    let jwk = context
+        .jwks
+        .find(&kid)
+        .ok_or(())
+        .wrap_err_unauthorized("your access token has an invalid key ID associated with it")?;
+    let key = DecodingKey::from_jwk(jwk).wrap_err_internal("internal error, jwk invalid")?;
+    jsonwebtoken::decode(token, &key, &context.validation).wrap_err_unauthorized(
+        "You don't have a valid login-session. \
             Try logging out and in again or clearing cookies.",
-            error,
-        )
-    })
+    )
 }
 
 /// Returns the logged in user. Spec says `OAuth2` but it really is OIDC but without automatic
@@ -225,9 +213,9 @@ impl User {
     }
     #[allow(clippy::unused_async, reason = "poem_openapi wants us to")]
     async fn from_token(req: &poem::Request, token: Bearer) -> poem::Result<String> {
-        let context: &JwkContext<AuthUrl> = req.data().ok_or_else(|| {
-            MinilithEndpointError::internal_error("AuthContext not registered as data!")
-        })?;
+        let context: &JwkContext<AuthUrl> = req
+            .data()
+            .wrap_err_internal("AuthContext not registered as data!")?;
         let cx = opentelemetry::Context::current();
         let span = cx.span();
         if context.testing {

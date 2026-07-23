@@ -16,7 +16,7 @@ pub use path::Path;
 
 use crate::{
     DbInternationalizedString as DIS, InternationalizedString as IS, MinilithEndpointError,
-    MinilithErrorOptionExt as _, MinilithErrorResultExt as _, MinilithResult,
+    MinilithErrorOptionExt as _, MinilithResult,
 };
 use crate::{
     context::ContextWrapper,
@@ -35,7 +35,7 @@ pub async fn id_by_path(db: impl PgExecutor<'_>, path: &Path) -> MinilithResult<
     sqlx::query_scalar!("select id from groups where path = $1", path.0)
         .fetch_optional(db)
         .await
-        .wrap_err_db()
+        .map_err(Into::into)
 }
 
 #[derive(Clone, Debug)]
@@ -116,7 +116,7 @@ impl Router {
         user: User,
         Json(create_group): Json<CreateGroupRequest>,
     ) -> MinilithResult<CreateGroupResponse> {
-        let mut txn = self.db.begin().await.wrap_err_db()?;
+        let mut txn = self.db.begin().await?;
 
         let CreateGroupRequest {
             path,
@@ -164,7 +164,7 @@ impl Router {
             other_err => MinilithEndpointError::db(other_err),
         })?;
 
-        txn.commit().await.wrap_err_db()?;
+        txn.commit().await?;
 
         Ok(CreateGroupResponse::Ok(Json(group)))
     }
@@ -181,7 +181,7 @@ impl Router {
         user: User,
         param::Path(group_id): param::Path<Uuid>,
     ) -> MinilithResult<Json<Vec<String>>> {
-        let mut txn = self.db.begin().await.wrap_err_db()?;
+        let mut txn = self.db.begin().await?;
         check_adminship(&mut txn.executor(), user.get_id(), group_id).await?;
         let members = group_members(&mut txn.executor(), group_id).await?;
 
@@ -200,7 +200,7 @@ impl Router {
         user: User,
         param::Path(group_id): param::Path<Uuid>,
     ) -> MinilithResult<Json<Vec<String>>> {
-        let mut txn = self.db.begin().await.wrap_err_db()?;
+        let mut txn = self.db.begin().await?;
         check_adminship(&mut txn.executor(), user.get_id(), group_id).await?;
         let admins = group_admins(&mut txn.executor(), group_id).await?;
 
@@ -225,12 +225,12 @@ impl Router {
     ) -> MinilithResult<Json<Adminship>> {
         let CreateAdminship { user_id } = create_adminship;
 
-        let mut txn = self.db.begin().await.wrap_err_db()?;
+        let mut txn = self.db.begin().await?;
 
         check_parent_adminship(&mut txn.executor(), user.get_id(), group_id).await?;
         let adminship = admin::create_adminship(&mut txn.executor(), &user_id, group_id).await?;
         // todo: notify other admins via email
-        txn.commit().await.wrap_err_db()?;
+        txn.commit().await?;
 
         Ok(Json(adminship))
     }
@@ -251,12 +251,12 @@ impl Router {
         param::Path(group_id): param::Path<Uuid>,
         Json(user_id): Json<String>,
     ) -> MinilithResult<RemoveAdminshipResponse> {
-        let mut txn = self.db.begin().await.wrap_err_db()?;
+        let mut txn = self.db.begin().await?;
 
         check_parent_adminship(&mut txn.executor(), user.get_id(), group_id).await?;
         admin::remove_adminship(&mut txn.executor(), &user_id, group_id).await?;
         // todo: notify other admins via email
-        txn.commit().await.wrap_err_db()?;
+        txn.commit().await?;
 
         Ok(RemoveAdminshipResponse::Ok(PlainText("adminship removed")))
     }

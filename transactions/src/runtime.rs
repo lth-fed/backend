@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use minilith_errors::{MinilithErrorResultExt as _, MinilithResult};
+use minilith_errors::MinilithResult;
 use tracing::error;
 
 use crate::callback::handle_callback_to_us;
@@ -16,7 +16,7 @@ pub async fn initial_checks(ctx: &Arc<Context>) -> MinilithResult<()> {
     )
     .fetch_all(&ctx.db)
     .await
-    .wrap_err_db()?;
+     ?;
 
     for txn in unpaid_transactions {
         let data = match txn.provider {
@@ -87,19 +87,19 @@ pub fn spawn(ctx: &Arc<Context>) {
 ///
 /// DB errors and network errors.
 pub async fn check_timeouts(ctx: &Context) -> MinilithResult<()> {
-    let mut txn = ctx.db.begin().await.wrap_err_db()?;
+    let mut txn = ctx.db.begin().await?;
 
     let timed_out_transactions = sqlx::query_as!(
         CancelTransactionData,
-        "select id, callback_url_v1, provider as \"provider: Provider\" from transactions
+        "select id, callback_url_v1, client_id, provider as \"provider: Provider\"
+        from transactions
         where timeout < now()
         -- paid = false
         and payment_reference is null
         for update"
     )
     .fetch_all(&mut txn.executor())
-    .await
-    .wrap_err_db()?;
+    .await?;
 
     let mut cancelled_uuids = Vec::new();
     let mut cancelled = Vec::new();
@@ -113,8 +113,10 @@ pub async fn check_timeouts(ctx: &Context) -> MinilithResult<()> {
 
     crate::callback::send_callbacks(
         &ctx.client,
+        &ctx.signing_key,
         cancelled.iter().map(|row| CallbackEvent {
             callback_url_v1: row.callback_url_v1.clone(),
+            client_id: row.client_id.clone(),
             inner: CallbackInfo {
                 transaction_id: row.id,
                 inner: TransactionInfo {
@@ -130,10 +132,9 @@ pub async fn check_timeouts(ctx: &Context) -> MinilithResult<()> {
         &cancelled_uuids
     )
     .execute(&mut txn.executor())
-    .await
-    .wrap_err_db()?;
+    .await?;
 
-    txn.commit().await.wrap_err_db()?;
+    txn.commit().await?;
 
     Ok(())
 }

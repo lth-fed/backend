@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use fed_auth_verifier::callbacks::{TransactionCallbackInfo, TransactionInfo};
-use minilith_errors::{MinilithErrorResultExt as _, MinilithResult};
+use minilith_errors::MinilithResult;
 use tracing::error;
 
 use crate::{ContextWrapper, ticket};
@@ -18,8 +18,7 @@ pub async fn initial_checks(ctx: &ContextWrapper) -> MinilithResult<()> {
         where transaction_id is not null"
     )
     .fetch_all(&ctx.db)
-    .await
-    .wrap_err_db()?;
+    .await?;
 
     for txn in unpaid_transactions {
         let resp = match ctx

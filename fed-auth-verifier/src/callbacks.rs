@@ -1,9 +1,8 @@
 use std::ops::Deref;
 
-use minilith_errors::{MinilithEndpointError, MinilithErrorResultExt as _};
+use minilith_errors::{MinilithErrorOptionExt as _, MinilithErrorResultExt as _};
 use poem_openapi::{ApiExtractor, Enum, Object};
 use serde::{Deserialize, Serialize};
-use tracing::error;
 use uuid::Uuid;
 
 use crate::{AuthUrl, JwkContext, TransactionsUrl};
@@ -44,13 +43,10 @@ macro_rules! impl_api_extractor {
                 body: &mut poem::RequestBody,
                 _param_opts: poem_openapi::ExtractParamOptions<()>,
             ) -> poem::Result<Self> {
-                let context: &$ctx = request.data().ok_or_else(|| {
-                    MinilithEndpointError::internal_error("AuthContext not registered as data!")
-                })?;
-                let body = body.take().map_err(|err| {
-                    error!(?err, "Somebody took our body!");
-                    MinilithEndpointError::internal_error("")
-                })?;
+                let context: &$ctx = request
+                    .data()
+                    .wrap_err_internal("AuthContext not registered as data!")?;
+                let body = body.take().wrap_err_internal("Somebody took our body")?;
                 let body = body
                     .into_string()
                     .await
@@ -150,16 +146,18 @@ pub struct TransactionCallbackInfo {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(transparent)]
 #[must_use]
-pub struct TransactionsCallbackDataV1(pub Vec<TransactionCallbackInfo>);
+pub struct TransactionsCallbackDataV1 {
+    pub events: Vec<TransactionCallbackInfo>,
+}
 impl TransactionsCallbackDataV1 {
     pub fn single(info: TransactionCallbackInfo) -> Self {
-        Self(vec![info])
+        Self { events: vec![info] }
     }
 }
 impl Deref for TransactionsCallbackDataV1 {
     type Target = Vec<TransactionCallbackInfo>;
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.events
     }
 }
 impl_api_extractor!(TransactionsCallbackDataV1, JwkContext<TransactionsUrl>);

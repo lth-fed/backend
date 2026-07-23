@@ -71,6 +71,7 @@ fn is_teknologappen_domain(domain: &Uri) -> bool {
         .any(|allowed| eq_uri_domain(domain, allowed))
 }
 pub const ACCESS_TOKEN_VALID_FOR: u64 = 15 * 60;
+pub const CALLBACK_TOKEN_VALID_FOR: u64 = 60;
 
 #[derive(Enum, Clone, PartialEq, Eq)]
 #[oai(rename_all = "snake_case")]
@@ -136,10 +137,6 @@ type OAuth2Result<T> = Result<T, OAuth2ApiResponse>;
 struct IdTokenClaims {
     iss: String,
     sub: String,
-    aud: String,
-    exp: u64,
-    nbf: u64,
-    iat: u64,
     auth_time: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     nonce: Option<String>,
@@ -404,30 +401,29 @@ impl MainRouter {
 
         conn.commit().await.map_err(OAuth2ApiResponse::db)?;
 
-        let now = jsonwebtoken::get_current_timestamp();
-        let claims = jwt::AccesTokenClaims {
-            sub: user_id.clone(),
-            aud: row.client_id.clone(),
-            exp: now + ACCESS_TOKEN_VALID_FOR,
-            iat: now,
-            nbf: now,
-        };
+        let claims = jwt::StandardClaims::new(
+            &row.client_id,
+            ACCESS_TOKEN_VALID_FOR,
+            jwt::AccesTokenClaims {
+                sub: user_id.clone(),
+            },
+        );
         let access_token =
-            jwt::encode(claims, &self.private_key).map_err(|_| OAuth2ApiResponse::Internal)?;
+            jwt::encode(&claims, &self.private_key).map_err(|_| OAuth2ApiResponse::Internal)?;
 
         #[allow(clippy::cast_sign_loss, reason = "we are taking the abs before!")]
-        let id_token = IdTokenClaims {
-            iss: WEBSITE_DOMAIN.to_owned(),
-            sub: user_id,
-            aud: row.client_id,
-            exp: now + ACCESS_TOKEN_VALID_FOR,
-            iat: now,
-            nbf: now,
-            auth_time: (row.auth_time - OffsetDateTime::UNIX_EPOCH)
-                .whole_seconds()
-                .wrapping_abs() as u64,
-            nonce: row.nonce,
-        };
+        let id_token = jwt::StandardClaims::new(
+            row.client_id,
+            ACCESS_TOKEN_VALID_FOR,
+            IdTokenClaims {
+                iss: WEBSITE_DOMAIN.to_owned(),
+                sub: user_id,
+                auth_time: (row.auth_time - OffsetDateTime::UNIX_EPOCH)
+                    .whole_seconds()
+                    .wrapping_abs() as u64,
+                nonce: row.nonce,
+            },
+        );
 
         Ok(Json(TokenResponse {
             access_token,
@@ -483,8 +479,11 @@ impl MainRouter {
             .ok_or_else(|| OAuth2ApiResponse::unauth("skipped parts of the auth process"))?;
 
         if let Some(cb_url) = &session.callback {
-            let token = jwt::encode(user_data, &self.private_key)
-                .map_err(|_| OAuth2ApiResponse::Internal)?;
+            let token = jwt::encode(
+                &jwt::StandardClaims::new(&session.client_id, CALLBACK_TOKEN_VALID_FOR, user_data),
+                &self.private_key,
+            )
+            .map_err(|_| OAuth2ApiResponse::Internal)?;
             match cb_url.as_latest() {
                 context::CallbackUrlVersion::V1 { url } => {
                     self.reqwest_client
@@ -516,30 +515,29 @@ impl MainRouter {
 
         self.auth_sessions.invalidate(&auth.code);
 
-        let now = jsonwebtoken::get_current_timestamp();
         #[allow(clippy::cast_sign_loss, reason = "we are taking the abs before!")]
-        let id_token = IdTokenClaims {
-            iss: WEBSITE_DOMAIN.to_owned(),
-            sub: user_data.sub.clone(),
-            aud: session.client_id.clone(),
-            exp: now + ACCESS_TOKEN_VALID_FOR,
-            iat: now,
-            nbf: now,
-            auth_time: (row.auth_time - OffsetDateTime::UNIX_EPOCH)
-                .whole_seconds()
-                .wrapping_abs() as u64,
-            nonce: session.nonce,
-        };
+        let id_token = jwt::StandardClaims::new(
+            &session.client_id,
+            ACCESS_TOKEN_VALID_FOR,
+            IdTokenClaims {
+                iss: WEBSITE_DOMAIN.to_owned(),
+                sub: user_data.sub.clone(),
+                auth_time: (row.auth_time - OffsetDateTime::UNIX_EPOCH)
+                    .whole_seconds()
+                    .wrapping_abs() as u64,
+                nonce: session.nonce,
+            },
+        );
 
-        let claims = jwt::AccesTokenClaims {
-            sub: user_data.sub.clone(),
-            aud: session.client_id,
-            exp: now + ACCESS_TOKEN_VALID_FOR,
-            iat: now,
-            nbf: now,
-        };
+        let claims = jwt::StandardClaims::new(
+            session.client_id,
+            ACCESS_TOKEN_VALID_FOR,
+            jwt::AccesTokenClaims {
+                sub: user_data.sub.clone(),
+            },
+        );
         let access_token =
-            jwt::encode(claims, &self.private_key).map_err(|_| OAuth2ApiResponse::Internal)?;
+            jwt::encode(&claims, &self.private_key).map_err(|_| OAuth2ApiResponse::Internal)?;
 
         Ok(Json(TokenResponse {
             access_token,
