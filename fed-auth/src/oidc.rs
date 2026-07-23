@@ -5,7 +5,7 @@
 //! login method" provider. This means we have several internal providers. The internal providers'
 //! code is located in `./api.rs` instead.
 
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use std::ops::Deref;
 
 use base64::Engine as _;
@@ -15,7 +15,7 @@ use jsonwebtoken::jwk::JwkSet;
 use poem::http::{StatusCode, Uri};
 use poem_openapi::payload::{Form, Json, PlainText, Response};
 use poem_openapi::types::ToJSON as _;
-use poem_openapi::{ApiRequest, ApiResponse, Enum, Object, OpenApi};
+use poem_openapi::{ApiResponse, Enum, Object, OpenApi};
 use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
 use sqlx::types::time::OffsetDateTime;
@@ -147,6 +147,7 @@ struct IdTokenClaims {
 
 #[derive(Object, Clone, Deserialize)]
 struct TokenAuthoriationBody {
+    #[oai(validator(pattern = "authorization_code"))]
     grant_type: String,
     code: String,
     redirect_uri: String,
@@ -155,17 +156,55 @@ struct TokenAuthoriationBody {
     // PKCE
     code_verifier: String,
 }
+impl TryFrom<&TokenBody> for TokenAuthoriationBody {
+    type Error = ();
+    fn try_from(value: &TokenBody) -> Result<Self, Self::Error> {
+        if value.grant_type != "authorization_code" {
+            return Err(());
+        }
+        Ok(Self {
+            grant_type: value.grant_type.clone(),
+            code: value.code.clone().ok_or(())?,
+            redirect_uri: value.redirect_uri.clone().ok_or(())?,
+            client_id: value.client_id.clone().ok_or(())?,
+            code_verifier: value.code_verifier.clone().ok_or(())?,
+        })
+    }
+}
 #[derive(Object, Clone, Deserialize)]
 struct TokenRefreshBody {
+    #[oai(validator(pattern = "refresh_token"))]
     grant_type: String,
     // we only give out Uuids
     refresh_token: Uuid,
     // scope
 }
-#[derive(ApiRequest)]
-enum TokenBody {
-    Authorization(Form<TokenAuthoriationBody>),
-    Refresh(Form<TokenRefreshBody>),
+impl TryFrom<&TokenBody> for TokenRefreshBody {
+    type Error = ();
+    fn try_from(value: &TokenBody) -> Result<Self, Self::Error> {
+        if value.grant_type != "refresh_token" {
+            return Err(());
+        }
+        Ok(Self {
+            grant_type: value.grant_type.clone(),
+            refresh_token: value.refresh_token.ok_or(())?,
+        })
+    }
+}
+#[derive(Object, Clone, Deserialize)]
+struct TokenBody {
+    grant_type: String,
+
+    // grant_type = authorization
+    code: Option<String>,
+    redirect_uri: Option<String>,
+    client_id: Option<String>,
+    // PKCE
+    code_verifier: Option<String>,
+
+    // grant_type = refresh
+    refresh_token: Option<Uuid>,
+    // scope
 }
 #[derive(Object)]
 struct TokenResponse {
@@ -311,30 +350,27 @@ impl MainRouter {
         refresh: Option<poem::web::Query<TokenRefreshBody>>,
         authorization: Option<poem::web::Query<TokenAuthoriationBody>>,
     ) -> OAuth2Result<Json<TokenResponse>> {
-        let body = match (refresh, authorization) {
-            (Some(refresh), _) => TokenBody::Refresh(Form(refresh.0)),
-            (None, Some(auth)) => TokenBody::Authorization(Form(auth.0)),
-            (None, None) => {
-                return Err(OAuth2ApiResponse::oauth2error(
-                    OAuth2ErrorKind::InvalidRequest,
-                    "didn't match either refresh or authorization_code grant types",
-                ));
-            }
-        };
-        self.token(body).await
+        match (refresh, authorization) {
+            (Some(refresh), _) => self.handle_refresh(refresh.0).await,
+            (None, Some(auth)) => self.handle_authorize_token(auth.0).await,
+            (None, None) => Err(OAuth2ApiResponse::oauth2error(
+                OAuth2ErrorKind::InvalidRequest,
+                "didn't match either refresh or authorization_code grant types",
+            )),
+        }
     }
     /// Get JWT access token and a new refresh token.
     #[oai(path = "/token", method = "post")]
-    async fn token(&self, body: TokenBody) -> OAuth2Result<Json<TokenResponse>> {
-        match body {
-            TokenBody::Refresh(Form(refresh)) => self.handle_refresh(refresh).await,
-            TokenBody::Authorization(Form(auth)) => self.handle_authorize_token(auth).await,
+    async fn token(&self, body: Form<TokenBody>) -> OAuth2Result<Json<TokenResponse>> {
+        if let Ok(refresh) = TokenRefreshBody::try_from(&body.0) {
+            self.handle_refresh(refresh).await
+        } else if let Ok(auth) = TokenAuthoriationBody::try_from(&body.0) {
+            self.handle_authorize_token(auth).await
+        } else {
+            Err(OAuth2ApiResponse::grant_type())
         }
     }
     async fn handle_refresh(&self, refresh: TokenRefreshBody) -> OAuth2Result<Json<TokenResponse>> {
-        if refresh.grant_type != "refresh_token" {
-            return Err(OAuth2ApiResponse::grant_type());
-        }
         let mut conn = self.db.begin().await.map_err(OAuth2ApiResponse::db)?;
 
         let removed = sqlx::query!(
@@ -377,7 +413,7 @@ impl MainRouter {
             nbf: now,
         };
         let access_token =
-            jwt::encode(claims, &self.private_key).ok_or(OAuth2ApiResponse::Internal)?;
+            jwt::encode(claims, &self.private_key).map_err(|_| OAuth2ApiResponse::Internal)?;
 
         #[allow(clippy::cast_sign_loss, reason = "we are taking the abs before!")]
         let id_token = IdTokenClaims {
@@ -399,7 +435,7 @@ impl MainRouter {
             token_type: "bearer".to_owned(),
             expires_in: ACCESS_TOKEN_VALID_FOR,
             id_token: jwt::encode(&id_token, &self.private_key)
-                .ok_or(OAuth2ApiResponse::Internal)?,
+                .map_err(|_| OAuth2ApiResponse::Internal)?,
         }))
     }
     #[allow(
@@ -411,10 +447,6 @@ impl MainRouter {
         &self,
         mut auth: TokenAuthoriationBody,
     ) -> OAuth2Result<Json<TokenResponse>> {
-        if auth.grant_type != "authorization_code" {
-            return Err(OAuth2ApiResponse::grant_type());
-        }
-
         let Some(session) = self.auth_sessions.get(&auth.code) else {
             return Err(OAuth2ApiResponse::unauth("invalid code"));
         };
@@ -451,8 +483,8 @@ impl MainRouter {
             .ok_or_else(|| OAuth2ApiResponse::unauth("skipped parts of the auth process"))?;
 
         if let Some(cb_url) = &session.callback {
-            let token =
-                jwt::encode(user_data, &self.private_key).ok_or(OAuth2ApiResponse::Internal)?;
+            let token = jwt::encode(user_data, &self.private_key)
+                .map_err(|_| OAuth2ApiResponse::Internal)?;
             match cb_url.as_latest() {
                 context::CallbackUrlVersion::V1 { url } => {
                     self.reqwest_client
@@ -507,7 +539,7 @@ impl MainRouter {
             nbf: now,
         };
         let access_token =
-            jwt::encode(claims, &self.private_key).ok_or(OAuth2ApiResponse::Internal)?;
+            jwt::encode(claims, &self.private_key).map_err(|_| OAuth2ApiResponse::Internal)?;
 
         Ok(Json(TokenResponse {
             access_token,
@@ -515,7 +547,7 @@ impl MainRouter {
             token_type: "bearer".to_owned(),
             expires_in: ACCESS_TOKEN_VALID_FOR,
             id_token: jwt::encode(&id_token, &self.private_key)
-                .ok_or(OAuth2ApiResponse::Internal)?,
+                .map_err(|_| OAuth2ApiResponse::Internal)?,
         }))
     }
 
