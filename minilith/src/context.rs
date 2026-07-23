@@ -55,7 +55,7 @@ impl Context {
     /// ```rust
     /// # use minilith::Context;
     /// # async {
-    /// # let context = Context::new(None).await.unwrap();
+    /// # let context = Context::new(None, false).await.unwrap();
     /// let nonce: [u8; 12] = rand::random();
     /// let data = b"secret data";
     /// let encrypted = context.endecrypt(data, &nonce);
@@ -78,7 +78,7 @@ impl Context {
     /// ```rust
     /// # use minilith::Context;
     /// # async {
-    /// # let context = Context::new(None).await.unwrap();
+    /// # let context = Context::new(None, false).await.unwrap();
     /// let nonce: [u8; 12] = rand::random();
     /// let mut data = Vec::from(b"secret data");
     /// context.endecrypt_mut_slice(&mut data, &nonce);
@@ -101,7 +101,7 @@ impl Context {
     /// ```rust
     /// # use minilith::Context;
     /// # async {
-    /// # let context = Context::new(None).await.unwrap();
+    /// # let context = Context::new(None, false).await.unwrap();
     /// let nonce: [u8; 12] = rand::random();
     /// let data = b"secret data";
     /// let mut encrypted = context.endecrypt(data, &nonce);
@@ -125,7 +125,7 @@ impl Context {
     /// ```rust
     /// # use minilith::Context;
     /// # async {
-    /// # let context = Context::new(None).await.unwrap();
+    /// # let context = Context::new(None, false).await.unwrap();
     /// let nonce: [u8; 12] = rand::random();
     /// let data = b"secret data";
     /// let mut encrypted = context.endecrypt(data, &nonce);
