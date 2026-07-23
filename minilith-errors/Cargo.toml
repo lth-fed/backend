@@ -7,8 +7,12 @@ edition = "2024"
 opentelemetry.workspace = true
 poem.workspace = true
 poem-openapi.workspace = true
+sqlx = { workspace = true, optional = true }
 tracing.workspace = true
 uuid.workspace = true
+
+[features]
+sqlx = ["dep:sqlx"]
 
 [lints]
 workspace = true

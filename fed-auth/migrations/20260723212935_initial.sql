@@ -1,6 +1,7 @@
 create table "public"."api_keys" (
     "key" uuid not null,
-    "user_id" text not null
+    "user_id" text not null,
+    "client_id" text not null
 );
 
 

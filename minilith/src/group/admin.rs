@@ -3,7 +3,7 @@ use sqlx::PgExecutor;
 use uuid::Uuid;
 
 use crate::group::path::Path;
-use crate::{MinilithEndpointError, MinilithErrorResultExt as _, MinilithResult};
+use crate::{MinilithEndpointError, MinilithResult};
 
 #[derive(Debug, Object)]
 pub struct Adminship {
@@ -62,8 +62,7 @@ pub async fn check_adminship(
         group_id
     )
     .fetch_optional(db)
-    .await
-    .wrap_err_db()?;
+    .await?;
 
     match row {
         None => Err(MinilithEndpointError::not_found()),
@@ -101,8 +100,7 @@ pub async fn check_parent_adminship(
         group_id
     )
     .fetch_optional(db)
-    .await
-    .wrap_err_db()?;
+    .await?;
 
     match row {
         None => Err(MinilithEndpointError::not_found()),
@@ -153,7 +151,7 @@ pub async fn create_adminship(
     )
     .fetch_one(db)
     .await
-    .wrap_err_db()
+    .map_err(Into::into)
 }
 
 /// Removes the adminship for the given user in the given group.
@@ -174,7 +172,7 @@ pub async fn remove_adminship(
     .execute(db)
     .await
     .map(|_| ())
-    .wrap_err_db()
+    .map_err(Into::into)
 }
 
 /// Returns the list of admins for the given group.
@@ -193,7 +191,7 @@ pub async fn group_admins(db: impl PgExecutor<'_>, group_id: Uuid) -> MinilithRe
     )
     .fetch_all(db)
     .await
-    .wrap_err_db()
+    .map_err(Into::into)
 }
 
 /// Returns the list of groups the user is an admin of.
@@ -214,7 +212,7 @@ pub async fn user_admin_groups(
     )
     .fetch_all(db)
     .await
-    .wrap_err_db()
+    .map_err(Into::into)
 }
 
 #[cfg(test)]

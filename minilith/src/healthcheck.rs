@@ -1,6 +1,6 @@
 use std::ops::Deref;
 
-use minilith_errors::{MinilithErrorResultExt as _, MinilithResult};
+use minilith_errors::MinilithResult;
 use poem_openapi::{OpenApi, payload::PlainText};
 
 use crate::context::ContextWrapper;
@@ -20,10 +20,7 @@ impl Deref for Router {
 impl Router {
     #[oai(path = "/healthcheck", method = "get")]
     async fn health_check(&self) -> MinilithResult<PlainText<String>> {
-        sqlx::query("SELECT 1")
-            .fetch_one(&self.db)
-            .await
-            .wrap_err_db()?;
+        sqlx::query("SELECT 1").fetch_one(&self.db).await?;
         Ok(PlainText("Ok :)".to_owned()))
     }
 }

@@ -6,5 +6,6 @@ create table client_ids (
     name text not null,
     email text not null,
     address text not null,
-    organization_number text not null
+    organization_number text not null,
+    svg_icon text
 );

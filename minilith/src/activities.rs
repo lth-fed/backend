@@ -11,7 +11,7 @@ use sqlx::types::time::OffsetDateTime;
 use crate::context::ContextWrapper;
 use crate::{
     DbInternationalizedString as DIS, InternationalizedString, MinilithErrorOptionExt as _,
-    MinilithErrorResultExt as _, MinilithResult,
+    MinilithResult,
 };
 
 #[derive(sqlx::Type, Debug)]
@@ -136,8 +136,7 @@ impl Router {
                 image_url: activity.url,
             })
             .fetch_all(&self.context.db)
-            .await
-            .wrap_err_db()?;
+            .await?;
 
         // can't sort in query because postgres doesn't allow separate columns for distinct on &
         // order by
@@ -171,8 +170,7 @@ impl Router {
             id
         )
         .fetch_optional(&self.context.db)
-        .await
-        .wrap_err_db()?
+        .await?
         .wrap_err_bad_frontend("user not allowed to access this activity")?;
         Ok(())
     }
@@ -207,8 +205,7 @@ impl Router {
             *id
         )
         .fetch_optional(&self.context.db)
-        .await
-        .wrap_err_db()?
+        .await?
         .wrap_err_not_found()?;
         let other_hosts = sqlx::query!(
             r#"select hosts.id, path, name as "name!: DIS", url
@@ -220,8 +217,7 @@ impl Router {
             *id
         )
         .fetch_all(&self.context.db)
-        .await
-        .wrap_err_db()?;
+        .await?;
         let tickets_available = sqlx::query!(
             r#"select exists (
                 select 1
@@ -233,8 +229,7 @@ impl Router {
             *id,
         )
         .fetch_one(&self.context.db)
-        .await
-        .wrap_err_db()?;
+        .await?;
 
         let hosts = std::iter::once(Host {
             name: activity.creator_name.0,
@@ -321,8 +316,7 @@ impl Router {
             }
         })
         .fetch_all(&self.db)
-        .await
-        .wrap_err_db()?;
+        .await?;
         Ok(Json(kinds))
     }
 }

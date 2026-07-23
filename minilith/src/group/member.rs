@@ -2,7 +2,7 @@ use sqlx::PgExecutor;
 use uuid::Uuid;
 
 use crate::group::{Group, path::Path};
-use crate::{DbInternationalizedString as DIS, MinilithErrorResultExt as _, MinilithResult};
+use crate::{DbInternationalizedString as DIS, MinilithResult};
 
 /// Returns the closest matching (longest prefix) group path for the given user
 /// and group id, if such a membership exists. Returns `None` if the user has
@@ -29,7 +29,7 @@ pub async fn closest_user_membership(
     )
     .fetch_optional(db)
     .await
-    .wrap_err_db()
+    .map_err(Into::into)
 }
 
 /// Returns all the groups that the user is a member of, including nested
@@ -56,7 +56,7 @@ pub async fn user_groups(db: impl PgExecutor<'_>, user_id: &str) -> MinilithResu
     )
     .fetch_all(db)
     .await
-    .wrap_err_db()
+    .map_err(Into::into)
 }
 
 /// Returns the direct and transitive members of a group.
@@ -75,7 +75,7 @@ pub async fn group_members(db: impl PgExecutor<'_>, group_id: Uuid) -> MinilithR
     )
     .fetch_all(db)
     .await
-    .wrap_err_db()
+    .map_err(Into::into)
 }
 
 #[cfg(test)]

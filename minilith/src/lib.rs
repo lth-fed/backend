@@ -15,6 +15,7 @@ pub mod group;
 pub mod healthcheck;
 mod runtime;
 pub mod ticket;
+mod transactions;
 pub mod user;
 
 pub use bin_common::PgPool;
@@ -37,6 +38,28 @@ impl InternationalizedString {
         #[allow(clippy::expect_used, reason = "See string below")]
         serde_json::to_value(self.0)
             .expect("we know a hashmap will always serialize & we also know it has string keys")
+    }
+    #[must_use]
+    pub fn resolve_intl<'a>(&'a self, user_language: &str, default: &'a str) -> &'a str {
+        if let Some(translation) = self.0.get(user_language) {
+            return translation;
+        }
+        if let Some(translation) = self
+            .0
+            .get(user_language.split('-').next().unwrap_or(user_language))
+        {
+            return translation;
+        }
+        if let Some(translation) = self.0.get("en") {
+            return translation;
+        }
+        if let Some(translation) = self.0.get("sv") {
+            return translation;
+        }
+        if let Some(translation) = self.0.values().next() {
+            return translation;
+        }
+        default
     }
 }
 impl From<DbInternationalizedString> for InternationalizedString {
@@ -98,6 +121,8 @@ pub async fn get_endpoint(
     let cors = Cors::new()
         .allow_method(Method::GET)
         .allow_method(Method::POST)
+        .allow_method(Method::PUT)
+        .allow_method(Method::DELETE)
         .allow_header("content-type")
         .allow_header("authorization")
         .allow_credentials(true);

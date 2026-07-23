@@ -2,7 +2,7 @@ use std::fmt::Display;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use fed_auth_verifier::callbacks::{TransactionInfo, TransactionState};
+use fed_auth_verifier::callbacks::{TransactionCallbackInfo, TransactionInfo, TransactionState};
 use minilith_errors::{
     MinilithEndpointError, MinilithErrorOptionExt as _, MinilithErrorResultExt as _, MinilithResult,
 };
@@ -13,16 +13,16 @@ use poem_openapi::{Enum, Object, OpenApi};
 use serde::Serialize;
 use sqlx::postgres::types::PgMoney;
 use time::OffsetDateTime;
-use tracing::error;
 use uuid::Uuid;
 
 use crate::context::CancelTransactionData;
-use crate::{ApiAuth, Context, Provider, callback, receipt, swish};
+use crate::{ApiAuth, CallbackEvent, Context, Provider, callback, receipt, swish};
 
 #[derive(Default, Debug, Enum, Clone, Copy, Serialize)]
+#[oai(rename_all = "UPPERCASE")]
+#[serde(rename_all = "UPPERCASE")]
 pub enum Currency {
     /// Swedish crowns.
-    #[oai(rename = "SEK")]
     #[default]
     Sek,
 }
@@ -39,7 +39,8 @@ pub struct Ware {
     /// This is flexible for e.g. sales when buying more than 1.
     pub name: String,
     /// The total amount (inclusive tax) for this ware. In ören.
-    pub amount: u32,
+    #[oai(validator(minimum(value = "0", exclusive = false)))]
+    pub amount: i64,
     /// The tax rate. Must be `> 1` (e.g. `1.25` for common moms in Sweden).
     pub tax: f64,
     /// The currency in which this transactions is made.
@@ -47,13 +48,21 @@ pub struct Ware {
 }
 #[derive(Debug, Object, Clone)]
 struct CreatePaymentRequest {
-    /// This tells us which account to put the money into!
-    client_id: String,
     /// When this payment request will be cancelled.
     /// Will try to cancel within 30s.
     timeout: OffsetDateTime,
     /// The list of items to be bought.
     wares: Vec<Ware>,
+}
+impl CreatePaymentRequest {
+    // remove when the SEK restriction is lifted
+    fn total_amount(&self) -> i64 {
+        self.wares.iter().map(|ware| ware.amount).sum()
+    }
+}
+#[derive(Debug, Object, Clone)]
+struct CreatePaymentResponseFree {
+    transaction_id: Uuid,
 }
 #[derive(Debug, Object, Clone)]
 struct CreatePaymentResponseSwish {
@@ -62,15 +71,9 @@ struct CreatePaymentResponseSwish {
     transaction_id: Uuid,
 }
 
-#[derive(Debug, Enum, Clone)]
-#[oai(rename_all = "lowercase")]
-enum ReceiptLanguage {
-    En,
-    Sv,
-}
 #[derive(Debug, Object, Clone)]
 struct ReceiptRequest {
-    language: ReceiptLanguage,
+    language: receipt::Language,
     customer_name: String,
 }
 
@@ -113,8 +116,7 @@ impl Route {
             id
         )
         .fetch_optional(&self.db)
-        .await
-        .wrap_err_db()?
+        .await?
         else {
             return Ok(Json(TransactionInfo {
                 state: TransactionState::Cancelled,
@@ -138,29 +140,88 @@ impl Route {
             id
         )
         .fetch_optional(&self.db)
-        .await
-        .wrap_err_db()?
+        .await?
         .wrap_err_not_found()?;
         check_client_id(&auth, &row.client_id)?;
         self.cancel_transaction(&CancelTransactionData {
             id,
             callback_url_v1: row.callback_url_v1,
+            client_id: row.client_id,
             provider: row.provider,
         })
         .await?;
         Ok(())
     }
-    /// You WILL get info on the callback (unless it's unreachable) about either it getting
-    /// cancelled or paid. We will do our best within our control.
+    /// You WILL NOT get info on the callback, the transaction will be marked paid instantly.
+    ///
+    /// Keep in mind to complete your transaction before calling this, else we might call your
+    /// callback prematurely.
+    ///
+    /// # Errors
+    ///
+    /// - the amount was not 0
+    #[oai(path = "/free", method = "post")]
+    async fn free_payment(
+        &self,
+        auth: ApiAuth,
+        body: Json<CreatePaymentRequest>,
+    ) -> MinilithResult<Json<CreatePaymentResponseFree>> {
+        let amount = body.total_amount();
+        if amount != 0 {
+            return Err(MinilithEndpointError::bad_user_input(
+                "amount",
+                "",
+                "this transaction is not for 0SEK!",
+                "amount",
+            ));
+        }
+
+        let mut txn = self.db.begin().await?;
+        let transaction_id = Uuid::new_v4();
+        sqlx::query!(
+            "insert into transactions (id, client_id, callback_url_v1,
+                total_transaction_fee, callback_identifier, payment_reference)
+            values ($1, $2, $3, '0.00'::money, $4, 'free')
+            ",
+            transaction_id,
+            auth.client_id,
+            auth.callback_url_v1,
+            Uuid::nil()
+        )
+        .execute(&mut txn.executor())
+        .await?;
+
+        insert_wares(&mut txn.executor(), transaction_id, &body.wares).await?;
+        txn.commit().await?;
+
+        callback::send_callbacks(
+            &self.client,
+            &self.signing_key,
+            [CallbackEvent {
+                callback_url_v1: auth.callback_url_v1.clone(),
+                client_id: auth.client_id.clone(),
+                inner: TransactionCallbackInfo {
+                    transaction_id,
+                    inner: TransactionInfo {
+                        state: TransactionState::Paid,
+                    },
+                },
+            }]
+            .into_iter(),
+        )
+        .await;
+
+        Ok(Json(CreatePaymentResponseFree { transaction_id }))
+    }
+    /// You WILL get info on the callback (unless your endpoint is unreachable) about either it
+    /// getting cancelled or paid. We will do our best within our control.
     #[oai(path = "/swish", method = "post")]
     async fn swish_payment(
         &self,
         auth: ApiAuth,
         body: Json<CreatePaymentRequest>,
     ) -> MinilithResult<Json<CreatePaymentResponseSwish>> {
-        check_client_id(&auth, &body.client_id)?;
-
-        let amount = body.wares.iter().fold(0, |acc, ware| acc + ware.amount);
+        let amount = body.total_amount();
         if amount < 100 {
             return Err(MinilithEndpointError::bad_user_input(
                 "low amount",
@@ -175,8 +236,7 @@ impl Route {
             auth.client_id
         )
         .fetch_one(&self.db)
-        .await
-        .wrap_err_db()?;
+        .await?;
 
         let uuid = Uuid::new_v4();
         let cb_ident = Uuid::new_v4();
@@ -204,85 +264,35 @@ impl Route {
             .json(&swish_body)
             .send()
             .await
-            .map_err(|err| {
-                MinilithEndpointError::internal_error(format!("swish api error: {err:?}"))
-            })?;
+            .wrap_err_internal("swish api error")?;
         if !resp.status().is_success() {
             let body = resp.text().await;
-            error!(error = ?body, "got non 2xx response from swish API");
-            return Err(MinilithEndpointError::internal_error(""));
+            return Err(MinilithEndpointError::internal_error(
+                "got non 2xx response from swish API",
+                body,
+            ));
         }
         let prt = resp
             .headers()
             .get("PaymentRequestToken")
             .and_then(|header| header.to_str().ok())
-            .ok_or_else(|| {
-                MinilithEndpointError::internal_error("swish gave us no PaymentRequestToken")
-            })?;
+            .wrap_err_internal("swish gave us no PaymentRequestToken")?;
 
-        let mut txn = self.db.begin().await.wrap_err_db()?;
+        let mut txn = self.db.begin().await?;
         sqlx::query!(
-            "
-            insert into transactions (id, client_id, callback_url_v1,
+            "insert into transactions (id, client_id, callback_url_v1,
                 total_transaction_fee, callback_identifier)
-            values ($1, $2, $3, '1.50'::money, $4)
-            ",
+            values ($1, $2, $3, '1.50'::money, $4)",
             uuid,
             auth.client_id,
             auth.callback_url_v1,
             cb_ident
         )
         .execute(&mut txn.executor())
-        .await
-        .wrap_err_db()?;
+        .await?;
 
-        // wares
-        #[allow(
-            clippy::cast_possible_wrap,
-            clippy::cast_possible_truncation,
-            reason = "bruh"
-        )]
-        let idxes = body
-            .wares
-            .iter()
-            .enumerate()
-            .map(|(idx, _)| idx as i32)
-            .collect::<Vec<_>>();
-        let transaction_ids = std::iter::repeat_n(uuid, body.wares.len()).collect::<Vec<_>>();
-        let names = body
-            .wares
-            .iter()
-            .map(|ware| ware.name.clone())
-            .collect::<Vec<_>>();
-        let amounts = body
-            .wares
-            .iter()
-            .map(|ware| PgMoney(i64::from(ware.amount)))
-            .collect::<Vec<_>>();
-        let currencies = body
-            .wares
-            .iter()
-            .map(|ware| ware.currency.to_string())
-            .collect::<Vec<_>>();
-        let taxes = body.wares.iter().map(|ware| ware.tax).collect::<Vec<_>>();
-        sqlx::query!(
-            "insert into transaction_wares
-            (idx, transaction_id, name, amount, currency, tax)
-            select idx, transaction_id, name, amount, currency, tax 
-            from unnest($1::integer[], $2::uuid[], $3::text[], $4::money[], $5::text[],
-                $6::double precision[])
-            as t(idx, transaction_id, name, amount, currency, tax)",
-            &idxes,
-            &transaction_ids,
-            &names,
-            &amounts,
-            &currencies,
-            &taxes
-        )
-        .execute(&mut txn.executor())
-        .await
-        .wrap_err_db()?;
-        txn.commit().await.wrap_err_db()?;
+        insert_wares(&mut txn.executor(), uuid, &body.wares).await?;
+        txn.commit().await?;
 
         Ok(Json(CreatePaymentResponseSwish {
             transaction_id: uuid,
@@ -317,8 +327,7 @@ impl Route {
             id,
         )
         .fetch_optional(&self.db)
-        .await
-        .wrap_err_db()?
+        .await?
         .wrap_err_not_found()?;
 
         check_client_id(&auth, &transaction.client_id)?;
@@ -348,8 +357,7 @@ impl Route {
             id
         )
         .fetch_optional(&self.db)
-        .await
-        .wrap_err_db()?
+        .await?
         .wrap_err_not_found()?;
 
         check_client_id(&auth, &transaction.client_id)?;
@@ -367,8 +375,7 @@ impl Route {
             transaction.client_id
         )
         .fetch_one(&self.db)
-        .await
-        .wrap_err_db()?;
+        .await?;
         #[allow(
             clippy::cast_sign_loss,
             clippy::cast_possible_truncation,
@@ -383,14 +390,14 @@ impl Route {
         )
         .map(|row| Ware {
             name: row.name,
-            amount: row.amount.0 as u32,
+            amount: row.amount.0,
             tax: row.tax,
             currency: Currency::default(),
         })
         .fetch_all(&self.db)
-        .await
-        .wrap_err_db()?;
+        .await?;
         let data = receipt::Data {
+            language: body.language,
             transaction_id: id.to_string(),
             purchase_date: transaction
                 .created
@@ -399,7 +406,7 @@ impl Route {
                 .unwrap_or_default(),
             provider: transaction.provider,
             payment_reference,
-            refund_refrence: transaction.refund_reference,
+            refund_reference: transaction.refund_reference,
             wares,
             customer_name: body.customer_name.clone(),
             merchant_id: transaction.client_id,
@@ -407,8 +414,56 @@ impl Route {
             merchant_org_id: client_id.organization_number,
             merchant_email: client_id.email,
             merchant_address: client_id.address,
+            merchant_svg_icon: client_id.svg_icon,
         };
-        let doc = receipt::compile(&self.typst_world, &data);
+        let doc = receipt::compile(&self.typst_world, &data)?;
         Ok(Response::new(Binary(doc)).header("content-type", "application/octet-stream"))
     }
+}
+async fn insert_wares(
+    executor: impl sqlx::PgExecutor<'_>,
+    transaction_id: Uuid,
+    wares: &[Ware],
+) -> MinilithResult<()> {
+    #[allow(
+        clippy::cast_possible_wrap,
+        clippy::cast_possible_truncation,
+        reason = "bruh"
+    )]
+    let idxes = wares
+        .iter()
+        .enumerate()
+        .map(|(idx, _)| idx as i32)
+        .collect::<Vec<_>>();
+    let transaction_ids = std::iter::repeat_n(transaction_id, wares.len()).collect::<Vec<_>>();
+    let names = wares
+        .iter()
+        .map(|ware| ware.name.clone())
+        .collect::<Vec<_>>();
+    let amounts = wares
+        .iter()
+        .map(|ware| PgMoney(ware.amount))
+        .collect::<Vec<_>>();
+    let currencies = wares
+        .iter()
+        .map(|ware| ware.currency.to_string())
+        .collect::<Vec<_>>();
+    let taxes = wares.iter().map(|ware| ware.tax).collect::<Vec<_>>();
+    sqlx::query!(
+        "insert into transaction_wares
+            (idx, transaction_id, name, amount, currency, tax)
+            select idx, transaction_id, name, amount, currency, tax 
+            from unnest($1::integer[], $2::uuid[], $3::text[], $4::money[], $5::text[],
+                $6::double precision[])
+            as t(idx, transaction_id, name, amount, currency, tax)",
+        &idxes,
+        &transaction_ids,
+        &names,
+        &amounts,
+        &currencies,
+        &taxes
+    )
+    .execute(executor)
+    .await?;
+    Ok(())
 }

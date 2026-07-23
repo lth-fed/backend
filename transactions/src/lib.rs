@@ -2,7 +2,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use bin_common::{PgPool, get_otel};
-use minilith_errors::{MinilithEndpointError, MinilithErrorResultExt as _};
+use minilith_errors::MinilithEndpointError;
 use opentelemetry::trace::TracerProvider as _;
 use poem::http::Method;
 use poem::middleware::{Cors, OpenTelemetryMetrics, OpenTelemetryTracing};
@@ -35,6 +35,7 @@ pub enum Provider {
 #[derive(Serialize, Deserialize, Debug, Object, Clone)]
 pub struct CallbackEvent {
     callback_url_v1: String,
+    client_id: String,
     // it's a bit ugly the other types are not in this crate but then we avoid duplicated code.
     #[serde(flatten)]
     #[oai(flatten)]
@@ -60,7 +61,7 @@ pub struct ApiAuth(ApiAuthData);
 impl ApiAuth {
     async fn from_token(req: &poem::Request, token: Bearer) -> poem::Result<ApiAuthData> {
         let context: &ApiAuthContext = req.data().ok_or_else(|| {
-            MinilithEndpointError::internal_error("ApiAuthContext not registered as data!")
+            MinilithEndpointError::internal_error("ApiAuthContext not registered as data!", "")
         })?;
 
         let Some(row) = sqlx::query_as!(
@@ -70,7 +71,7 @@ impl ApiAuth {
         )
         .fetch_optional(&context.db)
         .await
-        .wrap_err_db()?
+        .map_err(MinilithEndpointError::from)?
         else {
             return Err(MinilithEndpointError::unauthorized("token invalid", "").into());
         };

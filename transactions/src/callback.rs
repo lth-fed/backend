@@ -1,22 +1,54 @@
 use std::collections::HashMap;
 
-use minilith_errors::{MinilithEndpointError, MinilithErrorResultExt as _, MinilithResult};
+use minilith_errors::{MinilithEndpointError, MinilithResult};
+use serde::Serialize;
 use tracing::warn;
 use uuid::Uuid;
 
 use crate::context::Context;
 use crate::{CallbackEvent, CallbackInfo, TransactionInfo, TransactionState, swish};
 
-pub async fn send_callbacks(client: &reqwest::Client, events: impl Iterator<Item = CallbackEvent>) {
-    let mut endpoints: HashMap<String, Vec<CallbackInfo>> = HashMap::new();
+pub async fn send_callbacks(
+    client: &reqwest::Client,
+    signing_key: &jsonwebtoken::EncodingKey,
+    events: impl Iterator<Item = CallbackEvent>,
+) {
+    let mut endpoints: HashMap<String, (String, Vec<CallbackInfo>)> = HashMap::new();
     for event in events {
         let entry = endpoints.entry(event.callback_url_v1.clone());
-        entry.or_default().push(event.inner);
+        entry
+            .or_insert_with(|| (event.client_id.clone(), Vec::new()))
+            .1
+            .push(event.inner);
     }
-    for (endpoint, infos) in endpoints {
+    for (endpoint, (client_id, infos)) in endpoints {
+        #[derive(Serialize)]
+        pub struct StandardClaims {
+            pub exp: u64,
+            pub iat: u64,
+            pub nbf: u64,
+            pub aud: String,
+            pub events: Vec<CallbackInfo>,
+        }
+
+        let now = jsonwebtoken::get_current_timestamp();
+        let claims = StandardClaims {
+            exp: now + 60,
+            iat: now,
+            nbf: now,
+            aud: client_id,
+            events: infos,
+        };
+
+        let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::EdDSA);
+        header.kid = Some("main".to_owned());
+        let Ok(token) = jsonwebtoken::encode(&header, &claims, signing_key) else {
+            continue;
+        };
+
         match client
             .post(&endpoint)
-            .json(&infos)
+            .body(token)
             .send()
             .await
             .map(reqwest::Response::error_for_status)
@@ -41,12 +73,12 @@ pub async fn handle_callback_to_us(
     validate_callback_identifier: Option<Uuid>,
 ) -> MinilithResult<()> {
     let transaction = sqlx::query!(
-        "select id, callback_identifier, callback_url_v1 from transactions where id = $1",
+        "select id, callback_identifier, callback_url_v1, client_id
+        from transactions where id = $1",
         data.id
     )
     .fetch_one(&ctx.db)
-    .await
-    .wrap_err_db()?;
+    .await?;
 
     if validate_callback_identifier
         .is_some_and(|callback_identifier| callback_identifier != transaction.callback_identifier)
@@ -60,8 +92,10 @@ pub async fn handle_callback_to_us(
         None => {
             send_callbacks(
                 &ctx.client,
+                &ctx.signing_key,
                 [CallbackEvent {
                     callback_url_v1: transaction.callback_url_v1,
+                    client_id: transaction.client_id,
                     inner: CallbackInfo {
                         transaction_id: transaction.id,
                         inner: TransactionInfo {
@@ -77,14 +111,15 @@ pub async fn handle_callback_to_us(
             // send another callback.
             sqlx::query!("delete from transactions where id = $1", data.id)
                 .execute(&ctx.db)
-                .await
-                .wrap_err_db()?;
+                .await?;
         }
         Some(payment_reference) => {
             send_callbacks(
                 &ctx.client,
+                &ctx.signing_key,
                 [CallbackEvent {
                     callback_url_v1: transaction.callback_url_v1,
+                    client_id: transaction.client_id,
                     inner: CallbackInfo {
                         transaction_id: transaction.id,
                         inner: TransactionInfo {
@@ -101,8 +136,7 @@ pub async fn handle_callback_to_us(
                 payment_reference
             )
             .execute(&ctx.db)
-            .await
-            .wrap_err_db()?;
+            .await?;
         }
     }
     Ok(())

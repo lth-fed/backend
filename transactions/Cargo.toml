@@ -15,7 +15,7 @@ dotenvy.workspace = true
 ed25519-dalek.workspace = true
 fed-auth-verifier = { path = "../fed-auth-verifier" }
 jsonwebtoken.workspace = true
-minilith-errors = { version = "0.1.0", path = "../minilith-errors" }
+minilith-errors = { version = "0.1.0", path = "../minilith-errors", features = ["sqlx"] }
 opentelemetry.workspace = true
 poem.workspace = true
 poem-openapi.workspace = true

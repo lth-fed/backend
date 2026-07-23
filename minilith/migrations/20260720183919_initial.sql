@@ -121,6 +121,7 @@ create table "public"."ticket_addons" (
     "id" uuid not null,
     "ticket_kind_id" uuid not null,
     "idx" integer not null,
+    "name" jsonb not null,
     "multiple_alternatives" boolean not null,
     "has_text_field" boolean not null,
     "required" boolean not null

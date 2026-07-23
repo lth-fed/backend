@@ -41,7 +41,9 @@ create table ticket_kind_allowed_groups (
 create table ticket_addons (
     id uuid primary key,
     ticket_kind_id uuid not null references ticket_kinds(id),
+    -- for sorting
     idx integer not null,
+    name jsonb not null,
     -- <virtual foreign key> ticket_addon_options[] not null,
     --
     multiple_alternatives boolean not null,
