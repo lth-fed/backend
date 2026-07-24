@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select ticket_kind_id from ticket_release_queuers where user_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "ticket_kind_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "973b6059f7ee1ae632177b203bc100d2a16da94b91a778d5a240fe2c3bfb827b"
+}

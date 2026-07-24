@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select transaction_id, user_id, ticket_kind_id\n        from ticket_reservations\n        where timeout < now()\n        and transaction_id is null\n        limit 1\n        for update skip locked",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "transaction_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "ticket_kind_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "db35b00603fe4812ef86d82ff856d00721ace293d70731007b75afc6da7a8d41"
+}

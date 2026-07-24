@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select token, client_id, callback_url_v1 from api_tokens where token = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "token",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "client_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "callback_url_v1",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "f2b24d8896c8989909b287d498dbe940b56fa59ec458db2c623941f9558e7a81"
+}

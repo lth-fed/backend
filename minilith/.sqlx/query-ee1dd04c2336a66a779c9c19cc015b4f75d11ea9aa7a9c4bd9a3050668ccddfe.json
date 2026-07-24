@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select id as \"ticket_kind_id!\", -- count(user_id),\n        (max_tickets - reserved_or_purchased_tickets) as \"available_tickets!\"\n        from ticket_reservation_queuers\n        inner join ticket_kinds kind on (kind.id = ticket_kind_id)\n        where max_tickets > reserved_or_purchased_tickets\n        group by id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "ticket_kind_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "available_tickets!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "ee1dd04c2336a66a779c9c19cc015b4f75d11ea9aa7a9c4bd9a3050668ccddfe"
+}

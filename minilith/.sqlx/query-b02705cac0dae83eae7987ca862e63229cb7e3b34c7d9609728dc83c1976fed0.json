@@ -1,0 +1,59 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select * from ticket_addons where id = any($1) and ticket_kind_id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "ticket_kind_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "idx",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "name",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "multiple_alternatives",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 5,
+        "name": "has_text_field",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
+        "name": "required",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "UuidArray",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "b02705cac0dae83eae7987ca862e63229cb7e3b34c7d9609728dc83c1976fed0"
+}

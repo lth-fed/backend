@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into transaction_wares\n            (idx, transaction_id, name, amount, currency, tax)\n            select idx, transaction_id, name, amount, currency, tax \n            from unnest($1::integer[], $2::uuid[], $3::text[], $4::money[], $5::text[],\n                $6::double precision[])\n            as t(idx, transaction_id, name, amount, currency, tax)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4Array",
+        "UuidArray",
+        "TextArray",
+        "MoneyArray",
+        "TextArray",
+        "Float8Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "984f25a4d247e914cb95059c46f369355b2aab330a344068e401d169b3be3490"
+}

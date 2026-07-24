@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into ticket_reservation_addons\n                (addon_id, ticket_id, selected_options, selected_text)\n                values ($1, $2, $3, $4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int4Array",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "47fbd3cd67fc55a44070fd4a0aa1ff61131ac23f88d16d0e1ba829aeb1045f13"
+}

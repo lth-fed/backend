@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select user_id, ticket_kind_id from ticket_reservation_queuers\n            inner join ticket_kinds kind on (kind.id = ticket_kind_id)\n            where kind.has_been_released = true\n            limit 1\n            for update skip locked",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "ticket_kind_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "bdfcd1add2b6581b66a11c5118e8592e2116dffe2c2302103df705c156ecfcc1"
+}

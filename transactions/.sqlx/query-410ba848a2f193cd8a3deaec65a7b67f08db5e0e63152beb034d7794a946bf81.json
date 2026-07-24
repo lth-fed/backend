@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select id, callback_identifier, callback_url_v1, client_id\n        from transactions where id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "callback_identifier",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "callback_url_v1",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "client_id",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "410ba848a2f193cd8a3deaec65a7b67f08db5e0e63152beb034d7794a946bf81"
+}
