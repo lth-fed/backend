@@ -336,11 +336,20 @@ impl Route {
                 "refund when not paid",
                 "",
                 "refund is not available until after the purchase is complete",
-                "<paid>",
+                "<payment_reference>",
             ));
         }
+        if transaction.refund_reference.is_some() {
+            return Err(MinilithEndpointError::bad_user_input(
+                "refund when refunded",
+                "",
+                "refund is not available because it's already happened",
+                "<refund_reference>",
+            ));
+        }
+        Err(MinilithEndpointError::internal_error("not implemented", ""))
 
-        Ok(Json(String::new()))
+        // Ok(Json(String::new()))
     }
     /// Must be made from the same `client_id` as the transaction.
     #[oai(path = "/:id/receipt", method = "post")]
@@ -366,7 +375,7 @@ impl Route {
                 "receipt when not paid",
                 "",
                 "receipt is not available until after the purchase is complete",
-                "<paid>",
+                "<payment_reference>",
             ));
         };
 
