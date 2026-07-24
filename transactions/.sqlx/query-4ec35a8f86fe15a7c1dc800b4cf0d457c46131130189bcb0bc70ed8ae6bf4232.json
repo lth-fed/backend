@@ -1,0 +1,36 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select id, provider as \"provider: Provider\" from transactions where payment_reference is null",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "provider: Provider",
+        "type_info": {
+          "Custom": {
+            "name": "provider",
+            "kind": {
+              "Enum": [
+                "swish",
+                "stripe"
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "4ec35a8f86fe15a7c1dc800b4cf0d457c46131130189bcb0bc70ed8ae6bf4232"
+}

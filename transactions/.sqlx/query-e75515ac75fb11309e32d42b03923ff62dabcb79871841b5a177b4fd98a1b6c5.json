@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select client_id, payment_reference, refund_reference\n            from transactions where id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "client_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "payment_reference",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "refund_reference",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "e75515ac75fb11309e32d42b03923ff62dabcb79871841b5a177b4fd98a1b6c5"
+}

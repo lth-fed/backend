@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from ticket_reservation_queuers\n        where ticket_kind_id = $1\n        and user_id = any($2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "460ce6f5630142017afbf331b3646589c6ef055b0972b257dff3ab4f6c5ffd5d"
+}

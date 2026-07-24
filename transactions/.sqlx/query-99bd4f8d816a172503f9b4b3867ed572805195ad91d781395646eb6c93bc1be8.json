@@ -1,0 +1,44 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select client_id, callback_url_v1, provider as \"provider!: crate::Provider\"\n            from transactions where id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "client_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "callback_url_v1",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "provider!: crate::Provider",
+        "type_info": {
+          "Custom": {
+            "name": "provider",
+            "kind": {
+              "Enum": [
+                "swish",
+                "stripe"
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "99bd4f8d816a172503f9b4b3867ed572805195ad91d781395646eb6c93bc1be8"
+}

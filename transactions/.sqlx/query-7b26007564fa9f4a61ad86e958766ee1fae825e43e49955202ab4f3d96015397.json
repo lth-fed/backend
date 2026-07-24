@@ -1,0 +1,48 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select id, callback_url_v1, client_id, provider as \"provider: Provider\"\n        from transactions\n        where timeout < now()\n        -- paid = false\n        and payment_reference is null\n        for update",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "callback_url_v1",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "client_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "provider: Provider",
+        "type_info": {
+          "Custom": {
+            "name": "provider",
+            "kind": {
+              "Enum": [
+                "swish",
+                "stripe"
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "7b26007564fa9f4a61ad86e958766ee1fae825e43e49955202ab4f3d96015397"
+}

@@ -1,0 +1,62 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select id, payment_reference, refund_reference,\n            client_id, created, provider as \"provider!: Provider\"\n            from transactions where id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "payment_reference",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "refund_reference",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "client_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "created",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "provider!: Provider",
+        "type_info": {
+          "Custom": {
+            "name": "provider",
+            "kind": {
+              "Enum": [
+                "swish",
+                "stripe"
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "72a8b9a46688d386e39b74d1e8470c2b0aa0d7aea6471c6fde25d5e2aa5da19e"
+}

@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select name, amount, currency, tax\n            from transaction_wares\n            where transaction_id = $1\n            order by idx asc",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "amount",
+        "type_info": "Money"
+      },
+      {
+        "ordinal": 2,
+        "name": "currency",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "tax",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "3d4f08dad178aa12f2b4b131c52439ec6dbcefe46ea247f0b8c16c18f4047a8c"
+}
