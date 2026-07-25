@@ -132,6 +132,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-stripe-checkout"
+version = "1.0.0-rc.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a7cc969611dc770fbffe5520128d53fb7618f2f64cacdcc5fdc80066042bd92"
+dependencies = [
+ "async-stripe-client-core",
+ "async-stripe-shared",
+ "async-stripe-types",
+ "miniserde",
+ "serde",
+ "smol_str",
+ "tracing",
+]
+
+[[package]]
 name = "async-stripe-client-core"
 version = "1.0.0-rc.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -165,10 +180,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "async-stripe-payment"
+name = "async-stripe-misc"
 version = "1.0.0-rc.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9063ec5de6b3c6ea14141911fd55eb2e54051acc9c0223b4ce7f938295f587fb"
+checksum = "c4cd1464b9f7abf03eff4c932d59fdcef95656a43f109b932fba710544407a85"
 dependencies = [
  "async-stripe-client-core",
  "async-stripe-shared",
@@ -1111,6 +1126,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "978747c1d849a7d2ee5e8adc0159961c48fb7e5db2f06af6723b80123bb53856"
 dependencies = [
  "cfg-if",
+ "hashbrown 0.14.5",
+ "lock_api",
+ "once_cell",
+ "parking_lot_core",
+]
+
+[[package]]
+name = "dashmap"
+version = "6.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6361d5c062261c78a176addb82d4c821ae42bed6089de0e12603cd25de2059c"
+dependencies = [
+ "cfg-if",
+ "crossbeam-utils",
  "hashbrown 0.14.5",
  "lock_api",
  "once_cell",
@@ -3039,7 +3068,7 @@ checksum = "c325dfab65f261f386debee8b0969da215b3fa0037e74c8a1234db7ba986d803"
 dependencies = [
  "crossbeam-channel",
  "crossbeam-utils",
- "dashmap",
+ "dashmap 5.5.3",
  "skeptic",
  "smallvec",
  "tagptr",
@@ -5874,12 +5903,15 @@ name = "transactions"
 version = "0.1.0"
 dependencies = [
  "async-stripe",
+ "async-stripe-checkout",
  "async-stripe-core",
- "async-stripe-payment",
+ "async-stripe-misc",
+ "async-stripe-types",
  "async-stripe-webhook",
  "base64",
  "bin-common",
  "color-eyre",
+ "dashmap 6.2.1",
  "dotenvy",
  "ed25519-dalek",
  "fed-auth-verifier",

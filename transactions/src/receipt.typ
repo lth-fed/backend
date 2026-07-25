@@ -52,6 +52,7 @@
     #if data.refund_reference != none [#if sv [Returreferens] else [Return reference]: #data.refund_reference]
 
     #if sv [Kund] else [Customer]: #data.customer_name
+    #if sv [Kundnummer] else [Customer ID]: #data.customer_id
   ],
   if data.merchant_svg_icon != none [#image(bytes(data.merchant_svg_icon), format: "svg", width: 150pt)] else [],
 )

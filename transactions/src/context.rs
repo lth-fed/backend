@@ -1,3 +1,4 @@
+use std::ops::{Deref, Not as _};
 use std::path::PathBuf;
 
 use base64::Engine as _;
@@ -7,10 +8,15 @@ use color_eyre::eyre::WrapErr as _;
 use ed25519_dalek::pkcs8::DecodePrivateKey as _;
 use jsonwebtoken::EncodingKey;
 use jsonwebtoken::jwk::JwkSet;
-use minilith_errors::MinilithResult;
+use minilith_errors::{
+    MinilithEndpointError, MinilithErrorOptionExt as _, MinilithErrorResultExt as _, MinilithResult,
+};
 use sqlx::migrate;
+use stripe_misc::webhook_endpoint::CreateWebhookEndpointEnabledEvents;
 use tracing::error;
 use uuid::Uuid;
+
+use crate::api::{DOMAIN, STRIPE_WEBHOOK_PATH};
 
 use crate::receipt::OurWonderfulTypstWorldBase;
 use crate::{Provider, swish};
@@ -23,11 +29,132 @@ pub(crate) struct CancelTransactionData {
 }
 
 #[derive(Debug)]
+#[must_use]
+pub struct ClientStore<T>(dashmap::DashMap<String, T>);
+impl<T> Default for ClientStore<T> {
+    fn default() -> Self {
+        Self(dashmap::DashMap::default())
+    }
+}
+#[derive(Debug)]
+pub struct SwishClient {
+    client: reqwest::Client,
+    pub number: String,
+}
+impl Deref for SwishClient {
+    type Target = reqwest::Client;
+    fn deref(&self) -> &Self::Target {
+        &self.client
+    }
+}
+impl ClientStore<SwishClient> {
+    /// # Errors
+    ///
+    /// DB & client creation.
+    pub async fn get(
+        &self,
+        db: &PgPool,
+        client_id: &str,
+    ) -> MinilithResult<impl Deref<Target = SwishClient>> {
+        if let Some(client) = self.0.get(client_id) {
+            return Ok(client);
+        }
+        let client = sqlx::query!("select * from client_ids where client_id = $1", client_id)
+            .fetch_optional(db)
+            .await?
+            .wrap_err_internal("client_id not found")?;
+        let rustls_buf = format!("{}\n{}", client.swish_key, client.swish_cert);
+
+        let swish_client = reqwest::Client::builder()
+            .identity(
+                reqwest::Identity::from_pem(rustls_buf.as_bytes())
+                    .wrap_err_internal("failed to build client authentication from swish")
+                    .inspect_err(|_| {
+                        // ALERT LEVEL 1
+                    })?,
+            )
+            .build()
+            .wrap_err_internal("Failed to build swish client")
+            .inspect_err(|_| {
+                // ALERT LEVEL 1
+            })?;
+        let client = self.0.entry(client_id.to_owned()).or_insert(SwishClient {
+            client: swish_client,
+            number: client.swish_number,
+        });
+        Ok(client.downgrade())
+    }
+}
+impl ClientStore<stripe::Client> {
+    /// # Errors
+    ///
+    /// DB & client creation.
+    pub async fn get(
+        &self,
+        db: &PgPool,
+        client_id: &str,
+    ) -> MinilithResult<impl Deref<Target = stripe::Client>> {
+        if let Some(client) = self.0.get(client_id) {
+            return Ok(client);
+        }
+        let client = sqlx::query!("select * from client_ids where client_id = $1", client_id)
+            .fetch_optional(db)
+            .await?
+            .wrap_err_internal("client_id not found")?;
+
+        let Some(stripe_secret) = client.stripe_secret else {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "your client_id isn't set up for stripe",
+                "",
+            ));
+        };
+
+        let client = stripe::ClientBuilder::new(&stripe_secret)
+            .client_id("fed-transactions".into())
+            .build()
+            .wrap_err_internal("stripe: ClientBuilder failed")
+            .inspect_err(|_| {
+                // ALERT LEVEL 1
+            })?;
+
+        let webhook_url = format!("{DOMAIN}/v0{STRIPE_WEBHOOK_PATH}");
+        let webhooks = stripe_misc::webhook_endpoint::ListWebhookEndpoint::new()
+            .limit(100_i64)
+            .send(&client)
+            .await
+            .wrap_err_internal("stripe: list webhooks")?;
+        let should_add_webhook = webhooks
+            .data
+            .iter()
+            .any(|webhook| webhook.url == webhook_url)
+            .not();
+        if should_add_webhook {
+            stripe_misc::webhook_endpoint::CreateWebhookEndpoint::new(
+                vec![
+                    CreateWebhookEndpointEnabledEvents::CheckoutSessionCompleted,
+                    CreateWebhookEndpointEnabledEvents::CheckoutSessionExpired,
+                ],
+                webhook_url,
+            )
+            .send(&client)
+            .await
+            .wrap_err_internal("stripe: add webhook")?;
+        }
+
+        Ok(self
+            .0
+            .entry(client_id.to_owned())
+            .or_insert(client)
+            .downgrade())
+    }
+}
+
+#[derive(Debug)]
 pub struct Context {
     pub db: PgPool,
 
-    // swish
-    pub swish_client: reqwest::Client,
+    pub swish_clients: ClientStore<SwishClient>,
+    pub stripe_clients: ClientStore<stripe::Client>,
 
     // our api to those using us
     pub client: reqwest::Client,
@@ -72,18 +199,6 @@ impl Context {
             .suggestion("Start the database with `docker compose up -d`")?
         };
 
-        let cert = std::env::var("SWISH_CERT").wrap_err("No `SWISH_CERT` env variable")?;
-        let key = std::env::var("SWISH_KEY").wrap_err("No `SWISH_KEY` env variable")?;
-        let rustls_buf = format!("{key}\n{cert}");
-
-        let swish_client = reqwest::Client::builder()
-            .identity(
-                reqwest::Identity::from_pem(rustls_buf.as_bytes())
-                    .wrap_err("failed to build client authentication from env certs")?,
-            )
-            .build()
-            .wrap_err("Failed to build swish client")?;
-
         //         let resp = swish_client.put("https://mss.cpc.getswish.net/swish-cpcapi/api/v2/paymentrequests/11A86BE70EA346E4B1C39C874173F088").header("content-type", "application/json").body(r#"{
         //     "payeePaymentReference": "0123456789",
         //     "callbackUrl": "https://example.com/api/swishcb/paymentrequests",
@@ -121,6 +236,7 @@ impl Context {
                 },
             ],
             customer_name: "Erik Davidsson".to_owned(),
+            customer_id: "lund-university:er8380da-s".to_owned(),
             merchant_id: "esek".to_owned(),
             merchant_name: "E-sektionen inom TLTH".to_owned(),
             merchant_org_id: "845001-2284".to_owned(),
@@ -137,7 +253,10 @@ impl Context {
 
         let context = Self {
             db,
-            swish_client,
+
+            swish_clients: ClientStore::default(),
+            stripe_clients: ClientStore::default(),
+
             client: reqwest::Client::new(),
             jwks,
             signing_key: encoding_key,
@@ -147,9 +266,22 @@ impl Context {
         Ok(context)
     }
 
+    pub(crate) async fn get_swish_client(
+        &self,
+        client_id: &str,
+    ) -> MinilithResult<impl Deref<Target = SwishClient>> {
+        self.swish_clients.get(&self.db, client_id).await
+    }
+    pub(crate) async fn get_stripe_client(
+        &self,
+        client_id: &str,
+    ) -> MinilithResult<impl Deref<Target = stripe::Client>> {
+        self.stripe_clients.get(&self.db, client_id).await
+    }
+
     /// # Return
     ///
-    /// Returns `true` if cancel is successful.
+    /// Returns `true` if cancel is guaranteed successful, applying from the instant this returns.
     pub(crate) async fn cancel_transaction(
         &self,
         transaction: &CancelTransactionData,
@@ -161,8 +293,8 @@ impl Context {
                     path: "/status".to_owned(),
                     value: "cancelled".to_owned(),
                 }];
-                let resp = match self
-                    .swish_client
+                let client = self.get_swish_client(&transaction.client_id).await?;
+                let resp = match client
                     .patch(swish::payment_request_url(transaction.id))
                     .json(&patch)
                     .send()
@@ -178,6 +310,7 @@ impl Context {
                         return Ok(false);
                     }
                 };
+                drop(client);
                 if resp.status().is_success() {
                     return Ok(true);
                 }
@@ -197,9 +330,27 @@ impl Context {
 
                 error!("Shit went down with swish cancel!");
                 // ALERT LEVEL 1
+                Ok(false)
             }
-            Provider::Stripe => todo!(),
+            Provider::Stripe => {
+                let client = self.get_stripe_client(&transaction.client_id).await?;
+
+                let session_id = sqlx::query_scalar!(
+                    "select stripe_id from stripe_checkouts where transaction_id = $1",
+                    transaction.id,
+                )
+                .fetch_optional(&self.db)
+                .await?
+                .wrap_err_internal(
+                    "no stripe_checkouts.stripe_id was associated with a stripe transaction",
+                )?;
+
+                stripe_checkout::checkout_session::ExpireCheckoutSession::new(session_id)
+                    .send(&*client)
+                    .await
+                    .wrap_err_internal("stripe: cancel")?;
+                Ok(true)
+            }
         }
-        Ok(false)
     }
 }

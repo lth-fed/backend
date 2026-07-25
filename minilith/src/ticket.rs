@@ -4,7 +4,7 @@ use std::ops::{ControlFlow, Deref};
 use bin_common::{PgPool, Transaction};
 use fed_auth_verifier::User;
 use fed_auth_verifier::callbacks::TransactionState;
-use minilith_errors::MinilithErrorOptionExt as _;
+use minilith_errors::{MinilithErrorOptionExt as _, MinilithErrorResultExt as _};
 use poem_openapi::Enum;
 use poem_openapi::param::Path;
 use poem_openapi::{Object, OpenApi, payload::Json};
@@ -35,7 +35,7 @@ impl Deref for Router {
     }
 }
 
-#[derive(Debug, Clone, Copy, Enum)]
+#[derive(Debug, Clone, Copy, Enum, PartialEq, Eq)]
 #[oai(rename_all = "lowercase")]
 pub enum PurchaseProvider {
     Swish,
@@ -54,6 +54,8 @@ pub struct BuyTicketRequest {
     /// Doesn't matter for free tickets.
     provider: PurchaseProvider,
     addons: Vec<BoughtAddon>,
+    /// Required for stripe.
+    stripe_success_url: Option<String>,
 }
 #[derive(Debug, Clone, Object)]
 pub struct BuyTicketResponse {
@@ -61,6 +63,10 @@ pub struct BuyTicketResponse {
     ticket_id: Option<Uuid>,
     /// Not null when using [`PurchaseProvider::Swish`].
     payment_request_token: Option<String>,
+    /// Not null when using [`PurchaseProvider::Stripe`].
+    /// Open this in a new browser context.
+    /// Close that context when [`BuyTicketRequest::stripe_success_url`] is reached.
+    stripe_url: Option<String>,
 }
 #[derive(Debug, Clone, Copy, Object)]
 pub struct QueueRequest {
@@ -611,14 +617,17 @@ impl Router {
             status: DropStatus::Dropped,
         }))
     }
+    /// Try to lock in this reservation by purchasing the ticket.
+    /// If a transaction is already underway, it's cancelled.
+    ///
     /// # Errors
     ///
     /// - addons invalid (they should match the valid addons you got getting the details of this
     ///   `ticket_kind`)
-    /// - transaction is already underway
     /// - `ticket_kind` doesn't match current reservation
+    /// - could not cancel transaction (500)
     /// - user already owns a ticket from this event
-    #[oai(path = "/reservation", method = "post")]
+    #[oai(path = "/reservation/buy", method = "post")]
     #[allow(
         clippy::too_many_lines,
         reason = "It's linear and well-documented. \
@@ -627,8 +636,14 @@ impl Router {
     async fn begin_purchase(
         &self,
         user: User,
-        Json(mut req): Json<BuyTicketRequest>,
+        Json(mut body): Json<BuyTicketRequest>,
     ) -> MinilithResult<Json<BuyTicketResponse>> {
+        if body.provider == PurchaseProvider::Stripe && body.stripe_success_url.is_none() {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "stripe_success_url has to be non-null when provider is stripe!",
+                "",
+            ));
+        }
         // this is here so nobody else tries to mess with our reservation while we are assigning it
         // a transaction_ìd
         let mut reservation_txn = self.db.begin().await?;
@@ -647,22 +662,36 @@ impl Router {
         .fetch_optional(&mut reservation_txn.executor())
         .await?
         .wrap_err_not_found()?;
-        if reservation.ticket_kind_id != req.ticket_kind {
+        if reservation.ticket_kind_id != body.ticket_kind {
             return Err(MinilithEndpointError::bad_frontend_code(
                 "ticket_kind you requested to buy is not the same as the one you have reserved",
                 "",
             ));
         }
-        if reservation.transaction_id.is_some() {
-            return Err(MinilithEndpointError::bad_frontend_code(
-                "a transaction is currently underway. Cancel it before proceeding.",
-                "",
-            ));
+        if let Some(txn_id) = reservation.transaction_id {
+            let resp = self
+                .transactions_post(format!("/v0/{txn_id}/cancel"))
+                .send()
+                .await
+                .wrap_err_internal("failed to cancel transaction")?;
+            if let Err(error) = resp.error_for_status_ref() {
+                // ALERT LEVEL 1
+                return Err(MinilithEndpointError::internal_error(
+                    "failed to cancel transaction due to status code",
+                    error,
+                ));
+            }
+            sqlx::query!(
+                "update ticket_reservations set transaction_id = null where user_id = $1",
+                user.get_id()
+            )
+            .execute(&mut reservation_txn.executor())
+            .await?;
         }
 
         // addons for a ticket_kind are immutable so we don't do it through a transaction
-        let chosen_options = validate_addons(&self.db, &mut req.addons, req.ticket_kind).await?;
-        ensure_user_may_purchase_ticket(&self.db, &user, req.ticket_kind).await?;
+        let chosen_options = validate_addons(&self.db, &mut body.addons, body.ticket_kind).await?;
+        ensure_user_may_purchase_ticket(&self.db, &user, body.ticket_kind).await?;
 
         // set addons in DB
         let mut txn = self.db.begin().await?;
@@ -679,7 +708,7 @@ impl Router {
 
         // we can't insert `unnest($1::integer[][])` for selected_options because postgres is weird
         // and represents 2D-arrays as a 1D array it'd get ugly
-        for addon in &req.addons {
+        for addon in &body.addons {
             sqlx::query!(
                 "insert into ticket_reservation_addons
                 (addon_id, ticket_id, selected_options, selected_text)
@@ -720,7 +749,7 @@ impl Router {
             "select id, name as \"name!: DIS\", idx
             from ticket_addons
             where id = any($1)",
-            &req.addons.iter().map(|addon| addon.id).collect::<Vec<_>>()
+            &body.addons.iter().map(|addon| addon.id).collect::<Vec<_>>()
         )
         .fetch_all(&self.db)
         .await?;
@@ -738,9 +767,9 @@ impl Router {
                 .map_or(0i32, |addon| addon.idx)
         };
         // these got shuffled by `validate_addons`.
-        req.addons
+        body.addons
             .sort_unstable_by_key(|addon| get_addon_idx(addon.id));
-        for addon in &req.addons {
+        for addon in &body.addons {
             let info = available_addons
                 .iter()
                 .find(|available| available.id == addon.id)
@@ -769,10 +798,12 @@ impl Router {
         // Send transaction API request
         // ========
         let payment_req = transactions::CreatePaymentRequest {
+            customer_id: user.get_id().to_owned(),
             timeout: reservation.timeout,
             wares: transaction_wares,
+            stripe_success_url: body.stripe_success_url,
         };
-        let url = match req.provider {
+        let url = match body.provider {
             PurchaseProvider::Free => "/v0/free",
             PurchaseProvider::Swish => "/v0/swish",
             PurchaseProvider::Stripe => "/v0/stripe",
@@ -795,14 +826,14 @@ impl Router {
         // ========
         // Handle transaction API response
         // ========
-        let (transaction_id, response) = match req.provider {
+        let (transaction_id, response) = match body.provider {
             PurchaseProvider::Free => {
-                let Ok(body) = resp.json::<transactions::CreatePaymentResponseFree>().await else {
-                    return Err(MinilithEndpointError::internal_error(
+                let body = resp
+                    .json::<transactions::CreatePaymentResponseFree>()
+                    .await
+                    .wrap_err_internal(
                         "failed to start transaction due to us being bad in parsing",
-                        "",
-                    ));
-                };
+                    )?;
                 // special case, because it's instantly bought.
                 // we have to update this to give it a transaction ID before we call
                 // `pay_for_reservation` which expects the reservation to have a `transaction_id`
@@ -829,29 +860,43 @@ impl Router {
                     BuyTicketResponse {
                         ticket_id: Some(id),
                         payment_request_token: None,
+                        stripe_url: None,
                     },
                 )
             }
             // these have to be separate match arms because the response type is different
             PurchaseProvider::Swish => {
-                let Ok(body) = resp
+                let body = resp
                     .json::<transactions::CreatePaymentResponseSwish>()
                     .await
-                else {
-                    return Err(MinilithEndpointError::internal_error(
+                    .wrap_err_internal(
                         "failed to start transaction due to us being bad in parsing",
-                        "",
-                    ));
-                };
+                    )?;
                 (
                     body.transaction_id,
                     BuyTicketResponse {
                         ticket_id: None,
                         payment_request_token: Some(body.payment_request_token),
+                        stripe_url: None,
                     },
                 )
             }
-            PurchaseProvider::Stripe => todo!(),
+            PurchaseProvider::Stripe => {
+                let body = resp
+                    .json::<transactions::CreatePaymentResponseStripe>()
+                    .await
+                    .wrap_err_internal(
+                        "failed to start transaction due to us being bad in parsing",
+                    )?;
+                (
+                    body.transaction_id,
+                    BuyTicketResponse {
+                        ticket_id: None,
+                        payment_request_token: None,
+                        stripe_url: Some(body.redirect_url),
+                    },
+                )
+            }
         };
         // if the server crashes right here, we lose track of the transaction associated with this
         // reservation, which MAY lead to missing money. We'll get an ALERT LEVEL 1 from that

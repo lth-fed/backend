@@ -5,12 +5,16 @@ edition = "2024"
 
 [dependencies]
 async-stripe = { version = "1.0.0-rc.6", default-features = false, features = ["rustls-ring", "rustls-tls-webpki-roots"] }
+async-stripe-checkout = { version = "1.0.0-rc.6", features = ["checkout_session"] }
 async-stripe-core = { version = "1.0.0-rc.6", default-features = false, features = ["customer"] }
-async-stripe-payment = { version = "1.0.0-rc.6", features = ["card", "payment_link"] }
+async-stripe-misc = { version = "1.0.0-rc.6", features = ["webhook_endpoint"] }
+# async-stripe-payment = { version = "1.0.0-rc.6", features = ["card", "payment_link"] }
+async-stripe-types = "1.0.0-rc.6"
 async-stripe-webhook = "1.0.0-rc.6"
 base64.workspace = true
 bin-common = { path = "../bin-common" }
 color-eyre.workspace = true
+dashmap = "6.2.1"
 dotenvy.workspace = true
 ed25519-dalek.workspace = true
 fed-auth-verifier = { path = "../fed-auth-verifier" }
