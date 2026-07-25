@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use minilith_errors::MinilithResult;
+use minilith_errors::{MinilithErrorResultExt as _, MinilithResult};
+use stripe_checkout::CheckoutSessionStatus;
 use tracing::error;
 
 use crate::callback::handle_callback_to_us;
@@ -12,21 +13,21 @@ use crate::{CallbackEvent, CallbackInfo, Provider, TransactionInfo, TransactionS
 /// DB errors.
 pub async fn initial_checks(ctx: &Arc<Context>) -> MinilithResult<()> {
     let unpaid_transactions = sqlx::query!(
-        "select id, provider as \"provider: Provider\" from transactions where payment_reference is null"
+        "select id, provider as \"provider: Provider\", client_id, stripe_id
+        from transactions
+        left outer join stripe_checkouts on (stripe_checkouts.transaction_id = id)
+        where payment_reference is null"
     )
     .fetch_all(&ctx.db)
-    .await
-     ?;
+    .await?;
 
     for txn in unpaid_transactions {
         let data = match txn.provider {
             Provider::Swish => {
-                let resp = match ctx
-                    .swish_client
-                    .get(swish::payment_request_url(txn.id))
-                    .send()
-                    .await
-                {
+                let Ok(client) = ctx.get_swish_client(&txn.client_id).await else {
+                    continue;
+                };
+                let resp = match client.get(swish::payment_request_url(txn.id)).send().await {
                     Ok(resp) => resp,
                     Err(err) => {
                         // ALERT LEVEL 2
@@ -37,6 +38,7 @@ pub async fn initial_checks(ctx: &Arc<Context>) -> MinilithResult<()> {
                         break;
                     }
                 };
+                drop(client);
                 if !resp.status().is_success() {
                     // ALERT LEVEL 1
                     error!(
@@ -58,7 +60,35 @@ pub async fn initial_checks(ctx: &Arc<Context>) -> MinilithResult<()> {
                     }
                 }
             }
-            Provider::Stripe => todo!(),
+            Provider::Stripe => {
+                let Ok(client) = ctx.get_stripe_client(&txn.client_id).await else {
+                    continue;
+                };
+
+                let Some(session_id) = txn.stripe_id else {
+                    // ALERT LEVEL 1
+                    error!("stripe_checkouts doesn't have stripe_id for a stripe transaction!");
+                    continue;
+                };
+                let checkout =
+                    stripe_checkout::checkout_session::RetrieveCheckoutSession::new(session_id)
+                        .send(&*client)
+                        .await
+                        .wrap_err_internal("stripe: retrieve checkout")?;
+                drop(client);
+                let paid = checkout.status == Some(CheckoutSessionStatus::Complete);
+
+                swish::Callback {
+                    id: txn.id,
+                    payment_reference: paid.then(|| checkout.id.as_str().to_owned()),
+                    status: if paid {
+                        swish::Status::Paid
+                    } else {
+                        swish::Status::Cancelled
+                    },
+                    error_message: None,
+                }
+            }
         };
         handle_callback_to_us(ctx, data, None).await?;
     }

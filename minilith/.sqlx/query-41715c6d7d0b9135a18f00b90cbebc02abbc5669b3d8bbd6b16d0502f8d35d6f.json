@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update ticket_reservations set transaction_id = null where user_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "41715c6d7d0b9135a18f00b90cbebc02abbc5669b3d8bbd6b16d0502f8d35d6f"
+}

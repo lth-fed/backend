@@ -8,15 +8,27 @@ use minilith_errors::{
 };
 use poem::http::HeaderMap;
 use poem_openapi::param::Path;
-use poem_openapi::payload::{Binary, Json, Response};
+use poem_openapi::payload::{Binary, Json, PlainText, Response};
 use poem_openapi::{Enum, Object, OpenApi};
 use serde::Serialize;
 use sqlx::postgres::types::PgMoney;
+use stripe_checkout::checkout_session::{
+    CreateCheckoutSessionLineItems, CreateCheckoutSessionLineItemsPriceData,
+    CreateCheckoutSessionLineItemsPriceDataTaxBehavior, CreateCheckoutSessionPaymentIntentData,
+    CreateCheckoutSessionPaymentIntentDataSetupFutureUsage,
+    CreateCheckoutSessionPaymentMethodTypes, ProductData,
+};
+use stripe_checkout::{CheckoutSessionMode, CheckoutSessionStatus};
+use stripe_webhook::EventObject;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::context::CancelTransactionData;
 use crate::{ApiAuth, CallbackEvent, Context, Provider, callback, receipt, swish};
+
+pub const DOMAIN: &str = "https://transactions.teknologappen.se";
+pub const STRIPE_WEBHOOK_PATH: &str = "/stripe-callback";
+pub const SWISH_WEBHOOK_PATH: &str = "/swish-callback";
 
 #[derive(Default, Debug, Enum, Clone, Copy, Serialize)]
 #[oai(rename_all = "UPPERCASE")]
@@ -47,12 +59,18 @@ pub struct Ware {
     pub currency: Currency,
 }
 #[derive(Debug, Object, Clone)]
+// ALSO UPDATE `minilith/transactions.rs`
 struct CreatePaymentRequest {
+    /// Used for tracking cards in e.g. Stripe.
+    customer_id: String,
     /// When this payment request will be cancelled.
     /// Will try to cancel within 30s.
     timeout: OffsetDateTime,
     /// The list of items to be bought.
     wares: Vec<Ware>,
+    /// Redirected back when user completes transaction. Required for stripe.
+    stripe_success_url: Option<String>,
+    // ALSO UPDATE `minilith/transactions.rs`
 }
 impl CreatePaymentRequest {
     // remove when the SEK restriction is lifted
@@ -61,14 +79,26 @@ impl CreatePaymentRequest {
     }
 }
 #[derive(Debug, Object, Clone)]
+// ALSO UPDATE `minilith/transactions.rs`
 struct CreatePaymentResponseFree {
     transaction_id: Uuid,
+    // ALSO UPDATE `minilith/transactions.rs`
 }
 #[derive(Debug, Object, Clone)]
+// ALSO UPDATE `minilith/transactions.rs`
 struct CreatePaymentResponseSwish {
     /// See <https://developer.swish.nu/api/payment-request/v2#create-payment-request>.
     payment_request_token: String,
     transaction_id: Uuid,
+    // ALSO UPDATE `minilith/transactions.rs`
+}
+#[derive(Debug, Object, Clone)]
+// ALSO UPDATE `minilith/transactions.rs`
+struct CreatePaymentResponseStripe {
+    /// See <https://docs.stripe.com/api/checkout/sessions/object#checkout_session_object-url>.
+    redirect_url: String,
+    transaction_id: Uuid,
+    // ALSO UPDATE `minilith/transactions.rs`
 }
 
 #[derive(Debug, Object, Clone)]
@@ -132,6 +162,7 @@ impl Route {
         };
         Ok(Json(TransactionInfo { state }))
     }
+    /// From the instant this returns the transaction is guaranteed to be cancelled.
     #[oai(path = "/:id/cancel", method = "post")]
     async fn cancel(&self, auth: ApiAuth, Path(id): Path<Uuid>) -> MinilithResult<()> {
         let row = sqlx::query!(
@@ -179,11 +210,12 @@ impl Route {
         let mut txn = self.db.begin().await?;
         let transaction_id = Uuid::new_v4();
         sqlx::query!(
-            "insert into transactions (id, client_id, callback_url_v1,
+            "insert into transactions (id, customer_id, client_id, callback_url_v1,
                 total_transaction_fee, callback_identifier, payment_reference)
-            values ($1, $2, $3, '0.00'::money, $4, 'free')
+            values ($1, $2, $3, $4, '0.00'::money, $5, 'free')
             ",
             transaction_id,
+            body.customer_id,
             auth.client_id,
             auth.callback_url_v1,
             Uuid::nil()
@@ -231,13 +263,6 @@ impl Route {
             ));
         }
 
-        let client = sqlx::query!(
-            "select * from client_ids where client_id = $1",
-            auth.client_id
-        )
-        .fetch_one(&self.db)
-        .await?;
-
         let uuid = Uuid::new_v4();
         let cb_ident = Uuid::new_v4();
         let mut amount = amount.to_string();
@@ -250,21 +275,23 @@ impl Route {
         message.pop();
         message.retain(|char| "!?(),.-:; åäöÅÄÖ".contains(char) || char.is_ascii_alphanumeric());
         message.truncate(50);
-        let swish_body = swish::CreatePaymentRequest {
-            payee_alias: client.swish_number,
-            amount,
-            currency: "SEK".to_owned(),
-            callback_url: "https://transactions.teknologappen.se/v0/swish-callback".to_owned(),
-            message,
-            callback_identifier: swish::uuid_to_string(cb_ident),
+        let resp = {
+            let client = self.get_swish_client(&auth.client_id).await?;
+            let swish_body = swish::CreatePaymentRequest {
+                payee_alias: client.number.clone(),
+                amount,
+                currency: "SEK".to_owned(),
+                callback_url: format!("{DOMAIN}/v0{SWISH_WEBHOOK_PATH}"),
+                message,
+                callback_identifier: swish::uuid_to_string(cb_ident),
+            };
+            client
+                .put(swish::payment_request_url(uuid))
+                .json(&swish_body)
+                .send()
+                .await
+                .wrap_err_internal("swish api error")?
         };
-        let resp = self
-            .swish_client
-            .put(swish::payment_request_url(uuid))
-            .json(&swish_body)
-            .send()
-            .await
-            .wrap_err_internal("swish api error")?;
         if !resp.status().is_success() {
             let body = resp.text().await;
             return Err(MinilithEndpointError::internal_error(
@@ -280,10 +307,11 @@ impl Route {
 
         let mut txn = self.db.begin().await?;
         sqlx::query!(
-            "insert into transactions (id, client_id, callback_url_v1,
+            "insert into transactions (id, customer_id, client_id, callback_url_v1,
                 total_transaction_fee, callback_identifier)
-            values ($1, $2, $3, '1.50'::money, $4)",
+            values ($1, $2, $3, $4, '1.50'::money, $5)",
             uuid,
+            body.customer_id,
             auth.client_id,
             auth.callback_url_v1,
             cb_ident
@@ -300,7 +328,7 @@ impl Route {
         }))
     }
     /// This endpoint is called by Swish's backend.
-    #[oai(path = "/swish-callback", method = "post")]
+    #[oai(path = "/swish-callback", method = "post", hidden = true)]
     async fn swish_callback(
         &self,
         body: Json<swish::Callback>,
@@ -315,6 +343,230 @@ impl Route {
             })?;
 
         callback::handle_callback_to_us(self, body.0, Some(callback_identifier)).await?;
+
+        Ok(())
+    }
+    async fn get_stripe_customer(
+        &self,
+        stripe_client: &impl Deref<Target = stripe::Client>,
+        customer_id: &str,
+    ) -> MinilithResult<String> {
+        if let Some(id) = sqlx::query_scalar!(
+            "select stripe_id from stripe_customers where customer_id = $1",
+            customer_id
+        )
+        .fetch_optional(&self.db)
+        .await?
+        {
+            return Ok(id);
+        }
+
+        let customer = stripe_core::customer::CreateCustomer::new()
+            .send(&**stripe_client)
+            .await
+            .wrap_err_internal("stripe: create user")?;
+        let stripe_id = customer.id.as_str();
+        sqlx::query!(
+            "insert into stripe_customers
+                (customer_id, stripe_id)
+                values ($1, $2)",
+            customer_id,
+            stripe_id
+        )
+        .execute(&self.db)
+        .await?;
+
+        Ok(stripe_id.to_owned())
+    }
+    /// You WILL get info on the callback (unless your endpoint is unreachable) about either it
+    /// getting cancelled or paid. We will do our best within our control.
+    ///
+    /// ONLY AVAILABLE FOR `teknologappen` currently.
+    /// In the future we could add support through logging in to different `client_id`'s stripe
+    /// accounts.
+    #[oai(path = "/stripe", method = "post")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "It's linear and well-documented. \
+        It's easier to read in its whole than if it was in multiple functions."
+    )]
+    async fn stripe_payment(
+        &self,
+        auth: ApiAuth,
+        body: Json<CreatePaymentRequest>,
+    ) -> MinilithResult<Json<CreatePaymentResponseStripe>> {
+        let stripe_success_url = body
+            .stripe_success_url
+            .as_ref()
+            .wrap_err_bad_frontend("stripe_success_url missing")?;
+
+        let amount = body.total_amount();
+        if amount < 100 {
+            return Err(MinilithEndpointError::bad_user_input(
+                "low amount",
+                "",
+                "amount is less than 1SEK!",
+                "amount",
+            ));
+        }
+
+        let client = self.get_stripe_client(&auth.client_id).await?;
+        let customer = self.get_stripe_customer(&client, &body.customer_id).await?;
+
+        let session = stripe_checkout::checkout_session::CreateCheckoutSession::new()
+            .line_items(
+                body.wares
+                    .iter()
+                    .map(|ware| CreateCheckoutSessionLineItems {
+                        quantity: Some(1),
+                        price_data: Some(CreateCheckoutSessionLineItemsPriceData {
+                            currency: match ware.currency {
+                                Currency::Sek => stripe_types::Currency::SEK,
+                            },
+                            product: None,
+                            product_data: Some(ProductData {
+                                name: ware.name.clone(),
+                                description: None,
+                                images: None,
+                                metadata: None,
+                                tax_code: None,
+                                unit_label: None,
+                            }),
+                            recurring: None,
+                            tax_behavior: Some(
+                                CreateCheckoutSessionLineItemsPriceDataTaxBehavior::Inclusive,
+                            ),
+                            unit_amount: Some(ware.amount),
+                            unit_amount_decimal: None,
+                        }),
+                        adjustable_quantity: None,
+                        dynamic_tax_rates: None,
+                        metadata: None,
+                        tax_rates: None,
+                        price: None,
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .customer(customer)
+            .mode(CheckoutSessionMode::Payment)
+            .success_url(stripe_success_url)
+            .payment_method_types(vec![CreateCheckoutSessionPaymentMethodTypes::Card])
+            .payment_intent_data(CreateCheckoutSessionPaymentIntentData {
+                application_fee_amount: None,
+                capture_method: None,
+                description: None,
+                metadata: None,
+                on_behalf_of: None,
+                receipt_email: None,
+                // https://docs.stripe.com/payments/payment-intents#future-usage
+                setup_future_usage: Some(
+                    CreateCheckoutSessionPaymentIntentDataSetupFutureUsage::OnSession,
+                ),
+                shipping: None,
+                statement_descriptor: None,
+                statement_descriptor_suffix: None,
+                transfer_data: None,
+                transfer_group: None,
+            })
+            .send(&*client)
+            .await
+            .wrap_err_internal("stripe: create checkout session")?;
+        drop(client);
+
+        let url = session.url.clone().wrap_err_internal("stripe: no url")?;
+
+        let uuid = Uuid::new_v4();
+
+        let mut txn = self.db.begin().await?;
+
+        sqlx::query!(
+            "insert into stripe_checkouts (transaction_id, stripe_id)
+            values ($1, $2)",
+            uuid,
+            session.id.as_str()
+        )
+        .execute(&mut txn.executor())
+        .await?;
+
+        sqlx::query!(
+            "insert into transactions (id, customer_id, client_id, callback_url_v1,
+                total_transaction_fee, callback_identifier)
+            values ($1, $2, $3, $4, '1.50'::money, $5)",
+            uuid,
+            body.customer_id,
+            auth.client_id,
+            auth.callback_url_v1,
+            uuid,
+        )
+        .execute(&mut txn.executor())
+        .await?;
+
+        insert_wares(&mut txn.executor(), uuid, &body.wares).await?;
+        txn.commit().await?;
+
+        Ok(Json(CreatePaymentResponseStripe {
+            transaction_id: uuid,
+            redirect_url: url,
+        }))
+    }
+    /// This endpoint is called by Stripe's backend.
+    #[oai(path = "/stripe-callback", method = "post", hidden = true)]
+    async fn stripe_callback(
+        &self,
+        body: PlainText<String>,
+        headers: &HeaderMap,
+    ) -> MinilithResult<()> {
+        let signature = headers
+            .get("stripe-signature")
+            .and_then(|header| header.to_str().ok())
+            .wrap_err_bad_frontend("stripe: stripe-signature header not present or valid")?;
+
+        let event = stripe_webhook::Webhook::insecure(&body)
+            .wrap_err_bad_frontend("stripe: invalid event")?;
+        tracing::warn!(
+            "I know it's insecure, we verify the signature later! \
+            We need the data to determine the client_id."
+        );
+
+        match event.data.object {
+            EventObject::CheckoutSessionCompleted(event)
+            | EventObject::CheckoutSessionExpired(event) => {
+                let row = sqlx::query!(
+                    "select transaction_id, stripe_secret
+                    from stripe_checkouts 
+                    inner join transactions on (transactions.id = transaction_id)
+                    inner join client_ids on (client_ids.client_id = transactions.client_id)
+                    where stripe_id = $1",
+                    event.id.as_str()
+                )
+                .fetch_one(&self.db)
+                .await?;
+
+                let stripe_secret = row
+                    .stripe_secret
+                    .wrap_err_bad_frontend("your client_id isn't set up for stripe")?;
+
+                stripe_webhook::Webhook::construct_event(&body, signature, &stripe_secret)
+                    .wrap_err_bad_frontend("stripe: invalid event")?;
+
+                let paid = event.status == Some(CheckoutSessionStatus::Complete);
+
+                let data = swish::Callback {
+                    id: row.transaction_id,
+                    payment_reference: paid.then(|| event.id.as_str().to_owned()),
+                    status: if paid {
+                        swish::Status::Paid
+                    } else {
+                        swish::Status::Cancelled
+                    },
+                    error_message: None,
+                };
+                // callback_identifier not needed since we validate the stripe signature
+                callback::handle_callback_to_us(self, data, None).await?;
+            }
+            // do nothing!
+            _ => {}
+        }
 
         Ok(())
     }
@@ -360,7 +612,7 @@ impl Route {
         body: Json<ReceiptRequest>,
     ) -> MinilithResult<Response<Binary<Vec<u8>>>> {
         let transaction = sqlx::query!(
-            "select id, payment_reference, refund_reference,
+            "select id, customer_id, payment_reference, refund_reference,
             client_id, created, provider as \"provider!: Provider\"
             from transactions where id = $1",
             id
@@ -418,6 +670,7 @@ impl Route {
             refund_reference: transaction.refund_reference,
             wares,
             customer_name: body.customer_name.clone(),
+            customer_id: transaction.customer_id,
             merchant_id: transaction.client_id,
             merchant_name: client_id.name,
             merchant_org_id: client_id.organization_number,

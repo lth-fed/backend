@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into stripe_checkouts (transaction_id, stripe_id)\n            values ($1, $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e099aee39c0c5063183edcc3b5b6f413a8e12ab04019a0e95420672cb2192d79"
+}

@@ -44,6 +44,7 @@ pub struct Data {
     pub wares: Vec<Ware>,
 
     pub customer_name: String,
+    pub customer_id: String,
 
     pub merchant_id: String,
     pub merchant_name: String,

@@ -25,11 +25,15 @@ pub struct Ware {
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct CreatePaymentRequest {
+    /// Used for tracking cards in e.g. Stripe.
+    pub customer_id: String,
     /// When this payment request will be cancelled.
     /// Will try to cancel within 30s.
     pub timeout: OffsetDateTime,
     /// The list of items to be bought.
     pub wares: Vec<Ware>,
+    /// Redirected back when user completes transaction.
+    pub stripe_success_url: Option<String>,
 }
 #[derive(Debug, Clone, Deserialize)]
 pub struct CreatePaymentResponseFree {
@@ -39,5 +43,11 @@ pub struct CreatePaymentResponseFree {
 pub struct CreatePaymentResponseSwish {
     /// See <https://developer.swish.nu/api/payment-request/v2#create-payment-request>.
     pub payment_request_token: String,
+    pub transaction_id: Uuid,
+}
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreatePaymentResponseStripe {
+    /// See <https://docs.stripe.com/api/checkout/sessions/object#checkout_session_object-url>.
+    pub redirect_url: String,
     pub transaction_id: Uuid,
 }

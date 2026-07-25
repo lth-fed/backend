@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into stripe_customers\n                (customer_id, stripe_id)\n                values ($1, $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "27d4cca6b7dd7d340c9d244c6f2a1987217c3a53d87d7b3f7831dcca2670d66b"
+}

@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select stripe_id from stripe_checkouts where transaction_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "stripe_id",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "af34e8c0f40a88a10600a49436d2634df0dc2b6d7d430935f30aec1876ae2aea"
+}

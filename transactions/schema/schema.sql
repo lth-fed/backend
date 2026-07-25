@@ -1,6 +1,11 @@
 create table client_ids (
     client_id text primary key,
+
+    swish_cert text not null,
+    swish_key text not null,
     swish_number text not null,
+
+    stripe_secret text,
 
     -- for receipts
     name text not null,
@@ -19,9 +24,14 @@ create type provider as enum (
     'stripe'
 );
 -- for swish all these uuids are to be formatted as uppercase "simple"
+-- this datamodel is Swish-first. Stripe will not be used nearly as often and also Swish has a way
+-- nicer API. For example, swish uses UUIDs for IDs, while stripe uses text. I want the downstream
+-- clients of `transactions` to get UUIDs and not some random text.
 create table transactions (
     -- instructionUUID in swish
     id uuid primary key,
+    -- used for stripe saving card details
+    customer_id text not null,
     client_id text not null references client_ids(client_id),
     callback_url_v1 text not null,
     created timestamptz not null default now(),
@@ -66,5 +76,11 @@ create index transaction_wares_transaction_id on transaction_wares using hash (t
 
 create table stripe_customers (
     customer_id text primary key,
-    id text not null
+    stripe_id text not null
 );
+create table stripe_checkouts (
+    -- if transaction is removed, remove this too
+    transaction_id uuid primary key references transactions(id) on delete cascade,
+    stripe_id text not null
+);
+create index stripe_checkouts_stripe_id on stripe_checkouts using hash (stripe_id);
