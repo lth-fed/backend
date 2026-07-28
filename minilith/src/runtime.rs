@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use fed_auth_verifier::callbacks::{TransactionCallbackInfo, TransactionInfo};
-use minilith_errors::MinilithResult;
+use minilith_errors::{AlertLevel, MinilithResult, alert};
 use tracing::error;
 
 use crate::{ContextWrapper, ticket};
@@ -28,7 +28,10 @@ pub async fn initial_checks(ctx: &ContextWrapper) -> MinilithResult<()> {
         {
             Ok(resp) => resp,
             Err(err) => {
-                // ALERT LEVEL 2
+                alert(
+                    AlertLevel::L2,
+                    "connection issues for transaction API when starting up to check txns",
+                );
                 error!(
                     ?err,
                     "failed to fetch transaction status due to connection issues"
@@ -37,9 +40,12 @@ pub async fn initial_checks(ctx: &ContextWrapper) -> MinilithResult<()> {
             }
         };
         if !resp.status().is_success() {
-            // ALERT LEVEL 1
+            alert(AlertLevel::L1, "transaction status != 200, see logs");
+            let status = resp.status();
+            let body = resp.text().await;
             error!(
-                status_code=%resp.status(),
+                ?body,
+                status_code=%status,
                 "transaction status fetch failed!"
             );
             continue;
@@ -47,7 +53,10 @@ pub async fn initial_checks(ctx: &ContextWrapper) -> MinilithResult<()> {
         let data: TransactionInfo = match resp.json().await {
             Ok(data) => data,
             Err(err) => {
-                // ALERT LEVEL 2
+                alert(
+                    AlertLevel::L2,
+                    "transaction initial fetch failed to parse JSON",
+                );
                 error!(
                     ?err,
                     "failed to get body from transaction status \

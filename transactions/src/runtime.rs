@@ -1,7 +1,7 @@
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
-use minilith_errors::{MinilithErrorResultExt as _, MinilithResult};
+use minilith_errors::{AlertLevel, MinilithErrorResultExt as _, MinilithResult, alert};
 use stripe_checkout::CheckoutSessionStatus;
 use tracing::error;
 use uuid::Uuid;
@@ -32,7 +32,10 @@ async fn fetch_transaction_info(ctx: &Context, txn: TxnData) -> MinilithResult<C
             {
                 Ok(resp) => resp,
                 Err(err) => {
-                    // ALERT LEVEL 2
+                    alert(
+                        AlertLevel::L2,
+                        "swish connection issues when GETting payment status",
+                    );
                     error!(
                         ?err,
                         "failed to fetch swish payment request status due to connection issues"
@@ -42,7 +45,7 @@ async fn fetch_transaction_info(ctx: &Context, txn: TxnData) -> MinilithResult<C
             };
             drop(client);
             if !resp.status().is_success() {
-                // ALERT LEVEL 1
+                alert(AlertLevel::L1, "swish payment request failed");
                 error!(
                     status_code=%resp.status(),
                     "swish payment request status fetch failed!"
@@ -52,11 +55,11 @@ async fn fetch_transaction_info(ctx: &Context, txn: TxnData) -> MinilithResult<C
             match resp.json().await {
                 Ok(data) => data,
                 Err(err) => {
-                    // ALERT LEVEL 2
+                    alert(AlertLevel::L2, "swish payment request body parsing failed");
                     error!(
                         ?err,
                         "failed to get body from swish payment request status \
-                            due to parsing json / reading body issues"
+                        due to parsing json / reading body issues"
                     );
                     return Ok(ControlFlow::Continue(()));
                 }
@@ -68,7 +71,10 @@ async fn fetch_transaction_info(ctx: &Context, txn: TxnData) -> MinilithResult<C
             };
 
             let Some(session_id) = txn.stripe_id else {
-                // ALERT LEVEL 1
+                alert(
+                    AlertLevel::L1,
+                    "stripe_checkouts doesn't have a stripe_id for this transaction",
+                );
                 error!("stripe_checkouts doesn't have stripe_id for a stripe transaction!");
                 return Ok(ControlFlow::Continue(()));
             };
@@ -133,7 +139,10 @@ pub fn spawn(ctx: &Arc<Context>) {
         loop {
             if let Err(err) = check_timeouts(&ctx).await {
                 error!(?err, "Error from runtime->check_timeouts");
-                // ALERT LEVEL 2
+                alert(
+                    AlertLevel::L2,
+                    "error from transactions->runtime->check_timeouts",
+                );
             }
 
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;

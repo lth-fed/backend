@@ -41,6 +41,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cp fed-auth/.env.example fed-auth/.env
       - run: cp minilith/.env.example minilith/.env
+      - run: cp transactions/.env.example transactions/.env
       - name: Wait for Postgres
         run: |
           for i in {1..30}; do

@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 color-eyre.workspace = true
+minilith-errors = { version = "0.1.0", path = "../minilith-errors", features = ["sqlx"] }
 opentelemetry.workspace = true
 opentelemetry-appender-tracing.workspace = true
 opentelemetry-otlp.workspace = true
