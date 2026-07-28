@@ -36,5 +36,8 @@ typst-layout = "0.15.1"
 typst-pdf = "0.15.1"
 uuid.workspace = true
 
+[dev-dependencies]
+poem = { workspace = true, features = ["test"] }
+
 [lints]
 workspace = true

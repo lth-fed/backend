@@ -1,6 +1,7 @@
 create type provider as enum (
     'swish',
-    'stripe'
+    'stripe',
+    'free'
 );
 -- for swish all these uuids are to be formatted as uppercase "simple"
 -- this datamodel is Swish-first. Stripe will not be used nearly as often and also Swish has a way
@@ -10,7 +11,7 @@ create table transactions (
     -- instructionUUID in swish
     id uuid primary key,
     -- used for stripe saving card details
-    customer_id text not null,
+    customer_id text,
     client_id text not null references client_ids(client_id),
     callback_url_v1 text not null,
     created timestamptz not null default now(),
@@ -39,7 +40,7 @@ create table transactions (
 create index transactions_timeout on transactions using btree (timeout);
 create table transaction_wares (
     idx integer not null,
-    transaction_id uuid not null references transactions(id),
+    transaction_id uuid not null references transactions(id) on delete cascade,
 
     name text not null,
     -- incl. tax

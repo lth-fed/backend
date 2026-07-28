@@ -88,32 +88,9 @@ pub async fn handle_callback_to_us(
             "",
         ));
     }
-    match data.payment_reference {
-        None => {
-            send_callbacks(
-                &ctx.client,
-                &ctx.signing_key,
-                [CallbackEvent {
-                    callback_url_v1: transaction.callback_url_v1,
-                    client_id: transaction.client_id,
-                    inner: CallbackInfo {
-                        transaction_id: transaction.id,
-                        inner: TransactionInfo {
-                            state: TransactionState::Cancelled,
-                        },
-                    },
-                }]
-                .into_iter(),
-            )
-            .await;
-            // it's important that we write after! If we are stopped or crash, we want to send
-            // the callback, then when we start up again realize this is should be deleted and
-            // send another callback.
-            sqlx::query!("delete from transactions where id = $1", data.id)
-                .execute(&ctx.db)
-                .await?;
-        }
-        Some(payment_reference) => {
+    match data.status {
+        None => {}
+        Some(swish::Status::Paid) if let Some(payment_reference) = data.payment_reference => {
             send_callbacks(
                 &ctx.client,
                 &ctx.signing_key,
@@ -137,6 +114,36 @@ pub async fn handle_callback_to_us(
             )
             .execute(&ctx.db)
             .await?;
+        }
+        Some(swish::Status::Paid) => {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "paymentReference has to be non-null when PAID.",
+                "",
+            ));
+        }
+        _ => {
+            send_callbacks(
+                &ctx.client,
+                &ctx.signing_key,
+                [CallbackEvent {
+                    callback_url_v1: transaction.callback_url_v1,
+                    client_id: transaction.client_id,
+                    inner: CallbackInfo {
+                        transaction_id: transaction.id,
+                        inner: TransactionInfo {
+                            state: TransactionState::Cancelled,
+                        },
+                    },
+                }]
+                .into_iter(),
+            )
+            .await;
+            // it's important that we write after! If we are stopped or crash, we want to send
+            // the callback, then when we start up again realize this is should be deleted and
+            // send another callback.
+            sqlx::query!("delete from transactions where id = $1", data.id)
+                .execute(&ctx.db)
+                .await?;
         }
     }
     Ok(())

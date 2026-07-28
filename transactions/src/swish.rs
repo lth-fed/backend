@@ -8,17 +8,27 @@ pub fn uuid_to_string(uuid: Uuid) -> String {
     uuid.simple().encode_upper(&mut buffer).to_owned()
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum ApiVersion {
+    V1,
+    V2,
+}
+
 #[must_use]
-pub fn payment_request_url(instruction_uuid: Uuid) -> String {
+pub fn payment_request_url(version: ApiVersion, instruction_uuid: Uuid) -> String {
     let mut buffer = Uuid::encode_buffer();
     let uuid = instruction_uuid.simple().encode_upper(&mut buffer);
+    let v_string = match version {
+        ApiVersion::V1 => "v1",
+        ApiVersion::V2 => "v2",
+    };
     #[cfg(debug_assertions)]
     {
-        format!("https://mss.cpc.getswish.net/swish-cpcapi/api/v2/paymentrequests/{uuid}")
+        format!("https://mss.cpc.getswish.net/swish-cpcapi/api/{v_string}/paymentrequests/{uuid}")
     }
     #[cfg(not(debug_assertions))]
     {
-        format!("https://cpc.getswish.net/swish-cpcapi/api/v2/paymentrequests/{uuid}")
+        format!("https://cpc.getswish.net/swish-cpcapi/api/{v_string}/paymentrequests/{uuid}")
     }
 }
 
@@ -36,7 +46,7 @@ pub struct CreatePaymentRequest {
     pub callback_identifier: String,
 }
 
-#[derive(Enum, Clone, Copy, Debug, Deserialize)]
+#[derive(Enum, Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[oai(rename_all = "SCREAMING_SNAKE_CASE")]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Status {
@@ -61,7 +71,7 @@ pub struct Callback {
     // pub amount: f64,
     // pub currency: String,
     // pub message: String,
-    pub status: Status,
+    pub status: Option<Status>,
     // pub date_created: String,
     // pub date_paid: String,
     // pub error_code: Option<serde_json::Value>,

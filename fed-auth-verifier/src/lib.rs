@@ -5,9 +5,7 @@ use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use ed25519_dalek::VerifyingKey;
 use jsonwebtoken::jwk::{Jwk, JwkSet};
 use jsonwebtoken::{Algorithm, DecodingKey, TokenData, Validation, decode_header};
-use minilith_errors::{
-    MinilithEndpointError, MinilithErrorOptionExt as _, MinilithErrorResultExt as _,
-};
+use minilith_errors::{MinilithErrorOptionExt as _, MinilithErrorResultExt as _, MinilithResult};
 use opentelemetry::trace::TraceContextExt as _;
 use poem_openapi::SecurityScheme;
 use poem_openapi::auth::Bearer;
@@ -15,12 +13,6 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
 pub mod callbacks;
-
-const AUTH_KEY_PATH: &str = "/oidc/v1/certs";
-#[cfg(debug_assertions)]
-const AUTH_KEY_BASE: &str = "http://localhost:8001";
-#[cfg(not(debug_assertions))]
-const AUTH_KEY_BASE: &str = "https://auth.teknologappen.se";
 
 /// [`jsonwebtoken`] doesn't support `EdDSA` :(
 /// With `kid="main"`.
@@ -60,14 +52,28 @@ pub trait AuthContextProvider: Clone {
 pub struct AuthUrl;
 impl AuthContextProvider for AuthUrl {
     fn url() -> String {
-        "https://auth.teknologappen.se/api/v0/verifying-key".to_owned()
+        #[cfg(debug_assertions)]
+        {
+            "http://localhost:8001/oidc/v1/certs".to_owned()
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            "https://auth.teknologappen.se/oidc/v1/certs".to_owned()
+        }
     }
 }
 #[derive(Clone, Copy, Debug)]
 pub struct TransactionsUrl;
 impl AuthContextProvider for TransactionsUrl {
     fn url() -> String {
-        "https://transactions.teknologappen.se/v0/jwks".to_owned()
+        #[cfg(debug_assertions)]
+        {
+            "http://locahost:8002/v0/jwks".to_owned()
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            "https://transactions.teknologappen.se/v0/jwks".to_owned()
+        }
     }
 }
 
@@ -80,7 +86,7 @@ pub struct JwkContext<Url: Clone> {
     testing: bool,
     phantom: PhantomData<Url>,
 }
-impl<Url: AuthContextProvider> JwkContext<Url> {
+impl<Url: AuthContextProvider + 'static> JwkContext<Url> {
     /// This can not be used by `fed-auth`, since that's the service which this depends on!
     ///
     /// If audience is empty, it's not checked. Audience is your `client_id`.
@@ -89,7 +95,7 @@ impl<Url: AuthContextProvider> JwkContext<Url> {
     ///
     /// Returns an error if it was not possible to get the verifying key.
     pub async fn new(audience: impl Into<String>) -> color_eyre::Result<Self> {
-        let resp = match reqwest::get(format!("{AUTH_KEY_BASE}{AUTH_KEY_PATH}")).await {
+        let resp = match reqwest::get(Url::url()).await {
             Ok(resp) => resp,
             #[allow(unused_variables, reason = "cfg")]
             Err(err) => {
@@ -97,11 +103,17 @@ impl<Url: AuthContextProvider> JwkContext<Url> {
                 {
                     use tracing::warn;
 
-                    warn!(
-                        "Defaulting authentication, user will always be \
-                        `lund-university:aa0000bb-s` \
-                        (you still have to provide authorization header)"
-                    );
+                    if std::any::TypeId::of::<Url>() == std::any::TypeId::of::<AuthUrl>() {
+                        warn!(
+                            "Defaulting authentication, user will always be \
+                            `lund-university:aa0000bb-s` or the value after `Bearer` \
+                            in the authorization header \
+                            (you still have to provide authorization header)"
+                        );
+                    }
+                    if std::any::TypeId::of::<Url>() == std::any::TypeId::of::<TransactionsUrl>() {
+                        warn!("All transaction callbacks will be allowed.");
+                    }
                     return Ok(Self::from_jwks(audience, JwkSet { keys: vec![] }));
                 }
                 #[cfg(not(debug_assertions))]
@@ -144,7 +156,11 @@ struct Claims {
 fn decode_jwt<T: DeserializeOwned>(
     token: &str,
     context: &JwkContext<impl AuthContextProvider>,
-) -> Result<TokenData<T>, MinilithEndpointError> {
+) -> MinilithResult<TokenData<T>> {
+    if context.testing {
+        return jsonwebtoken::dangerous::insecure_decode(token).wrap_err_bad_frontend("bad data");
+    }
+
     let header = decode_header(token).wrap_err_unauthorized(
         "You don't have a valid login-session. \
             Try logging out and in again or clearing cookies.",
@@ -219,11 +235,16 @@ impl User {
         let cx = opentelemetry::Context::current();
         let span = cx.span();
         if context.testing {
+            let id = if token.token.contains(':') {
+                &token.token
+            } else {
+                "lund-university:aa0000bb-s"
+            };
             span.set_attribute(opentelemetry::KeyValue::new(
                 opentelemetry_semantic_conventions::attribute::USER_ID,
-                "lund-university:aa0000bb-s",
+                id.to_owned(),
             ));
-            return Ok("lund-university:aa0000bb-s".to_owned());
+            return Ok(id.to_owned());
         }
 
         let data = decode_jwt::<Claims>(&token.token, context)?;

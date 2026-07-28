@@ -7,6 +7,7 @@ use fed_auth_verifier::callbacks::TransactionState;
 use minilith_errors::{MinilithErrorOptionExt as _, MinilithErrorResultExt as _};
 use poem_openapi::Enum;
 use poem_openapi::param::Path;
+use poem_openapi::payload::{Binary, Response};
 use poem_openapi::{Object, OpenApi, payload::Json};
 use rand::seq::SliceRandom as _;
 use rand::{random, rng};
@@ -87,7 +88,7 @@ pub struct QueueResponse {
     timeout: Option<OffsetDateTime>,
     /// When transactions at latest should be conducted.
     /// Will be not null when placement is 0.
-    latest_transaction: Option<OffsetDateTime>,
+    start_transaction_before: Option<OffsetDateTime>,
 }
 #[derive(Debug, Clone, Copy, Object)]
 pub struct PurchaseStatusRequest {
@@ -286,7 +287,65 @@ impl Router {
         Ok(Json(tickets))
     }
 
-    #[oai(path = "/:id", method = "get")]
+    #[oai(path = "/:id/receipt", method = "get")]
+    async fn receipt(
+        &self,
+        auth: User,
+        Path(id): Path<Uuid>,
+    ) -> MinilithResult<Response<Binary<poem::Body>>> {
+        let owns = sqlx::query_scalar!(
+            "select exists (
+                select 1
+                from purchased_tickets
+                where id = $1
+                and purchaser_id = $2
+            ) as \"exists!\"",
+            id,
+            auth.get_id(),
+        )
+        .fetch_one(&self.db)
+        .await?;
+
+        if !owns {
+            return Err(MinilithEndpointError::not_found());
+        }
+
+        let user = sqlx::query!(
+            "select name as \"name: DIS\", language, nonce
+            from users where id = $1",
+            auth.get_id()
+        )
+        .fetch_one(&self.db)
+        .await?;
+
+        let lang = self
+            .decrypt_string(user.language, &user.nonce)
+            .wrap_err_encryption("user.language")?;
+        let receipt_lang = match lang.get(..2) {
+            Some("sv") => transactions::Language::Swedish,
+            _ => transactions::Language::English,
+        };
+        let name = user.name.resolve_intl(&lang, "<name>");
+
+        let data = transactions::ReceiptRequest {
+            language: receipt_lang,
+            customer_name: name.to_owned(),
+        };
+        let resp = self
+            .transactions_post("/v0/receipt")
+            .json(&data)
+            .send()
+            .await
+            .wrap_err_internal("receipt failed to fetch")?
+            .error_for_status()
+            .wrap_err_internal("receipt status code error")?
+            .bytes()
+            .await
+            .wrap_err_internal("receipt read body")?;
+        Ok(Response::new(Binary(resp.into())).header("content-type", "application/octet-stream"))
+    }
+
+    #[oai(path = "/ticket-kind/:id", method = "get")]
     async fn get_ticket_kind(
         &self,
         user: User,
@@ -387,6 +446,20 @@ impl Router {
         user: User,
         req: Json<QueueRequest>,
     ) -> MinilithResult<Json<PurchaseStatus>> {
+        let has_reservation = sqlx::query_scalar!(
+            "select exists (
+                select 1 from ticket_reservations where user_id = $1
+            ) as \"exists!\"",
+            user.get_id()
+        )
+        .fetch_one(&self.db)
+        .await?;
+        if has_reservation {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "user already has reservation, cancel it before queuing again",
+                "",
+            ));
+        }
         let has_been_released = sqlx::query_scalar!(
             "select has_been_released from ticket_kinds where id = $1",
             req.ticket_kind
@@ -421,15 +494,15 @@ impl Router {
                 {
                     // give reservation
                     sqlx::query!(
-                    "insert into ticket_reservations (user_id, ticket_kind_id, transaction_id, timeout)
-                    values ($1, $2, null, now() + $3)",
-                    user.get_id(),
-                    req.ticket_kind,
-                    new_timeout_interval()
-                )
+                        "insert into ticket_reservations
+                        (user_id, ticket_kind_id, transaction_id, timeout)
+                        values ($1, $2, null, now() + $3)",
+                        user.get_id(),
+                        req.ticket_kind,
+                        new_timeout_interval()
+                    )
                     .execute(&mut txn.executor())
-                    .await
-                     ?;
+                    .await?;
                     if txn.commit().await.is_ok() {
                         return Ok(Json(PurchaseStatus::Reserved));
                     }
@@ -465,13 +538,13 @@ impl Router {
                 "insert into ticket_release_queuers (user_id, ticket_kind_id, started_queueing) \
                 values ($1, $2, now())
                 on conflict (user_id) do update
-                set ticket_kind_id = excluded.ticket_kind_id, started_queueing = excluded.started_queueing",
+                set ticket_kind_id = excluded.ticket_kind_id,
+                    started_queueing = excluded.started_queueing",
                 user.get_id(),
                 req.ticket_kind
             )
             .execute(&self.db)
-            .await
-             ?;
+            .await?;
             Ok(Json(PurchaseStatus::ReleaseQueued))
         }
     }
@@ -491,12 +564,16 @@ impl Router {
         .execute(&self.db)
         .await?;
         if rows.rows_affected() == 0 {
-            Err(MinilithEndpointError::not_found())
+            // not MinilithEndpointError::not_found() since that gives an error
+            Err(MinilithEndpointError::NotFound(Json(
+                minilith_errors::MinilithError::new("no reservation"),
+            )))
         } else {
             Ok(())
         }
     }
-    /// Get the status of the queue.
+    /// Get the status of the queue. If 404 & user has started transacting, this means the purchase
+    /// went through!
     ///
     /// # Errors
     ///
@@ -516,7 +593,7 @@ impl Router {
                 ticket_kind: row.ticket_kind_id,
                 placement: Some(0),
                 timeout: Some(row.timeout),
-                latest_transaction: Some(row.timeout - 1 * time::Duration::MINUTE),
+                start_transaction_before: Some(row.timeout - 1 * time::Duration::MINUTE),
             }));
         }
         let reservation_queue = sqlx::query!(
@@ -533,7 +610,7 @@ impl Router {
                 ticket_kind: row.ticket_kind_id,
                 placement: Some((row.placement - row.reserved_or_purchased_tickets).max(0)),
                 timeout: None,
-                latest_transaction: None,
+                start_transaction_before: None,
             }));
         }
         let queuer = sqlx::query_scalar!(
@@ -547,7 +624,7 @@ impl Router {
                 ticket_kind: id,
                 placement: None,
                 timeout: None,
-                latest_transaction: None,
+                start_transaction_before: None,
             }));
         }
         Err(MinilithEndpointError::not_found())
@@ -569,7 +646,9 @@ impl Router {
         .fetch_optional(&mut txn.executor())
         .await?
         else {
-            return Err(MinilithEndpointError::not_found());
+            return Err(MinilithEndpointError::NotFound(Json(
+                minilith_errors::MinilithError::new("no reservation"),
+            )));
         };
         // try to cancel transaction instead
         if let Some(id) = row.transaction_id {
@@ -797,9 +876,13 @@ impl Router {
         // ========
         // Send transaction API request
         // ========
+        let timeout = reservation
+            .timeout
+            .format(&time::format_description::well_known::Iso8601::DEFAULT)
+            .wrap_err_internal("failed to format value which we got & serialized before")?;
         let payment_req = transactions::CreatePaymentRequest {
-            customer_id: user.get_id().to_owned(),
-            timeout: reservation.timeout,
+            customer_id: Some(user.get_id().to_owned()),
+            timeout,
             wares: transaction_wares,
             stripe_success_url: body.stripe_success_url,
         };
@@ -985,12 +1068,17 @@ impl Router {
 /// # Panics
 ///
 /// Never.
-#[allow(clippy::unwrap_used, reason = "we know the interval is within range")]
 fn new_timeout_interval() -> PgInterval {
-    PgInterval::try_from(
-        time::Duration::MINUTE * 15f64 + time::Duration::MINUTE * 3f64 * random::<f64>(),
-    )
-    .unwrap()
+    let minute_in_microseconds = 1_000_000_f64 * 60_f64;
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "it's not gonna be big enough"
+    )]
+    PgInterval {
+        months: 0,
+        days: 0,
+        microseconds: (minute_in_microseconds * (15. + 3. * random::<f64>())) as i64,
+    }
 }
 /// Releases a ticket. This MUST be called at the moment the tickets should be released.
 ///
@@ -1069,6 +1157,7 @@ pub async fn release(db: &mut Transaction<'_>, id: Uuid) -> MinilithResult<()> {
 ///
 /// Db. See [`release`].
 pub async fn check_all_tickets(db: &PgPool) -> MinilithResult<()> {
+    // release tickets
     loop {
         let mut txn = db.begin().await?;
         // take one release job
@@ -1562,6 +1651,7 @@ async fn ensure_user_may_purchase_ticket(
                     or tk_ag.group_id = group_memberships.group_id
                 )
             )
+            -- todo(release): check activivty max
         ) as "may_purchase!""#,
         ticket_kind,
         user.get_id()

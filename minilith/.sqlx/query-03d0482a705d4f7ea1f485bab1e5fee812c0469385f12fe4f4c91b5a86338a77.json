@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into ticket_kinds\n                    (id, activity_id, name, price,\n                     purchasing_available_start, purchasing_available_stop,\n                     max_tickets, min_tickets, reserved_or_purchased_tickets,\n                     allow_transfer_ticket_start, allow_transfer_ticket_stop,\n                     allow_transfer_ticket_bypass_allowed_groups, has_been_purchased, has_been_released)\n                 values ($1, $2, $3, $4,\n                         $5, $6, $7, 0, 0, $5, $6, false, false, $5 < now() and $6 > now())\n                 on conflict (id) do update set\n                    name = excluded.name,\n                    price = excluded.price,\n                    purchasing_available_start = excluded.purchasing_available_start,\n                    purchasing_available_stop = excluded.purchasing_available_stop,\n                    max_tickets = excluded.max_tickets,\n                    allow_transfer_ticket_start = excluded.allow_transfer_ticket_start,\n                    allow_transfer_ticket_stop = excluded.allow_transfer_ticket_stop,\n                    reserved_or_purchased_tickets = excluded.reserved_or_purchased_tickets,\n                    has_been_purchased = false,\n                    has_been_released = excluded.has_been_released",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Jsonb",
+        "Money",
+        "Timestamptz",
+        "Timestamptz",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "03d0482a705d4f7ea1f485bab1e5fee812c0469385f12fe4f4c91b5a86338a77"
+}

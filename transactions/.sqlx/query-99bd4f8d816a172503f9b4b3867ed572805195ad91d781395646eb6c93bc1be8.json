@@ -22,7 +22,8 @@
             "kind": {
               "Enum": [
                 "swish",
-                "stripe"
+                "stripe",
+                "free"
               ]
             }
           }
