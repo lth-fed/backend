@@ -9,7 +9,8 @@ use ed25519_dalek::pkcs8::DecodePrivateKey as _;
 use jsonwebtoken::EncodingKey;
 use jsonwebtoken::jwk::JwkSet;
 use minilith_errors::{
-    MinilithEndpointError, MinilithErrorOptionExt as _, MinilithErrorResultExt as _, MinilithResult,
+    AlertLevel, MinilithEndpointError, MinilithErrorOptionExt as _, MinilithErrorResultExt as _,
+    MinilithResult, alert,
 };
 use sqlx::migrate;
 use stripe_misc::webhook_endpoint::CreateWebhookEndpointEnabledEvents;
@@ -70,13 +71,19 @@ impl ClientStore<SwishClient> {
                 reqwest::Identity::from_pem(rustls_buf.as_bytes())
                     .wrap_err_internal("failed to build client authentication from swish")
                     .inspect_err(|_| {
-                        // ALERT LEVEL 1
+                        alert(
+                            AlertLevel::L1,
+                            format!("swish config for a client_id ({client_id}) is invalid"),
+                        );
                     })?,
             )
             .build()
             .wrap_err_internal("Failed to build swish client")
             .inspect_err(|_| {
-                // ALERT LEVEL 1
+                alert(
+                    AlertLevel::L1,
+                    format!("failed to build swish client for client_id {client_id}"),
+                );
             })?;
         let client = self.0.entry(client_id.to_owned()).or_insert(SwishClient {
             client: swish_client,
@@ -114,7 +121,7 @@ impl ClientStore<stripe::Client> {
             .build()
             .wrap_err_internal("stripe: ClientBuilder failed")
             .inspect_err(|_| {
-                // ALERT LEVEL 1
+                alert(AlertLevel::L1, "stripe ClientBuilder failed");
             })?;
 
         let webhook_url = format!("{DOMAIN}/v0{STRIPE_WEBHOOK_PATH}");
@@ -267,7 +274,10 @@ impl Context {
                 {
                     Ok(resp) => resp,
                     Err(err) => {
-                        // ALERT LEVEL 2
+                        alert(
+                            AlertLevel::L2,
+                            "failed to cancel swish payment request due to connection issues",
+                        );
                         error!(
                             ?err,
                             "failed to cancel swish payment request due to connection issues"
@@ -284,8 +294,11 @@ impl Context {
                 let text = match resp.text().await {
                     Ok(text) => text,
                     Err(err) => {
+                        alert(
+                            AlertLevel::L2,
+                            "failed to read body of cancel swish payment request",
+                        );
                         error!(?err, "failed to read body of cancel swish payment request");
-                        // ALERT LEVEL 2
                         return Ok(false);
                     }
                 };
@@ -305,7 +318,10 @@ impl Context {
                     status_code = ?status,
                     "Shit went down with swish cancel!"
                 );
-                // ALERT LEVEL 1
+                alert(
+                    AlertLevel::L1,
+                    "swish cancel failed due to unknown reasons (see logs for error_body & status)",
+                );
                 Ok(false)
             }
             Provider::Stripe => {

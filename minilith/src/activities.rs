@@ -269,7 +269,11 @@ impl Router {
     ///
     /// - user might not be allowed to access this activity
     #[oai(path = "/:id/ticket-kinds", method = "get")]
-    async fn kinds(&self, user: User, id: Path<Uuid>) -> MinilithResult<Json<Vec<ActivityTicketKind>>> {
+    async fn kinds(
+        &self,
+        user: User,
+        id: Path<Uuid>,
+    ) -> MinilithResult<Json<Vec<ActivityTicketKind>>> {
         self.test_activity_access(user.get_id(), &id.0).await?;
         let kinds = sqlx::query!(
             r#"

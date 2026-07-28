@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use minilith_errors::{MinilithErrorResultExt as _, MinilithResult};
+use minilith_errors::{AlertLevel, MinilithErrorResultExt as _, MinilithResult, alert};
 use poem_openapi::Enum;
 use serde::Serialize;
 use tracing::error;
@@ -123,7 +123,7 @@ impl typst::World for OurWonderfulTypstWorld<'_> {
         let data = match id.vpath().get_without_slash() {
             "receipt.typ" => Bytes::new(TYPST_DOC),
             "data.json" => Bytes::new(serde_json::to_string(&self.data).map_err(|error| {
-                // ALERT LEVEL 2
+                alert(AlertLevel::L2, "Failed to serialize data.json for receipt.");
                 error!(?error, "Failed to serialize data.json for receipt.");
                 FileError::Other(None)
             })?),

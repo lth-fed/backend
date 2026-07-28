@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+dotenvy.workspace = true
+git-version = "0.3.9"
+lettre.workspace = true
 opentelemetry.workspace = true
 poem.workspace = true
 poem-openapi.workspace = true

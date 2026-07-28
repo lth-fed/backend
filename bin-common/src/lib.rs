@@ -112,6 +112,8 @@ pub fn get_otel(
         .with(tracing_subscriber::fmt::layer())
         .init();
 
+    minilith_errors::test_alerts();
+
     opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
     let metrics_exporter = opentelemetry_otlp::MetricExporter::builder()
         .with_tonic()
