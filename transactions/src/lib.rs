@@ -30,6 +30,7 @@ pub mod swish;
 pub enum Provider {
     Swish,
     Stripe,
+    Free,
 }
 
 #[derive(Serialize, Deserialize, Debug, Object, Clone)]

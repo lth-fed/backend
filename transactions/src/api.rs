@@ -61,13 +61,13 @@ pub struct Ware {
 #[derive(Debug, Object, Clone)]
 // ALSO UPDATE `minilith/transactions.rs`
 struct CreatePaymentRequest {
-    /// Used for tracking cards in e.g. Stripe.
-    customer_id: String,
     /// When this payment request will be cancelled.
     /// Will try to cancel within 30s.
     timeout: OffsetDateTime,
     /// The list of items to be bought.
     wares: Vec<Ware>,
+    /// Used for tracking cards in e.g. Stripe.
+    customer_id: Option<String>,
     /// Redirected back when user completes transaction. Required for stripe.
     stripe_success_url: Option<String>,
     // ALSO UPDATE `minilith/transactions.rs`
@@ -102,9 +102,11 @@ struct CreatePaymentResponseStripe {
 }
 
 #[derive(Debug, Object, Clone)]
+// ALSO UPDATE `minilith/transactions.rs`
 struct ReceiptRequest {
     language: receipt::Language,
     customer_name: String,
+    // ALSO UPDATE `minilith/transactions.rs`
 }
 
 #[derive(Debug)]
@@ -211,13 +213,14 @@ impl Route {
         let transaction_id = Uuid::new_v4();
         sqlx::query!(
             "insert into transactions (id, customer_id, client_id, callback_url_v1,
-                total_transaction_fee, callback_identifier, payment_reference)
-            values ($1, $2, $3, $4, '0.00'::money, $5, 'free')
+                timeout, provider, total_transaction_fee, callback_identifier, payment_reference)
+            values ($1, $2, $3, $4, $5, 'free'::provider, '0.00'::money, $6, 'free')
             ",
             transaction_id,
             body.customer_id,
             auth.client_id,
             auth.callback_url_v1,
+            body.timeout,
             Uuid::nil()
         )
         .execute(&mut txn.executor())
@@ -286,7 +289,7 @@ impl Route {
                 callback_identifier: swish::uuid_to_string(cb_ident),
             };
             client
-                .put(swish::payment_request_url(uuid))
+                .put(swish::payment_request_url(swish::ApiVersion::V2, uuid))
                 .json(&swish_body)
                 .send()
                 .await
@@ -308,12 +311,13 @@ impl Route {
         let mut txn = self.db.begin().await?;
         sqlx::query!(
             "insert into transactions (id, customer_id, client_id, callback_url_v1,
-                total_transaction_fee, callback_identifier)
-            values ($1, $2, $3, $4, '1.50'::money, $5)",
+                timeout, provider, total_transaction_fee, callback_identifier)
+            values ($1, $2, $3, $4, $5, 'swish'::provider, '1.50'::money, $6)",
             uuid,
             body.customer_id,
             auth.client_id,
             auth.callback_url_v1,
+            body.timeout,
             cb_ident
         )
         .execute(&mut txn.executor())
@@ -380,10 +384,6 @@ impl Route {
     }
     /// You WILL get info on the callback (unless your endpoint is unreachable) about either it
     /// getting cancelled or paid. We will do our best within our control.
-    ///
-    /// ONLY AVAILABLE FOR `teknologappen` currently.
-    /// In the future we could add support through logging in to different `client_id`'s stripe
-    /// accounts.
     #[oai(path = "/stripe", method = "post")]
     #[allow(
         clippy::too_many_lines,
@@ -409,11 +409,7 @@ impl Route {
                 "amount",
             ));
         }
-
-        let client = self.get_stripe_client(&auth.client_id).await?;
-        let customer = self.get_stripe_customer(&client, &body.customer_id).await?;
-
-        let session = stripe_checkout::checkout_session::CreateCheckoutSession::new()
+        let mut session = stripe_checkout::checkout_session::CreateCheckoutSession::new()
             .line_items(
                 body.wares
                     .iter()
@@ -447,7 +443,6 @@ impl Route {
                     })
                     .collect::<Vec<_>>(),
             )
-            .customer(customer)
             .mode(CheckoutSessionMode::Payment)
             .success_url(stripe_success_url)
             .payment_method_types(vec![CreateCheckoutSessionPaymentMethodTypes::Card])
@@ -467,7 +462,20 @@ impl Route {
                 statement_descriptor_suffix: None,
                 transfer_data: None,
                 transfer_group: None,
-            })
+            });
+
+        let client = self.get_stripe_client(&auth.client_id).await?;
+        let customer = if let Some(customer_id) = &body.customer_id {
+            Some(self.get_stripe_customer(&client, customer_id).await?)
+        } else {
+            None
+        };
+
+        if let Some(customer) = customer {
+            session = session.customer(customer);
+        }
+
+        let session = session
             .send(&*client)
             .await
             .wrap_err_internal("stripe: create checkout session")?;
@@ -490,12 +498,13 @@ impl Route {
 
         sqlx::query!(
             "insert into transactions (id, customer_id, client_id, callback_url_v1,
-                total_transaction_fee, callback_identifier)
-            values ($1, $2, $3, $4, '1.50'::money, $5)",
+                timeout, provider, total_transaction_fee, callback_identifier)
+            values ($1, $2, $3, $4, $5, 'stripe'::provider, '0.00'::money, $6)",
             uuid,
             body.customer_id,
             auth.client_id,
             auth.callback_url_v1,
+            body.timeout,
             uuid,
         )
         .execute(&mut txn.executor())
@@ -545,20 +554,54 @@ impl Route {
                 let stripe_secret = row
                     .stripe_secret
                     .wrap_err_bad_frontend("your client_id isn't set up for stripe")?;
-
                 stripe_webhook::Webhook::construct_event(&body, signature, &stripe_secret)
                     .wrap_err_bad_frontend("stripe: invalid event")?;
 
-                let paid = event.status == Some(CheckoutSessionStatus::Complete);
+                let status = match event.status {
+                    Some(CheckoutSessionStatus::Complete) => Some(swish::Status::Paid),
+                    Some(CheckoutSessionStatus::Open) | None => None,
+                    _ => Some(swish::Status::Cancelled),
+                };
+
+                if status == Some(swish::Status::Paid) {
+                    // broooo
+                    let intent = event
+                        .payment_intent
+                        .as_ref()
+                        .wrap_err_bad_frontend("payment_intent should exist when paid")?;
+                    let intent = intent
+                        .as_object()
+                        .wrap_err_bad_frontend("didn't expand payment_intent")?;
+                    let charge = intent
+                        .latest_charge
+                        .as_ref()
+                        .wrap_err_bad_frontend("no charge when paid")?;
+                    let charge = charge
+                        .as_object()
+                        .wrap_err_bad_frontend("didn't expand latest_charge")?;
+                    let balance = charge
+                        .balance_transaction
+                        .as_ref()
+                        .wrap_err_bad_frontend("no balance_transaction when paid")?;
+                    let balance = balance
+                        .as_object()
+                        .wrap_err_bad_frontend("didn't expand balance_transaction")?;
+
+                    // set so this is idempotent
+                    sqlx::query!(
+                        "update transactions set total_transaction_fee = $1 where id = $2",
+                        PgMoney(balance.fee),
+                        row.transaction_id,
+                    )
+                    .execute(&self.db)
+                    .await?;
+                }
 
                 let data = swish::Callback {
                     id: row.transaction_id,
-                    payment_reference: paid.then(|| event.id.as_str().to_owned()),
-                    status: if paid {
-                        swish::Status::Paid
-                    } else {
-                        swish::Status::Cancelled
-                    },
+                    payment_reference: (status == Some(swish::Status::Paid))
+                        .then(|| event.id.as_str().to_owned()),
+                    status,
                     error_message: None,
                 };
                 // callback_identifier not needed since we validate the stripe signature

@@ -26,6 +26,7 @@ pub enum Language {
     #[serde(rename = "en")]
     #[oai(rename = "en")]
     English,
+    // ALSO UPDATE `minilith/transactions.rs`
 }
 
 #[derive(Serialize, Debug, Clone)]
@@ -44,7 +45,7 @@ pub struct Data {
     pub wares: Vec<Ware>,
 
     pub customer_name: String,
-    pub customer_id: String,
+    pub customer_id: Option<String>,
 
     pub merchant_id: String,
     pub merchant_name: String,

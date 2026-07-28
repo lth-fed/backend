@@ -17,6 +17,14 @@ pub struct MinilithError {
     pub message: String,
     pub field: Option<String>,
 }
+impl MinilithError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            field: None,
+        }
+    }
+}
 
 /// The error kind returned from most handlers. Really just [`MinilithError`] but wrapped in poem
 /// stuff to make it look nice in `OpenAPI` & HTTP.

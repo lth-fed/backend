@@ -253,8 +253,8 @@ async fn seed_activities(ctx: &ContextWrapper) -> color_eyre::Result<()> {
             description_sv: "svenska:Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.",
             location_en: "Gasque Hall",
             location_sv: "Gasque-salen",
-            time_start: dt("2026-06-15T17:00:00Z"),
-            time_end: dt("2026-06-15T23:00:00Z"),
+            time_start: dt("2129-06-15T17:00:00Z"),
+            time_end: dt("2129-06-15T23:00:00Z"),
             image_url: "https://picsum.photos/seed/home-a/640/360",
             max_tickets: 200,
             ticket_kinds: &[
@@ -273,7 +273,7 @@ async fn seed_activities(ctx: &ContextWrapper) -> color_eyre::Result<()> {
                     name_sv: "VIP",
                     price_ore: 220_00,
                     purchasing_start: dt("2026-05-20T00:00:00Z"),
-                    purchasing_stop: dt("2026-06-15T12:00:00Z"),
+                    purchasing_stop: dt("2126-06-15T12:00:00Z"),
                     max_tickets: 5,
                 },
                 TicketKindSeed {
@@ -458,9 +458,9 @@ async fn seed_activities(ctx: &ContextWrapper) -> color_eyre::Result<()> {
                      purchasing_available_start, purchasing_available_stop,
                      max_tickets, min_tickets, reserved_or_purchased_tickets,
                      allow_transfer_ticket_start, allow_transfer_ticket_stop,
-                     allow_transfer_ticket_bypass_allowed_groups, has_been_purchased)
+                     allow_transfer_ticket_bypass_allowed_groups, has_been_purchased, has_been_released)
                  values ($1, $2, $3, $4,
-                         $5, $6, $7, 0, 0, $5, $6, false, false)
+                         $5, $6, $7, 0, 0, $5, $6, false, false, $5 < now() and $6 > now())
                  on conflict (id) do update set
                     name = excluded.name,
                     price = excluded.price,
@@ -468,7 +468,10 @@ async fn seed_activities(ctx: &ContextWrapper) -> color_eyre::Result<()> {
                     purchasing_available_stop = excluded.purchasing_available_stop,
                     max_tickets = excluded.max_tickets,
                     allow_transfer_ticket_start = excluded.allow_transfer_ticket_start,
-                    allow_transfer_ticket_stop = excluded.allow_transfer_ticket_stop",
+                    allow_transfer_ticket_stop = excluded.allow_transfer_ticket_stop,
+                    reserved_or_purchased_tickets = excluded.reserved_or_purchased_tickets,
+                    has_been_purchased = false,
+                    has_been_released = excluded.has_been_released",
                 k.id,
                 a.id,
                 Json(&name) as _,
@@ -506,6 +509,7 @@ async fn seed(ctx: &ContextWrapper) -> color_eyre::Result<()> {
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
+    tracing_subscriber::fmt().init();
     let ctx = Arc::new(Context::new(None, false).await?);
     seed(&ctx).await?;
     tracing::info!("seed-dev: done");

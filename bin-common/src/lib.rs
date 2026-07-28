@@ -62,6 +62,8 @@ pub fn get_otel(
         .build();
 
     if test {
+        // For tests; this may be run several times.
+        let _: Result<(), _> = tracing_subscriber::fmt().try_init();
         return Ok(opentelemetry_sdk::trace::SdkTracerProvider::builder()
             .with_resource(resource.clone())
             .with_simple_exporter(opentelemetry_sdk::testing::trace::NoopSpanExporter::new())
@@ -103,13 +105,12 @@ pub fn get_otel(
         opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(&logger);
     let otel_span_appender =
         tracing_opentelemetry::layer().with_tracer(tracer.tracer(service_name));
-    let _: Result<(), _> = tracing_subscriber::registry()
+    tracing_subscriber::registry()
         .with(env_filter)
         .with(otel_layer)
         .with(otel_span_appender)
         .with(tracing_subscriber::fmt::layer())
-        // For tests; this may be run several times.
-        .try_init();
+        .init();
 
     opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
     let metrics_exporter = opentelemetry_otlp::MetricExporter::builder()

@@ -51,9 +51,7 @@ macro_rules! impl_api_extractor {
                     .into_string()
                     .await
                     .wrap_err_bad_user("invalid utf8 body", "<body>")?;
-                let data: $type = crate::decode_jwt(&body, &context)
-                    .wrap_err_unauthorized("jwt invalid on decode")?
-                    .claims;
+                let data: $type = crate::decode_jwt(&body, &context)?.claims;
                 Ok(data)
             }
         }
@@ -144,7 +142,6 @@ pub struct TransactionCallbackInfo {
 /// }
 /// ```
 #[derive(Clone, Debug, Deserialize)]
-#[serde(transparent)]
 #[must_use]
 pub struct TransactionsCallbackDataV1 {
     pub events: Vec<TransactionCallbackInfo>,

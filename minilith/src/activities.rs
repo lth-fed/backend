@@ -93,7 +93,7 @@ struct BriefActivity {
 }
 
 #[derive(Object)]
-struct TicketKind {
+struct ActivityTicketKind {
     id: Uuid,
     name: InternationalizedString,
     price: i64,
@@ -102,7 +102,6 @@ struct TicketKind {
     /// Null if there's not a shortage of tickets.
     tickets_left: Option<i32>,
     membership_passing: bool,
-    // todo: add addons
 }
 
 #[derive(Clone, Debug)]
@@ -270,7 +269,7 @@ impl Router {
     ///
     /// - user might not be allowed to access this activity
     #[oai(path = "/:id/ticket-kinds", method = "get")]
-    async fn kinds(&self, user: User, id: Path<Uuid>) -> MinilithResult<Json<Vec<TicketKind>>> {
+    async fn kinds(&self, user: User, id: Path<Uuid>) -> MinilithResult<Json<Vec<ActivityTicketKind>>> {
         self.test_activity_access(user.get_id(), &id.0).await?;
         let kinds = sqlx::query!(
             r#"
@@ -303,9 +302,9 @@ impl Router {
             user.get_id()
         )
         .map(|kind| {
-            // todo: check activity max too
+            // todo(release): check activity max too
             let tickets_left = kind.max_tickets - kind.reserved_or_purchased_tickets;
-            TicketKind {
+            ActivityTicketKind {
                 id: kind.id,
                 name: kind.name.0,
                 price: kind.price.0,

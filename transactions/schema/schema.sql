@@ -31,11 +31,13 @@ create table transactions (
     -- instructionUUID in swish
     id uuid primary key,
     -- used for stripe saving card details
-    customer_id text not null,
+    customer_id text,
     client_id text not null references client_ids(client_id),
     callback_url_v1 text not null,
     created timestamptz not null default now(),
     -- signifies if this is paid (if it's paid we'll have a payment reference!)
+    -- stripe: it's the stripe checkout ID
+    -- swish: the payment_reference we get
     payment_reference text,
     timeout timestamptz not null,
     -- for refund

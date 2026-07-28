@@ -1,7 +1,6 @@
 //! Copied from `transactions/src/api.rs`.
 
 use serde::{Deserialize, Serialize};
-use time::OffsetDateTime;
 use uuid::Uuid;
 
 #[derive(Default, Debug, Clone, Copy, Serialize)]
@@ -25,13 +24,13 @@ pub struct Ware {
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct CreatePaymentRequest {
-    /// Used for tracking cards in e.g. Stripe.
-    pub customer_id: String,
     /// When this payment request will be cancelled.
     /// Will try to cancel within 30s.
-    pub timeout: OffsetDateTime,
+    pub timeout: String,
     /// The list of items to be bought.
     pub wares: Vec<Ware>,
+    /// Used for tracking cards in e.g. Stripe.
+    pub customer_id: Option<String>,
     /// Redirected back when user completes transaction.
     pub stripe_success_url: Option<String>,
 }
@@ -50,4 +49,17 @@ pub struct CreatePaymentResponseStripe {
     /// See <https://docs.stripe.com/api/checkout/sessions/object#checkout_session_object-url>.
     pub redirect_url: String,
     pub transaction_id: Uuid,
+}
+
+#[derive(Serialize, Debug, Clone, Copy)]
+pub enum Language {
+    #[serde(rename = "sv")]
+    Swedish,
+    #[serde(rename = "en")]
+    English,
+}
+#[derive(Debug, Clone, Serialize)]
+pub struct ReceiptRequest {
+    pub language: Language,
+    pub customer_name: String,
 }

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update transactions set total_transaction_fee = $1 where id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Money",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d9194e234719eb0a04f913755a91fca8a7e40ff77f929895f6c650e3d3f0af1f"
+}

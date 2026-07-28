@@ -43,7 +43,7 @@ create table "public"."transaction_wares" (
 
 create table "public"."transactions" (
     "id" uuid not null,
-    "customer_id" text not null,
+    "customer_id" text,
     "client_id" text not null,
     "callback_url_v1" text not null,
     "created" timestamp with time zone not null default now(),

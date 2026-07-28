@@ -42,7 +42,8 @@
             "kind": {
               "Enum": [
                 "swish",
-                "stripe"
+                "stripe",
+                "free"
               ]
             }
           }
@@ -56,7 +57,7 @@
     },
     "nullable": [
       false,
-      false,
+      true,
       true,
       true,
       false,
