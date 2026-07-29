@@ -13,6 +13,7 @@ pub mod activities;
 pub mod context;
 pub mod group;
 pub mod healthcheck;
+pub mod push_notifications;
 mod runtime;
 pub mod ticket;
 mod transactions;
@@ -114,6 +115,9 @@ pub async fn get_endpoint(
                 context: Arc::clone(&context),
             },
             healthcheck::Router {
+                context: Arc::clone(&context),
+            },
+            push_notifications::Router {
                 context: Arc::clone(&context),
             },
             user::Router {

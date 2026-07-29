@@ -83,6 +83,14 @@ create table "public"."images" (
 );
 
 
+create table "public"."notifications" (
+    "id" uuid not null,
+    "title" jsonb not null,
+    "content" jsonb not null,
+    "send_at" timestamp with time zone not null
+);
+
+
 create table "public"."purchased_ticket_addons" (
     "addon_id" uuid not null,
     "ticket_id" uuid not null,
@@ -104,6 +112,15 @@ create table "public"."purchased_tickets" (
     "purchaser_id" text not null,
     "owner_id" text not null,
     "transaction_id" uuid not null
+);
+
+
+create table "public"."push_devices" (
+    "device_id" uuid not null,
+    "user_id" text not null,
+    "push_token" text not null,
+    "platform" push_platform not null,
+    "updated_at" timestamp with time zone not null default now()
 );
 
 
@@ -132,6 +149,13 @@ create table "public"."ticket_addons" (
 create table "public"."ticket_kind_allowed_groups" (
     "ticket_kind_id" uuid not null,
     "group_id" uuid not null
+);
+
+
+create table "public"."ticket_kind_notifications" (
+    "id" text not null default 'release'::text,
+    "ticket_kind_id" uuid not null,
+    "notification_id" uuid not null
 );
 
 
@@ -219,6 +243,8 @@ CREATE UNIQUE INDEX group_adminships_pkey ON public.group_adminships USING btree
 
 CREATE UNIQUE INDEX group_member_requests_pkey ON public.group_member_requests USING btree (group_id, member_id);
 
+CREATE INDEX group_memberships_by_group ON public.group_memberships USING hash (group_id);
+
 CREATE INDEX group_memberships_by_member ON public.group_memberships USING hash (user_id);
 
 CREATE UNIQUE INDEX group_memberships_pkey ON public.group_memberships USING btree (user_id, group_id);
@@ -237,11 +263,19 @@ CREATE UNIQUE INDEX groups_pkey ON public.groups USING btree (id);
 
 CREATE UNIQUE INDEX images_pkey ON public.images USING btree (id);
 
+CREATE UNIQUE INDEX notifications_pkey ON public.notifications USING btree (id);
+
+CREATE INDEX notifications_send_time ON public.notifications USING btree (send_at);
+
 CREATE UNIQUE INDEX purchased_ticket_addons_pkey ON public.purchased_ticket_addons USING btree (ticket_id, addon_id);
 
 CREATE UNIQUE INDEX purchased_ticket_validations_pkey ON public.purchased_ticket_validations USING btree (id);
 
 CREATE UNIQUE INDEX purchased_tickets_pkey ON public.purchased_tickets USING btree (id);
+
+CREATE UNIQUE INDEX push_devices_pkey ON public.push_devices USING btree (device_id);
+
+CREATE UNIQUE INDEX push_devices_platform_push_token_key ON public.push_devices USING btree (platform, push_token);
 
 CREATE UNIQUE INDEX ticket_addon_options_pkey ON public.ticket_addon_options USING btree (id);
 
@@ -249,9 +283,15 @@ CREATE UNIQUE INDEX ticket_addons_pkey ON public.ticket_addons USING btree (id);
 
 CREATE INDEX ticket_kind_allowed_groups_by_group ON public.ticket_kind_allowed_groups USING hash (group_id);
 
+CREATE INDEX ticket_kind_allowed_groups_by_ticket_kind ON public.ticket_kind_allowed_groups USING hash (ticket_kind_id);
+
 CREATE UNIQUE INDEX ticket_kind_allowed_groups_pkey ON public.ticket_kind_allowed_groups USING btree (group_id, ticket_kind_id);
 
 CREATE INDEX ticket_kind_by_activity ON public.ticket_kinds USING hash (activity_id);
+
+CREATE INDEX ticket_kind_notifications_by_notification ON public.ticket_kind_notifications USING hash (notification_id);
+
+CREATE UNIQUE INDEX ticket_kind_notifications_pkey ON public.ticket_kind_notifications USING btree (id, ticket_kind_id);
 
 CREATE INDEX ticket_kind_start ON public.ticket_kinds USING btree (purchasing_available_start);
 
@@ -307,17 +347,23 @@ alter table "public"."groups_ask_to_join" add constraint "groups_ask_to_join_pke
 
 alter table "public"."images" add constraint "images_pkey" PRIMARY KEY using index "images_pkey";
 
+alter table "public"."notifications" add constraint "notifications_pkey" PRIMARY KEY using index "notifications_pkey";
+
 alter table "public"."purchased_ticket_addons" add constraint "purchased_ticket_addons_pkey" PRIMARY KEY using index "purchased_ticket_addons_pkey";
 
 alter table "public"."purchased_ticket_validations" add constraint "purchased_ticket_validations_pkey" PRIMARY KEY using index "purchased_ticket_validations_pkey";
 
 alter table "public"."purchased_tickets" add constraint "purchased_tickets_pkey" PRIMARY KEY using index "purchased_tickets_pkey";
 
+alter table "public"."push_devices" add constraint "push_devices_pkey" PRIMARY KEY using index "push_devices_pkey";
+
 alter table "public"."ticket_addon_options" add constraint "ticket_addon_options_pkey" PRIMARY KEY using index "ticket_addon_options_pkey";
 
 alter table "public"."ticket_addons" add constraint "ticket_addons_pkey" PRIMARY KEY using index "ticket_addons_pkey";
 
 alter table "public"."ticket_kind_allowed_groups" add constraint "ticket_kind_allowed_groups_pkey" PRIMARY KEY using index "ticket_kind_allowed_groups_pkey";
+
+alter table "public"."ticket_kind_notifications" add constraint "ticket_kind_notifications_pkey" PRIMARY KEY using index "ticket_kind_notifications_pkey";
 
 alter table "public"."ticket_kinds" add constraint "ticket_kinds_pkey" PRIMARY KEY using index "ticket_kinds_pkey";
 
@@ -435,6 +481,12 @@ alter table "public"."purchased_tickets" add constraint "purchased_tickets_ticke
 
 alter table "public"."purchased_tickets" validate constraint "purchased_tickets_ticket_kind_id_fkey";
 
+alter table "public"."push_devices" add constraint "push_devices_platform_push_token_key" UNIQUE using index "push_devices_platform_push_token_key";
+
+alter table "public"."push_devices" add constraint "push_devices_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE CASCADE NOT VALID;
+
+alter table "public"."push_devices" validate constraint "push_devices_user_id_fkey";
+
 alter table "public"."ticket_addon_options" add constraint "bookkeeping_lengths_consistent" CHECK ((cardinality(bookkeeping_prices) = cardinality(bookkeeping_price_categories))) not valid;
 
 alter table "public"."ticket_addon_options" validate constraint "bookkeeping_lengths_consistent";
@@ -462,6 +514,14 @@ alter table "public"."ticket_kind_allowed_groups" validate constraint "ticket_ki
 alter table "public"."ticket_kind_allowed_groups" add constraint "ticket_kind_allowed_groups_ticket_kind_id_fkey" FOREIGN KEY ("ticket_kind_id") REFERENCES "public"."ticket_kinds"("id") NOT VALID;
 
 alter table "public"."ticket_kind_allowed_groups" validate constraint "ticket_kind_allowed_groups_ticket_kind_id_fkey";
+
+alter table "public"."ticket_kind_notifications" add constraint "ticket_kind_notifications_notification_id_fkey" FOREIGN KEY ("notification_id") REFERENCES "public"."notifications"("id") ON DELETE CASCADE NOT VALID;
+
+alter table "public"."ticket_kind_notifications" validate constraint "ticket_kind_notifications_notification_id_fkey";
+
+alter table "public"."ticket_kind_notifications" add constraint "ticket_kind_notifications_ticket_kind_id_fkey" FOREIGN KEY ("ticket_kind_id") REFERENCES "public"."ticket_kinds"("id") NOT VALID;
+
+alter table "public"."ticket_kind_notifications" validate constraint "ticket_kind_notifications_ticket_kind_id_fkey";
 
 alter table "public"."ticket_kinds" add constraint "ticket_kinds_activity_id_fkey" FOREIGN KEY ("activity_id") REFERENCES "public"."activities"("id") NOT VALID;
 

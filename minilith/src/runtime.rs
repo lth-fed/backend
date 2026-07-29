@@ -1,10 +1,16 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use fed_auth_verifier::callbacks::{TransactionCallbackInfo, TransactionInfo};
 use minilith_errors::{AlertLevel, MinilithResult, alert};
-use tracing::error;
+use tracing::{error, info};
 
-use crate::{ContextWrapper, ticket};
+use crate::push_notifications::PushSendResult;
+use crate::{
+    ContextWrapper, DbInternationalizedString as DIS, MinilithErrorOptionExt as _, ticket,
+};
+
+const NOTIFICATION_POLL_INTERVAL: Duration = Duration::from_secs(10);
 
 /// TODO: make these only run 1 instance if multiple instances are deployed from cold-start.
 ///
@@ -84,17 +90,126 @@ pub async fn initial_checks(ctx: &ContextWrapper) -> MinilithResult<()> {
     Ok(())
 }
 
+/// Locks and delivers the oldest due notification.
+///
+/// The row lock is held while messages are sent. Together with `skip locked`, this lets multiple
+/// minilith instances process different notifications without intentionally sending the same one.
+/// Delivery is still at-least-once if the process exits after a provider accepts a message but
+/// before the database transaction commits.
+#[allow(
+    clippy::too_many_lines,
+    reason = "Keeping the recipient rules in one SQL statement makes their precedence explicit."
+)]
+async fn check_next_notification(ctx: &ContextWrapper) -> MinilithResult<bool> {
+    let mut transaction = ctx.db.begin().await?;
+
+    let notification = sqlx::query!(
+        r#"select
+            id,
+            title as "title!: DIS",
+            content as "content!: DIS"
+        from notifications
+        where send_at <= now()
+        order by send_at, id
+        for update skip locked"#
+    )
+    .fetch_optional(&mut transaction.executor())
+    .await?;
+
+    let Some(notification) = notification else {
+        transaction.commit().await?;
+        return Ok(false);
+    };
+
+    // Ticket-kind allowed groups determine who can receive the notification. The closest setting
+    // on each allowed group or one of its ancestors applies, and no matching setting means no
+    // notification. Until personalized behavior is defined, both `all` and `personalized`
+    // receive every matching notification.
+    let devices = sqlx::query_file!("src/notification-recipients.sql", notification.id)
+        .fetch_all(&mut transaction.executor())
+        .await?;
+
+    let mut sent = 0_u64;
+    let mut failed = 0_u64;
+    let mut removed_devices = 0_u64;
+    for device in devices {
+        let language = ctx
+            .decrypt_string(device.language, &device.nonce)
+            .wrap_err_encryption("notification recipient language")?;
+
+        let title = notification.title.resolve_intl(&language, "");
+        let content = notification.content.resolve_intl(&language, "");
+        match ctx
+            .send_notification(
+                device.platform,
+                &device.push_token,
+                notification.id,
+                title,
+                content,
+            )
+            .await
+        {
+            Ok(PushSendResult::Sent) => sent += 1,
+            Ok(PushSendResult::InvalidToken) => {
+                let removed = sqlx::query!(
+                    "delete from push_devices
+                    where device_id = $1 and push_token = $2",
+                    device.device_id,
+                    device.push_token,
+                )
+                .execute(&mut transaction.executor())
+                .await?
+                .rows_affected();
+                removed_devices += removed;
+            }
+            Err(err) => {
+                if failed == 0 {
+                    alert(
+                        AlertLevel::L3,
+                        format!("failed to send push notification (id: {})", notification.id),
+                    );
+                }
+                failed += 1;
+                error!(
+                    ?err,
+                    notification_id = %notification.id,
+                    user_id = %device.user_id,
+                    device_id = %device.device_id,
+                    platform = ?device.platform,
+                    "failed to send push notification"
+                );
+            }
+        }
+    }
+
+    sqlx::query!("delete from notifications where id = $1", notification.id)
+        .execute(&mut transaction.executor())
+        .await?;
+    transaction.commit().await?;
+
+    info!(
+        notification_id = %notification.id,
+        sent,
+        failed,
+        removed_devices,
+        "processed push notification"
+    );
+    Ok(true)
+}
+
+/// We can scale this, just call it several times.
+///
 /// # Panics
 ///
 /// If 1 >= 60.
 pub fn spawn(ctx: &ContextWrapper) {
-    let ctx = Arc::clone(ctx);
+    let ticket_ctx = Arc::clone(ctx);
     // one runtime task per instance of this, so every function called in `check_all_tickets` has to
     // be safe to be called concurrently from all instances of minilith (i.e. we have to write good
     // sql queries)
     tokio::spawn(async move {
         loop {
-            if let Err(err) = ticket::check_all_tickets(&ctx.db).await {
+            if let Err(err) = ticket::check_all_tickets(&ticket_ctx.db).await {
                 error!(?err, "Error from runtime->check_all_tickets");
             }
 
@@ -106,6 +221,27 @@ pub fn spawn(ctx: &ContextWrapper) {
             next.replace_second(1).unwrap();
             let until = next - now;
             tokio::time::sleep(until.unsigned_abs()).await;
+        }
+    });
+
+    let notification_ctx = Arc::clone(ctx);
+    tokio::spawn(async move {
+        if !notification_ctx.has_notification_support() {
+            return;
+        }
+
+        loop {
+            loop {
+                match check_next_notification(&notification_ctx).await {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(err) => {
+                        error!(?err, "error while checking for push notifications");
+                        break;
+                    }
+                }
+            }
+            tokio::time::sleep(NOTIFICATION_POLL_INTERVAL).await;
         }
     });
 }

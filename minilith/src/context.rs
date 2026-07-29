@@ -10,9 +10,11 @@ use color_eyre::Section as _;
 use color_eyre::eyre::Context as _;
 use minilith_errors::{MinilithEndpointError, MinilithResult};
 use sqlx::migrate;
+use tracing::{error, warn};
 use uuid::Uuid;
 
 use crate::PgPool;
+use crate::push_notifications::{PushClients, PushPlatform, PushSendResult};
 
 #[allow(
     clippy::module_name_repetitions,
@@ -28,6 +30,7 @@ pub struct Context {
     transactions_api: String,
     transactions_client: reqwest::Client,
     transactions_token: String,
+    push_clients: Option<PushClients>,
 }
 
 impl Context {
@@ -65,12 +68,42 @@ impl Context {
         #[cfg(not(debug_assertions))]
         let transactions_api = "https://transactions.teknologappen.se";
 
+        let push_clients = match PushClients::from_env().await {
+            Ok(None) => {
+                #[cfg(not(debug_assertions))]
+                {
+                    alert(
+                        AlertLevel::L2,
+                        "push-notifications credentials not available",
+                    );
+                }
+                warn!(
+                    "push-notification runtime disabled because provider credentials are not set"
+                );
+
+                None
+            }
+            Ok(Some(push_clients)) => Some(push_clients),
+            Err(err) => {
+                #[cfg(not(debug_assertions))]
+                minilith_errors::alert(
+                    minilith_errors::AlertLevel::L2,
+                    "push-notifications setup failed. See logs",
+                );
+                error!(
+                    ?err,
+                    "push-notification runtime disabled because setup failed"
+                );
+                None
+            }
+        };
         let context = Self {
             db,
             encryption_key,
             transactions_api: transactions_api.to_owned(),
             transactions_client: reqwest::Client::new(),
             transactions_token,
+            push_clients,
         };
         Ok(context)
     }
@@ -181,6 +214,33 @@ impl Context {
                 "authorization",
                 format!("Bearer {}", self.transactions_token),
             )
+    }
+
+    #[must_use]
+    pub fn has_notification_support(&self) -> bool {
+        self.push_clients.is_some()
+    }
+
+    /// # Errors
+    ///
+    /// Returns an internal error if the push provider rejects the notification.
+    pub(crate) async fn send_notification(
+        &self,
+        platform: PushPlatform,
+        push_token: &str,
+        notification_id: Uuid,
+        title: &str,
+        content: &str,
+    ) -> MinilithResult<PushSendResult> {
+        let sender = self.push_clients.as_ref().ok_or_else(|| {
+            MinilithEndpointError::internal_error(
+                "push-notification clients are not configured",
+                "",
+            )
+        })?;
+        sender
+            .send(platform, push_token, notification_id, title, content)
+            .await
     }
 
     /// # Errors

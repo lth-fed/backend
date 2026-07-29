@@ -77,6 +77,22 @@ impl AuthContextProvider for TransactionsUrl {
     }
 }
 
+/// Only supports `tries >= 1`.
+async fn retry<T, E, Fut: Future<Output = Result<T, E>>>(
+    mut future_factory: impl FnMut() -> Fut,
+    tries: usize,
+    interval: std::time::Duration,
+) -> Result<T, E> {
+    for _ in 0..(tries.saturating_sub(1)) {
+        let result = future_factory().await;
+        if result.is_ok() {
+            return result;
+        }
+        tokio::time::sleep(interval).await;
+    }
+    future_factory().await
+}
+
 #[derive(Clone, Debug)]
 #[must_use]
 pub struct JwkContext<Url: Clone> {
@@ -95,7 +111,17 @@ impl<Url: AuthContextProvider + 'static> JwkContext<Url> {
     ///
     /// Returns an error if it was not possible to get the verifying key.
     pub async fn new(audience: impl Into<String>) -> color_eyre::Result<Self> {
-        let resp = match reqwest::get(Url::url()).await {
+        #[cfg(debug_assertions)]
+        let retries = 1;
+        #[cfg(not(debug_assertions))]
+        let retries = 10;
+        let resp = match retry(
+            || reqwest::get(Url::url()),
+            retries,
+            std::time::Duration::from_secs(1),
+        )
+        .await
+        {
             Ok(resp) => resp,
             #[allow(unused_variables, reason = "cfg")]
             Err(err) => {

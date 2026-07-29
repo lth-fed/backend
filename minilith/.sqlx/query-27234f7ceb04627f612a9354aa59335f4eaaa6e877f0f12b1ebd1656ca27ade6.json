@@ -1,0 +1,27 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into push_devices\n            (user_id, device_id, push_token, platform)\n            values ($1, $2, $3, $4)\n            on conflict (device_id) do update set\n            user_id = excluded.user_id,\n            push_token = excluded.push_token,\n            platform = excluded.platform,\n            updated_at = now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Text",
+        {
+          "Custom": {
+            "name": "push_platform",
+            "kind": {
+              "Enum": [
+                "ios",
+                "android"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "27234f7ceb04627f612a9354aa59335f4eaaa6e877f0f12b1ebd1656ca27ade6"
+}

@@ -2,6 +2,7 @@
 
 -- when writing the activity details & activity list APIs
 create index group_memberships_by_member on group_memberships using hash (user_id);
+create index group_memberships_by_group on group_memberships using hash (group_id);
 create index group_tree on groups using gist (path);
 create index group_tree_eq on groups using hash (path);
 create index user_group_settings_by_user on user_group_settings using hash (user_id);
@@ -11,6 +12,10 @@ create index activity_time_end on activities using btree (time_end);
 create index activity_hosts_by_activity on activity_hosts using hash (activity_id);
 create index ticket_kind_by_activity on ticket_kinds using hash (activity_id);
 create index ticket_kind_allowed_groups_by_group on ticket_kind_allowed_groups using hash (group_id);
+create index ticket_kind_allowed_groups_by_ticket_kind
+    on ticket_kind_allowed_groups using hash (ticket_kind_id);
+create index ticket_kind_notifications_by_notification
+    on ticket_kind_notifications using hash (notification_id);
 
 -- tickets
 create index ticket_kind_start on ticket_kinds using btree (purchasing_available_start);

@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from push_devices\n            where platform = $1\n            and push_token = $2\n            and device_id != $3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        {
+          "Custom": {
+            "name": "push_platform",
+            "kind": {
+              "Enum": [
+                "ios",
+                "android"
+              ]
+            }
+          }
+        },
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bf8dbaf48b888df0c060b8fdf51dd89bae283ea9b5fd3a2ed8eb7f5ecc0d40c5"
+}

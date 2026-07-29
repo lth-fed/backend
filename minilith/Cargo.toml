@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+a2 = { version = "0.10.0", default-features = false, features = ["ring", "tracing"] }
 base64.workspace = true
 bin-common = { version = "0.1.0", path = "../bin-common" }
 # NOTE: this doesn't verify authenticity: i.e. that the encrypted data comes from someone with the key (us)
@@ -12,6 +13,7 @@ bin-common = { version = "0.1.0", path = "../bin-common" }
 chacha20 = "0.10.0"
 color-eyre.workspace = true
 dotenvy.workspace = true
+fcm-service = "0.2.3"
 fed-auth-verifier.path = "../fed-auth-verifier"
 minilith-errors = { version = "0.1.0", path = "../minilith-errors", features = ["sqlx"] }
 opentelemetry.workspace = true
