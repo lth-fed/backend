@@ -19,8 +19,8 @@ jobs:
       - run: sudo apt update && sudo apt-get install libxmlsec1-dev pkg-config
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
-      - run: cargo build --workspace -F ci-test-dont-use-when-building-for-production
-      - run: cargo clippy --workspace -F ci-test-dont-use-when-building-for-production -- -D warnings
+      - run: cargo build --workspace
+      - run: cargo clippy --workspace -- -D warnings
 
   test:
     name: Rust tests
@@ -54,4 +54,4 @@ jobs:
           done
           echo "Postgres did not become ready in time"
           exit 1
-      - run: cargo test --workspace -F ci-test-dont-use-when-building-for-production
+      - run: cargo test --workspace
