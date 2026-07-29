@@ -129,6 +129,7 @@ pub async fn get_endpoint(
     let spec = api_service.spec_endpoint();
 
     let cors = Cors::new()
+        .allow_origin("https://teknologappen.se")
         .allow_method(Method::GET)
         .allow_method(Method::POST)
         .allow_method(Method::PUT)

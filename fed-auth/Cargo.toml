@@ -8,9 +8,6 @@ edition = "2024"
 name = "fed-auth"
 path = "src/main.rs"
 
-[features]
-ci-test-dont-use-when-building-for-production = []
-
 [dependencies]
 base64.workspace = true
 bin-common = { version = "0.1.0", path = "../bin-common" }
@@ -29,7 +26,6 @@ poem.workspace = true
 poem-openapi.workspace = true
 rand.workspace = true
 reqwest.workspace = true
-rust-embed.workspace = true
 #samael = "0.0.20"
 samael = { git = "https://github.com/njaremko/samael.git", rev = "f879f1942ec1b34b6d3027ce7e4724ad95d15dfa" }
 serde.workspace = true

@@ -58,7 +58,7 @@ impl AuthContextProvider for AuthUrl {
         }
         #[cfg(not(debug_assertions))]
         {
-            "https://auth.teknologappen.se/oidc/v1/certs".to_owned()
+            "https://api.auth.teknologappen.se/oidc/v1/certs".to_owned()
         }
     }
 }
@@ -157,6 +157,7 @@ fn decode_jwt<T: DeserializeOwned>(
     token: &str,
     context: &JwkContext<impl AuthContextProvider>,
 ) -> MinilithResult<TokenData<T>> {
+    #[cfg(debug_assertions)]
     if context.testing {
         return jsonwebtoken::dangerous::insecure_decode(token).wrap_err_bad_frontend("bad data");
     }
@@ -186,26 +187,16 @@ fn decode_jwt<T: DeserializeOwned>(
 /// discovery. Does return a string instead of the full error if the header `authorization` is not
 /// defined.
 ///
+/// When in development, this is marked as bearer, just so we don't have to rely on non-existing
+/// Swagger PKCE support. Just enter the username to authenticate:)
+///
 /// [`AuthContext`] with [`AuthUrl`] MUST BE registered using [`poem::EndpointExt::data`].
 ///
 /// # Errors
 ///
 /// [`MinilithEndpointError`]. UK, AUTH.
 #[derive(Debug, SecurityScheme)]
-#[cfg_attr(
-    debug_assertions,
-    oai(
-        ty = "oauth2",
-        key_in = "header",
-        key_name = "authorization",
-        bearer_format = "JWT",
-        flows(authorization_code(
-            authorization_url = "http://localhost:8001/oidc/v1/authorize",
-            token_url = "http://localhost:8001/oidc/v1/token",
-        )),
-        checker = "User::from_token"
-    )
-)]
+#[cfg_attr(debug_assertions, oai(ty = "bearer", checker = "User::from_token"))]
 #[cfg_attr(
     not(debug_assertions),
     oai(
@@ -214,8 +205,8 @@ fn decode_jwt<T: DeserializeOwned>(
         key_name = "authorization",
         bearer_format = "JWT",
         flows(authorization_code(
-            authorization_url = "https://auth.teknologappen.se/oidc/v1/authorize",
-            token_url = "https://auth.teknologappen.se/oidc/v1/token",
+            authorization_url = "https://api.auth.teknologappen.se/oidc/v1/authorize",
+            token_url = "https://api.auth.teknologappen.se/oidc/v1/token",
         )),
         checker = "User::from_token"
     )
@@ -234,6 +225,7 @@ impl User {
             .wrap_err_internal("AuthContext not registered as data!")?;
         let cx = opentelemetry::Context::current();
         let span = cx.span();
+        #[cfg(debug_assertions)]
         if context.testing {
             let id = if token.token.contains(':') {
                 &token.token

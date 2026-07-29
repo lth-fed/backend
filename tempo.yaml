@@ -11,8 +11,6 @@ distributor:
       protocols:
         grpc:
           endpoint: "0.0.0.0:5317"
-        # http:
-        #   endpoint: "tempo:4318"
   #log_received_spans:
   #    enabled: true
   #  log_discarded_spans:
@@ -26,7 +24,7 @@ metrics_generator:
   storage:
     path: /var/tempo/generator/wal
     remote_write:
-      - url: http://prometheus:9090/api/v1/write
+      - url: http://fed-prometheus:9090/api/v1/write
         send_exemplars: true
 
 query_frontend:

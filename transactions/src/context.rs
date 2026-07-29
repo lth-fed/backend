@@ -188,12 +188,13 @@ impl Context {
         let key = base64::prelude::BASE64_STANDARD
             .decode(key)
             .wrap_err("`PRIVATE_KEY` not base64 encoded")?;
-        let _signing_key = ed25519_dalek::SigningKey::from_pkcs8_der(&key)?;
+        let signing_key = ed25519_dalek::SigningKey::from_pkcs8_der(&key)?;
         let encoding_key = EncodingKey::from_ed_der(&key);
 
-        // let jwk = fed_auth_verifier::eddsa_to_jwk(&signing_key.verifying_key());
         let keys = JwkSet {
-            keys: vec![/*jwk*/],
+            keys: vec![fed_auth_verifier::eddsa_to_jwk(
+                &signing_key.verifying_key(),
+            )],
         };
         Ok((encoding_key, keys))
     }

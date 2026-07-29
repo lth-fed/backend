@@ -1,0 +1,153 @@
+name: fed-production
+
+include:
+  - compose.yaml
+
+volumes:
+  postgres-data:
+
+networks:
+  traefik:
+    external: true
+    name: ${TRAEFIK_NETWORK:-traefik}
+
+services:
+  # TODO: eventually replace with host-hosted Postgres, it's suboptimal to have it in a container.
+  fed-postgres:
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the shell or a Compose env file}
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  fed-collector:
+    restart: unless-stopped
+
+  fed-loki:
+    restart: unless-stopped
+
+  fed-prometheus:
+    restart: unless-stopped
+
+  fed-tempo:
+    restart: unless-stopped
+
+  fed-grafana:
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in the shell or a Compose env file}
+    networks:
+      - default
+      - traefik
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${TRAEFIK_NETWORK:-traefik}
+      traefik.http.routers.fed-grafana.rule: Host(`${GRAFANA_DOMAIN:-grafana.teknologappen.se}`)
+      traefik.http.routers.fed-grafana.entrypoints: ${TRAEFIK_ENTRYPOINT:-websecure}
+      traefik.http.routers.fed-grafana.tls: "true"
+      traefik.http.routers.fed-grafana.tls.certresolver: ${TRAEFIK_CERT_RESOLVER:-letsencrypt}
+      traefik.http.services.fed-grafana.loadbalancer.server.port: "3000"
+
+  fed-auth:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: fed-auth
+    image: ${CONTAINER_REGISTRY:-localhost}/fed-auth:${CONTAINER_TAG:-production}
+    restart: unless-stopped
+    expose:
+      - "8001"
+    networks:
+      - default
+      - traefik
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${TRAEFIK_NETWORK:-traefik}
+      traefik.http.routers.fed-auth.rule: Host(`${FED_AUTH_DOMAIN:-api.auth.teknologappen.se}`)
+      traefik.http.routers.fed-auth.entrypoints: ${TRAEFIK_ENTRYPOINT:-websecure}
+      traefik.http.routers.fed-auth.tls: "true"
+      traefik.http.routers.fed-auth.tls.certresolver: ${TRAEFIK_CERT_RESOLVER:-letsencrypt}
+      traefik.http.services.fed-auth.loadbalancer.server.port: "8001"
+    env_file:
+      - ./fed-auth/.env
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@fed-postgres:5432/auth
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://fed-collector:4317
+    depends_on:
+      fed-postgres:
+        condition: service_healthy
+      fed-collector:
+        condition: service_started
+
+  transactions:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: transactions
+    image: ${CONTAINER_REGISTRY:-localhost}/transactions:${CONTAINER_TAG:-production}
+    restart: unless-stopped
+    expose:
+      - "8002"
+    networks:
+      - default
+      - traefik
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${TRAEFIK_NETWORK:-traefik}
+      traefik.http.routers.transactions.rule: Host(`${TRANSACTIONS_DOMAIN:-transactions.teknologappen.se}`)
+      traefik.http.routers.transactions.entrypoints: ${TRAEFIK_ENTRYPOINT:-websecure}
+      traefik.http.routers.transactions.tls: "true"
+      traefik.http.routers.transactions.tls.certresolver: ${TRAEFIK_CERT_RESOLVER:-letsencrypt}
+      traefik.http.services.transactions.loadbalancer.server.port: "8002"
+    env_file:
+      - ./transactions/.env
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@fed-postgres:5432/transactions
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://fed-collector:4317
+    depends_on:
+      fed-postgres:
+        condition: service_healthy
+      fed-collector:
+        condition: service_started
+
+  minilith:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: minilith
+    image: ${CONTAINER_REGISTRY:-localhost}/minilith:${CONTAINER_TAG:-production}
+    restart: unless-stopped
+    expose:
+      - "8000"
+    networks:
+      - default
+      - traefik
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${TRAEFIK_NETWORK:-traefik}
+      traefik.http.routers.minilith.rule: Host(`${MINILITH_DOMAIN:-api.teknologappen.se}`)
+      traefik.http.routers.minilith.entrypoints: ${TRAEFIK_ENTRYPOINT:-websecure}
+      traefik.http.routers.minilith.tls: "true"
+      traefik.http.routers.minilith.tls.certresolver: ${TRAEFIK_CERT_RESOLVER:-letsencrypt}
+      traefik.http.services.minilith.loadbalancer.server.port: "8000"
+    env_file:
+      - ./minilith/.env
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@fed-postgres:5432/fed
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://fed-collector:4317
+    depends_on:
+      fed-postgres:
+        condition: service_healthy
+      fed-collector:
+        condition: service_started
+      fed-auth:
+        condition: service_started
+      transactions:
+        condition: service_started
