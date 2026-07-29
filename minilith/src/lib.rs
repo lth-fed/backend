@@ -83,11 +83,21 @@ pub async fn get_endpoint(
 
     let context = Arc::new(Context::new(test_db, migrate).await?);
 
+    #[allow(
+        clippy::cfg_not_test,
+        reason = "it causes errors because the DB is closed before this can start up"
+    )]
+    #[cfg(not(test))]
     if let Err(err) = runtime::initial_checks(&context).await {
         error!(?err, "failed to run initial checks!");
         return Err(color_eyre::Report::msg(""));
     }
 
+    #[allow(
+        clippy::cfg_not_test,
+        reason = "it causes errors because the DB is closed before this can start up"
+    )]
+    #[cfg(not(test))]
     runtime::spawn(&context);
 
     let auth_context = JwkContext::<AuthUrl>::new("teknologappen").await?;

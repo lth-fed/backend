@@ -97,11 +97,21 @@ pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl En
         db: context.db.clone(),
     };
 
+    #[allow(
+        clippy::cfg_not_test,
+        reason = "it causes errors because the DB is closed before this can start up"
+    )]
+    #[cfg(not(test))]
     if let Err(err) = runtime::initial_checks(&context).await {
         error!(?err, "failed to run initial checks!");
         return Err(color_eyre::Report::msg(""));
     }
 
+    #[allow(
+        clippy::cfg_not_test,
+        reason = "it causes errors because the DB is closed before this can start up"
+    )]
+    #[cfg(not(test))]
     runtime::spawn(&context);
 
     let api_service = OpenApiService::new(
