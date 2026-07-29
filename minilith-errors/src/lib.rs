@@ -7,7 +7,11 @@ use poem_openapi::{ApiResponse, Object};
 use tracing::error;
 
 /// This assumes this crate (`minilith-errors`) is in the same repo as the rest of the backend!
-pub const GIT_VERSION: &str = git_version::git_version!();
+pub const GIT_VERSION: &str = if let Some(version) = option_env!("GIT_VERSION") {
+    version
+} else {
+    git_version::git_version!(fallback = "unknown")
+};
 
 pub type MinilithResult<T> = Result<T, MinilithEndpointError>;
 

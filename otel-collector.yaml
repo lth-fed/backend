@@ -7,14 +7,14 @@ receivers:
 exporters:
   # Data sources: metrics
   otlp_grpc:
-    endpoint: tempo:5317
+    endpoint: fed-tempo:5317
     tls:
       insecure: true
   prometheus:
-    endpoint: localhost:8889
+    endpoint: 0.0.0.0:8889
     namespace: default
   otlphttp/logs:
-    endpoint: "http://loki:3100/otlp"
+    endpoint: "http://fed-loki:3100/otlp"
     tls:
       insecure: true
 

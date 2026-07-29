@@ -3,12 +3,10 @@
     missing_debug_implementations,
     reason = "we can't add debug to e.g. Context"
 )]
-#![allow(clippy::same_name_method, reason = "rust_embed uses it")]
 use bin_common::get_otel;
 use fed_auth_verifier::{AuthUrl, JwkContext};
 use opentelemetry::trace::TracerProvider as _;
 use poem::EndpointExt as _;
-use poem::endpoint::EmbeddedFilesEndpoint;
 use poem::http::Method;
 
 use poem::middleware::{Cors, OpenTelemetryMetrics, OpenTelemetryTracing, SetHeader};
@@ -30,25 +28,11 @@ pub(crate) use context::Context;
 #[cfg(debug_assertions)]
 pub(crate) const API_DOMAIN: &str = "http://localhost:8001";
 #[cfg(not(debug_assertions))]
-pub(crate) const API_DOMAIN: &str = "https://auth.teknologappen.se";
-pub(crate) const WEBSITE_DOMAIN: &str = API_DOMAIN;
-
-#[derive(rust_embed::Embed)]
-#[cfg_attr(
-    not(all(
-        debug_assertions,
-        feature = "ci-test-dont-use-when-building-for-production"
-    )),
-    folder = "../../frontend/auth/build"
-)]
-#[cfg_attr(
-    all(
-        debug_assertions,
-        feature = "ci-test-dont-use-when-building-for-production"
-    ),
-    folder = "."
-)]
-struct Website;
+pub(crate) const API_DOMAIN: &str = "https://api.auth.teknologappen.se";
+#[cfg(debug_assertions)]
+pub(crate) const WEBSITE_DOMAIN: &str = "http://localhost:5174";
+#[cfg(not(debug_assertions))]
+pub(crate) const WEBSITE_DOMAIN: &str = "https://auth.teknologappen.se";
 
 fn random_id() -> String {
     // hex-formatted random string
@@ -112,7 +96,6 @@ pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl po
         .allow_credentials(true);
 
     let route = Route::new()
-        .nest("/", EmbeddedFilesEndpoint::<Website>::new())
         .nest(
             "/api/v0",
             api_service.with(SetHeader::new().overriding(CACHE_CONTROL, "no-cache")),

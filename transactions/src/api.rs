@@ -3,6 +3,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use fed_auth_verifier::callbacks::{TransactionCallbackInfo, TransactionInfo, TransactionState};
+use jsonwebtoken::jwk::JwkSet;
 use minilith_errors::{
     MinilithEndpointError, MinilithErrorOptionExt as _, MinilithErrorResultExt as _, MinilithResult,
 };
@@ -134,6 +135,13 @@ fn check_client_id(auth: &ApiAuth, txn_client_id: &str) -> MinilithResult<()> {
 
 #[OpenApi]
 impl Route {
+    /// Returns the JWK used to verify transaction callback JWTs.
+    #[oai(path = "/jwks", method = "get")]
+    #[allow(clippy::unused_async, reason = "OpenAPI requires async handlers")]
+    async fn jwks(&self) -> Response<Json<poem_openapi::types::Any<&JwkSet>>> {
+        Response::new(Json(poem_openapi::types::Any(&self.jwks)))
+    }
+
     #[oai(path = "/:id", method = "get")]
     async fn state(
         &self,

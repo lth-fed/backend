@@ -416,7 +416,7 @@ impl MainRouter {
             row.client_id,
             ACCESS_TOKEN_VALID_FOR,
             IdTokenClaims {
-                iss: WEBSITE_DOMAIN.to_owned(),
+                iss: API_DOMAIN.to_owned(),
                 sub: user_id,
                 auth_time: (row.auth_time - OffsetDateTime::UNIX_EPOCH)
                     .whole_seconds()
@@ -526,7 +526,7 @@ impl MainRouter {
             &session.client_id,
             ACCESS_TOKEN_VALID_FOR,
             IdTokenClaims {
-                iss: WEBSITE_DOMAIN.to_owned(),
+                iss: API_DOMAIN.to_owned(),
                 sub: user_data.sub.clone(),
                 auth_time: (row.auth_time - OffsetDateTime::UNIX_EPOCH)
                     .whole_seconds()

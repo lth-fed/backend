@@ -2,8 +2,6 @@ YOU MAY NOT HAVE SEVERAL INSTANCES OF THIS BECAUSE OF THE SAML REQUEST AUTH ID C
 
 You may need to run `createdb -h localhost -p 5432 -U postgres auth` when first starting this.
 
-You need to compile the auth frontend. The frontend repo has to be at `../../frontend` and `../../frontend/auth/` must be compiled (`pnpm run build`).
-
 You need to have `xmlsec1` installed to run this.
 
 Use the following to generate the required private key: `openssl genpkey -algorithm ed25519 -outform der | base64`.

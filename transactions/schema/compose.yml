@@ -1,5 +1,5 @@
 services:
-  postgres:
+  fed-postgres:
     image: "postgres:18"
     ports:
       - 9832:5432
@@ -7,7 +7,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: dev
-  postgres-2:
+  fed-postgres-2:
     image: "postgres:18"
     ports:
       - 9833:5432

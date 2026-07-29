@@ -5,7 +5,7 @@ volumes:
   loki-storage:
 
 services:
-  postgres:
+  fed-postgres:
     image: "postgres:18"
     ports:
       - 5432:5432
@@ -14,7 +14,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: fed
 
-  collector:
+  fed-collector:
     image: "otel/opentelemetry-collector:0.154.0"
     command: "--config=/etc/otel-collector.yaml"
     ports:
@@ -22,8 +22,17 @@ services:
       - 55679:55679
     volumes:
       - ./otel-collector.yaml:/etc/otel-collector.yaml:ro
-  loki:
+
+  fed-loki-init:
+    image: "busybox:1.37.0"
+    user: "0:0"
+    command: ["chown", "-R", "10001:10001", "/var/loki"]
+    volumes:
+      - loki-storage:/var/loki
+
+  fed-loki:
     image: "grafana/loki:3.7.0"
+    user: "10001:10001"
     command: "-config.file=/etc/loki/config.yaml -target=all"
     ports:
       - 3100:3100
@@ -31,10 +40,13 @@ services:
       - ./loki-config.yaml:/etc/loki/config.yaml:ro
       - loki-storage:/var/loki
     depends_on:
-      - collector
-  grafana:
+      fed-collector:
+        condition: service_started
+      fed-loki-init:
+        condition: service_completed_successfully
+  fed-grafana:
     image: grafana/grafana-enterprise:13.0.3
-    container_name: grafana
+    container_name: fed-grafana
     restart: unless-stopped
     ports:
       - "3000:3000"
@@ -45,10 +57,10 @@ services:
       - ./grafana.yml:/etc/grafana/provisioning/datasources/all.yml
       - grafana-storage:/var/lib/grafana
     depends_on:
-      - prometheus
-      - tempo
-      - loki
-  prometheus:
+      - fed-prometheus
+      - fed-tempo
+      - fed-loki
+  fed-prometheus:
     image: prom/prometheus:v3.13.0
     ports:
       - 9090:9090
@@ -56,8 +68,8 @@ services:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/var/prometheus
     depends_on:
-      - collector
-  tempo:
+      - fed-collector
+  fed-tempo:
     image: "grafana/tempo:3.0.2"
     command: "-target=all -config.file=/etc/tempo.yaml"
     volumes:
@@ -66,4 +78,4 @@ services:
     ports:
       - "3200:3200"
     depends_on:
-      - collector
+      - fed-collector

@@ -15,5 +15,5 @@ scrape_configs:
   # Example: scraping a web application
   - job_name: 'collector'
     static_configs:
-      - targets: ['collector:8889']
+      - targets: ['fed-collector:8889']
     metrics_path: /metrics

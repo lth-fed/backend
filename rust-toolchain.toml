@@ -1,3 +1,4 @@
 [toolchain]
+# also update in `./Dockerfile`
 channel = "1.95"
 components = ["clippy", "rustfmt"]

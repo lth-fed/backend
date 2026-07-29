@@ -4,13 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-async-stripe = { version = "1.0.0-rc.6", default-features = false, features = ["rustls-ring", "rustls-tls-webpki-roots"] }
-async-stripe-checkout = { version = "1.0.0-rc.6", features = ["checkout_session"] }
-async-stripe-core = { version = "1.0.0-rc.6", default-features = false, features = ["customer"] }
-async-stripe-misc = { version = "1.0.0-rc.6", features = ["webhook_endpoint"] }
+async-stripe = { version = "1.0.0-rc.6", default-features = false, features = ["redact-generated-debug", "rustls-ring", "rustls-tls-webpki-roots"] }
+async-stripe-checkout = { version = "1.0.0-rc.6", features = ["checkout_session", "redact-generated-debug"] }
+async-stripe-core = { version = "1.0.0-rc.6", default-features = false, features = ["customer", "redact-generated-debug"] }
+async-stripe-misc = { version = "1.0.0-rc.6", features = ["webhook_endpoint", "redact-generated-debug"] }
 # async-stripe-payment = { version = "1.0.0-rc.6", features = ["card", "payment_link"] }
-async-stripe-types = "1.0.0-rc.6"
-async-stripe-webhook = "1.0.0-rc.6"
+async-stripe-types = { version = "1.0.0-rc.6", features = ["redact-generated-debug"] }
+async-stripe-webhook = { version = "1.0.0-rc.6", features = ["redact-generated-debug"] }
 base64.workspace = true
 bin-common = { path = "../bin-common" }
 color-eyre.workspace = true
