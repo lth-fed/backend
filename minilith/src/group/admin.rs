@@ -74,6 +74,154 @@ pub async fn check_adminship(
     }
 }
 
+/// Checks that the user is a direct administrator of the group.
+///
+/// # Errors
+///
+/// Returns not-found for a missing group and an authorization error otherwise.
+pub async fn check_direct_adminship(
+    db: impl PgExecutor<'_>,
+    user_id: &str,
+    group_id: Uuid,
+) -> MinilithResult<()> {
+    let is_admin = sqlx::query_scalar!(
+        r#"select exists (
+            select 1
+            from group_adminships
+            where user_id = $1 and group_id = $2
+        ) as "exists!""#,
+        user_id,
+        group_id,
+    )
+    .fetch_one(db)
+    .await?;
+
+    if is_admin {
+        Ok(())
+    } else {
+        Err(MinilithEndpointError::bad_frontend_code(
+            format!("must be a direct admin of group {group_id}"),
+            "",
+        ))
+    }
+}
+
+/// Checks that the user directly administers either the target group or its
+/// immediate parent. Parent administrators may manage child adminships, but
+/// no other child data.
+///
+/// # Errors
+///
+/// DB or authorization.
+pub async fn check_direct_or_parent_adminship(
+    db: impl PgExecutor<'_>,
+    user_id: &str,
+    group_id: Uuid,
+) -> MinilithResult<()> {
+    let allowed = sqlx::query_scalar!(
+        r#"select exists (
+            select 1
+            from groups target
+            inner join group_adminships ga
+                on ga.user_id = $1
+                and (
+                    ga.group_id = target.id
+                    or ga.group_id = (
+                        select parent.id
+                        from groups parent
+                        where parent.path = target.parent_path
+                    )
+                )
+            where target.id = $2
+        ) as "exists!""#,
+        user_id,
+        group_id,
+    )
+    .fetch_one(db)
+    .await?;
+
+    if allowed {
+        Ok(())
+    } else {
+        Err(MinilithEndpointError::bad_frontend_code(
+            format!("must directly administer group {group_id} or its parent"),
+            "",
+        ))
+    }
+}
+
+/// Checks that the user directly administers at least one host of an activity.
+///
+/// # Errors
+///
+/// DB or authorization.
+pub async fn check_activity_adminship(
+    db: impl PgExecutor<'_>,
+    user_id: &str,
+    activity_id: Uuid,
+) -> MinilithResult<()> {
+    let allowed = sqlx::query_scalar!(
+        r#"select exists (
+            select 1
+            from activity_hosts
+            inner join group_adminships
+                on group_adminships.group_id = activity_hosts.group_id
+            where activity_hosts.activity_id = $2
+            and group_adminships.user_id = $1
+        ) as "exists!""#,
+        user_id,
+        activity_id,
+    )
+    .fetch_one(db)
+    .await?;
+
+    if allowed {
+        Ok(())
+    } else {
+        Err(MinilithEndpointError::bad_frontend_code(
+            "must directly administer an activity host",
+            "",
+        ))
+    }
+}
+
+/// Checks that the user directly administers a host of the ticket kind's
+/// activity.
+///
+/// # Errors
+///
+/// DB or authorization.
+pub async fn check_ticket_kind_adminship(
+    db: impl PgExecutor<'_>,
+    user_id: &str,
+    ticket_kind_id: Uuid,
+) -> MinilithResult<()> {
+    let allowed = sqlx::query_scalar!(
+        r#"select exists (
+            select 1
+            from ticket_kinds
+            inner join activity_hosts
+                on activity_hosts.activity_id = ticket_kinds.activity_id
+            inner join group_adminships
+                on group_adminships.group_id = activity_hosts.group_id
+            where ticket_kinds.id = $2
+            and group_adminships.user_id = $1
+        ) as "exists!""#,
+        user_id,
+        ticket_kind_id,
+    )
+    .fetch_one(db)
+    .await?;
+    if allowed {
+        Ok(())
+    } else {
+        Err(MinilithEndpointError::bad_frontend_code(
+            "must directly administer a host of the ticket kind's activity",
+            "",
+        ))
+    }
+}
+
 pub async fn check_has_any_adminship(db: impl PgExecutor<'_>, user_id: &str) -> MinilithResult<()> {
     sqlx::query!(
         "select group_id from group_adminships
@@ -141,6 +289,12 @@ pub async fn create_adminship(
     user_id: &str,
     group_id: Uuid,
 ) -> MinilithResult<Adminship> {
+    if !user_id.starts_with("email:") {
+        return Err(MinilithEndpointError::bad_frontend_code(
+            "administrators must use an email account",
+            "the user id must start with `email:`",
+        ));
+    }
     sqlx::query_as!(
         Adminship,
         r#"with ensure_membership as (
@@ -194,11 +348,10 @@ pub async fn remove_adminship(
 /// DB.
 pub async fn group_admins(db: impl PgExecutor<'_>, group_id: Uuid) -> MinilithResult<Vec<String>> {
     sqlx::query_scalar!(
-        r#"select distinct ga.user_id
+        r#"select ga.user_id
         from group_adminships ga
-        join groups g on g.id = ga.group_id
-        join groups target on target.id = $1
-        where g.path @> target.path"#,
+        where ga.group_id = $1
+        order by ga.user_id"#,
         group_id
     )
     .fetch_all(db)
@@ -243,17 +396,17 @@ mod tests {
     async fn create_adminship_for_non_member(db: PgPool) {
         let e_id = id_of(&db, "tlth.e").await;
 
-        let adminship = create_adminship(&db, "user_a", e_id).await.unwrap();
-        assert_eq!(adminship.user_id, "user_a");
+        let adminship = create_adminship(&db, "email:user_a", e_id).await.unwrap();
+        assert_eq!(adminship.user_id, "email:user_a");
         assert_eq!(adminship.group_path.to_string(), "tlth.e");
 
         assert_eq!(
             group_admins(&db, e_id).await.unwrap(),
-            vec!["user_a"],
+            vec!["email:user_a"],
             "the new adminship should be visible via group_admins",
         );
         assert_eq!(
-            closest_user_adminship(&db, "user_a", e_id)
+            closest_user_adminship(&db, "email:user_a", e_id)
                 .await
                 .unwrap()
                 .map(|path| path.to_string()),
@@ -264,8 +417,27 @@ mod tests {
     #[sqlx::test(fixtures("adminship"))]
     async fn create_adminship_idempotent(db: PgPool) {
         let e_id = id_of(&db, "tlth.e").await;
-        create_adminship(&db, "user_a", e_id).await.unwrap();
-        create_adminship(&db, "user_a", e_id).await.unwrap();
+        create_adminship(&db, "email:user_a", e_id).await.unwrap();
+        create_adminship(&db, "email:user_a", e_id).await.unwrap();
+    }
+
+    #[sqlx::test(fixtures("adminship"))]
+    async fn direct_and_parent_adminship_have_distinct_scopes(db: PgPool) {
+        let e_id = id_of(&db, "tlth.e").await;
+        let nolla_id = id_of(&db, "tlth.e.nolla").await;
+        create_adminship(&db, "email:user_a", e_id).await.unwrap();
+
+        check_direct_adminship(&db, "email:user_a", e_id)
+            .await
+            .unwrap();
+        assert!(
+            check_direct_adminship(&db, "email:user_a", nolla_id)
+                .await
+                .is_err()
+        );
+        check_direct_or_parent_adminship(&db, "email:user_a", nolla_id)
+            .await
+            .unwrap();
     }
 
     #[sqlx::test(fixtures("adminship"))]
@@ -273,16 +445,24 @@ mod tests {
         let nolla_id = id_of(&db, "tlth.e.nolla").await;
         let e_id = id_of(&db, "tlth.e").await;
 
-        create_adminship(&db, "user_a", nolla_id).await.unwrap();
+        create_adminship(&db, "email:user_a", nolla_id)
+            .await
+            .unwrap();
 
-        assert_eq!(group_admins(&db, nolla_id).await.unwrap(), vec!["user_a"]);
+        assert_eq!(
+            group_admins(&db, nolla_id).await.unwrap(),
+            vec!["email:user_a"]
+        );
         assert!(group_admins(&db, e_id).await.unwrap().is_empty());
 
-        create_adminship(&db, "user_a", e_id).await.unwrap();
-        assert_eq!(group_admins(&db, e_id).await.unwrap(), vec!["user_a"]);
+        create_adminship(&db, "email:user_a", e_id).await.unwrap();
+        assert_eq!(group_admins(&db, e_id).await.unwrap(), vec!["email:user_a"]);
 
-        remove_adminship(&db, "user_a", e_id).await.unwrap();
-        assert_eq!(group_admins(&db, nolla_id).await.unwrap(), vec!["user_a"]);
+        remove_adminship(&db, "email:user_a", e_id).await.unwrap();
+        assert_eq!(
+            group_admins(&db, nolla_id).await.unwrap(),
+            vec!["email:user_a"]
+        );
         assert!(group_admins(&db, e_id).await.unwrap().is_empty());
     }
 }

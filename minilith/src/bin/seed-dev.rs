@@ -33,8 +33,7 @@ use uuid::Uuid;
 const LOGO_IMG: Uuid = Uuid::from_u128(0x7c315a13_eff7_4268_89b9_5e072611ea21);
 
 /// Shared image id every seed group + activity points at, to avoid
-/// re-uploading the same placeholder per row. Matches the one
-/// `populate_tlth` in `user.rs` already inserts.
+/// re-uploading the same placeholder per row.
 async fn seed_image(ctx: &ContextWrapper) -> color_eyre::Result<()> {
     sqlx::query!(
         "insert into images (id, size, url) values ($1, 0, 'https://icelk.dev/tappen-icon.png') on conflict do nothing",

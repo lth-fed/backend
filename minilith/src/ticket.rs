@@ -188,6 +188,17 @@ struct TicketKind {
     #[oai(flatten)]
     inner: TicketBase,
     price: i64,
+    purchasing_available_start: OffsetDateTime,
+    purchasing_available_stop: OffsetDateTime,
+    max_tickets: i32,
+    min_tickets: i32,
+    reserved_or_purchased_tickets: i32,
+    allow_transfer_ticket_start: OffsetDateTime,
+    allow_transfer_ticket_stop: OffsetDateTime,
+    allow_transfer_ticket_bypass_allowed_groups: bool,
+    has_been_purchased: bool,
+    has_been_released: bool,
+    allowed_group_ids: Vec<Uuid>,
     available_addons: Vec<AvailableAddon>,
 }
 
@@ -379,7 +390,20 @@ impl Router {
         Path(id): Path<Uuid>,
     ) -> MinilithResult<Json<TicketKind>> {
         let mut ticket_kind = sqlx::query!(
-            "select name as \"name!: DIS\", activity_id , price
+            "select
+                name as \"name!: DIS\", activity_id, price,
+                purchasing_available_start, purchasing_available_stop,
+                max_tickets, min_tickets, reserved_or_purchased_tickets,
+                allow_transfer_ticket_start, allow_transfer_ticket_stop,
+                allow_transfer_ticket_bypass_allowed_groups,
+                (
+                    has_been_purchased
+                    or exists (
+                        select 1 from purchased_tickets
+                        where purchased_tickets.ticket_kind_id = ticket_kinds.id
+                    )
+                ) as \"has_been_purchased!\",
+                has_been_released
             from ticket_kinds where id = $1",
             id
         )
@@ -390,6 +414,18 @@ impl Router {
                 activity_id: row.activity_id,
             },
             price: row.price.0,
+            purchasing_available_start: row.purchasing_available_start,
+            purchasing_available_stop: row.purchasing_available_stop,
+            max_tickets: row.max_tickets,
+            min_tickets: row.min_tickets,
+            reserved_or_purchased_tickets: row.reserved_or_purchased_tickets,
+            allow_transfer_ticket_start: row.allow_transfer_ticket_start,
+            allow_transfer_ticket_stop: row.allow_transfer_ticket_stop,
+            allow_transfer_ticket_bypass_allowed_groups: row
+                .allow_transfer_ticket_bypass_allowed_groups,
+            has_been_purchased: row.has_been_purchased,
+            has_been_released: row.has_been_released,
+            allowed_group_ids: Vec::new(),
             available_addons: Vec::new(),
         })
         .fetch_optional(&self.db)
@@ -398,6 +434,14 @@ impl Router {
 
         self.test_activity_access(user.get_id(), &ticket_kind.inner.activity_id)
             .await?;
+
+        ticket_kind.allowed_group_ids = sqlx::query_scalar!(
+            r#"select group_id from ticket_kind_allowed_groups
+            where ticket_kind_id = $1 order by group_id"#,
+            id,
+        )
+        .fetch_all(&self.db)
+        .await?;
 
         let options: HashMap<Uuid, Vec<AddonOption>> = sqlx::query!(
             "select ticket_addon_options.id, ticket_addon_id,
@@ -414,7 +458,7 @@ impl Router {
             (
                 row.ticket_addon_id,
                 AddonOption {
-                    id,
+                    id: row.id,
                     name: row.name.0,
                     price: row.price.0,
                     bookkeeping_prices: row.bkp,
@@ -510,15 +554,7 @@ impl Router {
 
             if row.reserved_or_purchased_tickets < row.max_tickets && row.count == 0 {
                 let mut txn = self.db.begin().await?;
-                // will fail if we've reserved too many
-                if sqlx::query!(
-                    "update ticket_kinds set
-                    reserved_or_purchased_tickets = reserved_or_purchased_tickets + 1"
-                )
-                .execute(&mut txn.executor())
-                .await
-                .is_ok()
-                {
+                if reserve_ticket_capacity(&mut txn, req.ticket_kind, 1).await? == 1 {
                     // give reservation
                     sqlx::query!(
                         "insert into ticket_reservations
@@ -1127,8 +1163,13 @@ impl Router {
                     let mut txn = self.db.begin().await?;
                     let Some(row) = sqlx::query!(
                         "update ticket_reservations
-                        set transaction_id = null 
-                        returning id, timeout < now() as \"has_timed_out!\""
+                        set transaction_id = null
+                        where transaction_id = $1
+                        returning
+                            id,
+                            ticket_kind_id,
+                            timeout < now() as \"has_timed_out!\"",
+                        data.transaction_id,
                     )
                     .fetch_optional(&mut txn.executor())
                     .await?
@@ -1144,6 +1185,15 @@ impl Router {
                         sqlx::query!("delete from ticket_reservations where id = $1", row.id)
                             .execute(&mut txn.executor())
                             .await?;
+                        sqlx::query!(
+                            r#"update ticket_kinds
+                            set reserved_or_purchased_tickets =
+                                reserved_or_purchased_tickets - 1
+                            where id = $1"#,
+                            row.ticket_kind_id,
+                        )
+                        .execute(&mut txn.executor())
+                        .await?;
                     }
                     txn.commit().await?;
                 }
@@ -1167,6 +1217,71 @@ fn new_timeout_interval() -> PgInterval {
         microseconds: (minute_in_microseconds * (15. + 3. * random::<f64>())) as i64,
     }
 }
+
+/// Atomically reserves up to `requested` places while enforcing both the
+/// ticket-kind and activity-wide limits. Locking the activity row serializes
+/// reservations made concurrently for different ticket kinds of the same
+/// activity.
+async fn reserve_ticket_capacity(
+    db: &mut Transaction<'_>,
+    ticket_kind: Uuid,
+    requested: i32,
+) -> MinilithResult<i32> {
+    // This must be a separate statement from the SUM below. At READ COMMITTED,
+    // a statement which waits for a row lock keeps its original statement
+    // snapshot; the next statement gets a fresh snapshot after the previous
+    // activity reservation committed.
+    let activity_exists = sqlx::query_scalar!(
+        r#"select activities.id
+        from activities
+        inner join ticket_kinds target
+            on target.activity_id = activities.id
+        where target.id = $1
+        for update of activities"#,
+        ticket_kind,
+    )
+    .fetch_optional(&mut db.executor())
+    .await?
+    .is_some();
+    if !activity_exists {
+        return Ok(0);
+    }
+
+    let granted = sqlx::query_scalar!(
+        r#"with capacity as materialized (
+            select greatest(least(
+                $2,
+                kind.max_tickets - kind.reserved_or_purchased_tickets,
+                activities.max_tickets - coalesce((
+                    select sum(all_kinds.reserved_or_purchased_tickets)::int
+                    from ticket_kinds all_kinds
+                    where all_kinds.activity_id = activities.id
+                ), 0)
+            ), 0)::int as granted
+            from ticket_kinds kind
+            inner join activities on activities.id = kind.activity_id
+            where kind.id = $1
+        ), updated as (
+            update ticket_kinds
+            set reserved_or_purchased_tickets =
+                reserved_or_purchased_tickets + capacity.granted
+            from capacity
+            where ticket_kinds.id = $1
+            returning ticket_kinds.id
+        )
+        select capacity.granted
+        from capacity
+        inner join updated on true"#,
+        ticket_kind,
+        requested,
+    )
+    .fetch_optional(&mut db.executor())
+    .await?
+    .flatten()
+    .unwrap_or(0);
+    Ok(granted)
+}
+
 /// Releases a ticket. This MUST be called at the moment the tickets should be released.
 ///
 /// # Errors
@@ -1196,8 +1311,13 @@ pub async fn release(db: &mut Transaction<'_>, id: Uuid) -> MinilithResult<()> {
         clippy::cast_sign_loss,
         reason = "it's constrained to be postitive in sql"
     )]
-    let (reservations, reservation_queuers) =
-        queuers.split_at((ticket_kind.max_tickets as usize).min(queuers.len()));
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+    let requested = (ticket_kind.max_tickets - ticket_kind.reserved_or_purchased_tickets)
+        .min(queuers.len() as i32)
+        .max(0);
+    let granted = reserve_ticket_capacity(db, id, requested).await?;
+    #[allow(clippy::cast_sign_loss)]
+    let (reservations, reservation_queuers) = queuers.split_at(granted as usize);
 
     let timestamps: Vec<PgInterval> = std::iter::repeat_with(new_timeout_interval)
         .take(reservations.len())
@@ -1338,20 +1458,34 @@ pub async fn check_all_tickets(db: &PgPool) -> MinilithResult<()> {
 
     // clear reservation queue when there are no more tickets
     // we use purchased_tickets since they never decrease so the lock on it doesn't matter!
-    sqlx::query_scalar!(
-        "delete from ticket_reservation_queuers
-        where user_id = (
-            select user_id
-            from ticket_reservation_queuers
-            inner join ticket_kinds kind on (kind.id = ticket_kind_id)
-            where max_tickets = reserved_or_purchased_tickets
-            and (select count(id) from purchased_tickets where ticket_kind_id = kind.id) = max_tickets
-            for update skip locked
-        )"
+    sqlx::query!(
+        r#"delete from ticket_reservation_queuers queuer
+        using ticket_kinds kind
+        where kind.id = queuer.ticket_kind_id
+        and (
+            (
+                kind.max_tickets = kind.reserved_or_purchased_tickets
+                and (
+                    select count(*) from purchased_tickets
+                    where ticket_kind_id = kind.id
+                ) >= kind.max_tickets
+            )
+            or exists (
+                select 1
+                from activities
+                where activities.id = kind.activity_id
+                and (
+                    select count(*)
+                    from purchased_tickets
+                    inner join ticket_kinds purchased_kind
+                        on purchased_kind.id = purchased_tickets.ticket_kind_id
+                    where purchased_kind.activity_id = activities.id
+                ) >= activities.max_tickets
+            )
+        )"#
     )
     .execute(db)
-    .await
-     ?;
+    .await?;
 
     Ok(())
 }
@@ -1448,7 +1582,7 @@ pub async fn give_reservations(
     fetch_n: i32,
     db: &mut Transaction<'_>,
 ) -> MinilithResult<()> {
-    let removed_reservations = sqlx::query_scalar!(
+    let mut removed_reservations = sqlx::query_scalar!(
         "select user_id
         from ticket_reservation_queuers queuers
         where ticket_kind_id = $1
@@ -1460,6 +1594,14 @@ pub async fn give_reservations(
     )
     .fetch_all(&mut db.executor())
     .await?;
+    if removed_reservations.is_empty() {
+        return Ok(());
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+    let granted =
+        reserve_ticket_capacity(db, ticket_kind, removed_reservations.len() as i32).await?;
+    #[allow(clippy::cast_sign_loss)]
+    removed_reservations.truncate(granted as usize);
     if removed_reservations.is_empty() {
         return Ok(());
     }
@@ -1476,27 +1618,6 @@ pub async fn give_reservations(
     )
     .execute(&mut db.executor())
     .await?;
-    match sqlx::query!(
-        "update ticket_kinds
-        set reserved_or_purchased_tickets = reserved_or_purchased_tickets + $1
-        where id = $2",
-        fetch_n,
-        ticket_kind
-    )
-    .execute(&mut db.executor())
-    .await
-    {
-        Err(sqlx::Error::Database(err)) if err.kind() == sqlx::error::ErrorKind::CheckViolation => {
-            error!(
-                %ticket_kind,
-                "tried to reserve too many tickets, this should not happen!",
-            );
-            return Ok(());
-        }
-        Err(err) => return Err(err.into()),
-        Ok(_) => {}
-    }
-
     sqlx::query!(
         "delete from ticket_reservation_queuers
         where ticket_kind_id = $1
@@ -1548,6 +1669,16 @@ async fn pay_for_reservation(
         // otherwise, we're golden, this is just a second "person has paid" callback.
         return Ok(None);
     };
+    sqlx::query!(
+        r#"update ticket_kinds
+        set has_been_purchased = true
+        where id = (
+            select ticket_kind_id from purchased_tickets where id = $1
+        )"#,
+        id,
+    )
+    .execute(&mut txn.executor())
+    .await?;
     // move addons:
     sqlx::query!(
         "insert into purchased_ticket_addons
@@ -1582,6 +1713,74 @@ async fn pay_for_reservation(
         return Ok(None);
     }
     Ok(Some(id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[sqlx::test(fixtures("ticket_capacity"))]
+    async fn reservation_capacity_is_shared_by_ticket_kinds(db: sqlx::PgPool) {
+        let db = sqlx_tracing::Pool::from(db);
+        let first = Uuid::parse_str("00000000-0000-0000-0000-000000000004").unwrap();
+        let second = Uuid::parse_str("00000000-0000-0000-0000-000000000005").unwrap();
+
+        let mut txn = db.begin().await.unwrap();
+        assert_eq!(
+            reserve_ticket_capacity(&mut txn, first, 2).await.unwrap(),
+            2
+        );
+        assert_eq!(
+            reserve_ticket_capacity(&mut txn, second, 2).await.unwrap(),
+            1
+        );
+        assert_eq!(
+            reserve_ticket_capacity(&mut txn, first, 1).await.unwrap(),
+            0
+        );
+        txn.commit().await.unwrap();
+
+        let total = sqlx::query_scalar!(
+            r#"select sum(reserved_or_purchased_tickets)::int
+            from ticket_kinds where activity_id =
+                '00000000-0000-0000-0000-000000000003'"#
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert_eq!(total, Some(3));
+    }
+
+    #[sqlx::test(fixtures("ticket_capacity"))]
+    async fn concurrent_ticket_kinds_cannot_exceed_activity_capacity(db: sqlx::PgPool) {
+        let db = sqlx_tracing::Pool::from(db);
+        let first = Uuid::parse_str("00000000-0000-0000-0000-000000000004").unwrap();
+        let second = Uuid::parse_str("00000000-0000-0000-0000-000000000005").unwrap();
+
+        let reserve = |ticket_kind| {
+            let db = db.clone();
+            async move {
+                let mut txn = db.begin().await.unwrap();
+                let granted = reserve_ticket_capacity(&mut txn, ticket_kind, 2)
+                    .await
+                    .unwrap();
+                txn.commit().await.unwrap();
+                granted
+            }
+        };
+        let (first_granted, second_granted) = tokio::join!(reserve(first), reserve(second));
+        assert_eq!(first_granted + second_granted, 3);
+
+        let total = sqlx::query_scalar!(
+            r#"select sum(reserved_or_purchased_tickets)::int
+            from ticket_kinds where activity_id =
+                '00000000-0000-0000-0000-000000000003'"#
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert_eq!(total, Some(3));
+    }
 }
 
 // ticket buy:

@@ -32,25 +32,27 @@ pub async fn closest_user_membership(
     .map_err(Into::into)
 }
 
-/// Returns all the groups that the user is a member of, including nested
-/// groups.
+/// Returns every group in each root tree where the user has a direct
+/// membership. This intentionally includes sibling branches so the client can
+/// configure visibility and notification settings for the whole organization.
 ///
 /// # Errors
 ///
 /// DB.
 pub async fn user_groups(db: impl PgExecutor<'_>, user_id: &str) -> MinilithResult<Vec<Group>> {
-    // TODO: Tree structure?
     sqlx::query_as!(
         Group,
         r#"
-            select distinct g.id, g.path, g.limit_membership_visibility, g.name as "name!: DIS", g.description as "description!: DIS", g.deleted
+            select distinct
+                g.id, g.path, g.limit_membership_visibility,
+                g.name as "name!: DIS",
+                g.description as "description!: DIS",
+                g.deleted
             from groups g
             join group_memberships gm on gm.user_id = $1
             join groups mg on mg.id = gm.group_id
-            where
-                (g.limit_membership_visibility = false and g.path <@ mg.path)
-                or
-                (g.limit_membership_visibility = true and g.id = gm.group_id)
+            where subpath(g.path, 0, 1) = subpath(mg.path, 0, 1)
+            order by g.path
         "#,
         user_id
     )
@@ -66,11 +68,10 @@ pub async fn user_groups(db: impl PgExecutor<'_>, user_id: &str) -> MinilithResu
 /// DB.
 pub async fn group_members(db: impl PgExecutor<'_>, group_id: Uuid) -> MinilithResult<Vec<String>> {
     sqlx::query_scalar!(
-        r#"select distinct gm.user_id
+        r#"select gm.user_id
         from group_memberships gm
-        join groups g on g.id = gm.group_id
-        join groups target on target.id = $1
-        where g.path <@ target.path"#,
+        where gm.group_id = $1
+        order by gm.user_id"#,
         group_id
     )
     .fetch_all(db)
@@ -102,38 +103,40 @@ mod tests {
     // check out fixtures/user_groups.sql
     #[sqlx::test(fixtures("user_groups"))]
     async fn group_membership(db: PgPool) {
-        // Membership in `tlth.e` (limit_mv=false) reveals it and its limit_mv=false
-        // descendants, but not the limit_mv=true `tlth.e.nolla`.
+        let complete_tlth_tree = vec![
+            "tlth",
+            "tlth.d",
+            "tlth.d.nolla",
+            "tlth.d.styrelsen",
+            "tlth.e",
+            "tlth.e.nolla",
+            "tlth.e.styrelsen",
+            "tlth.f",
+            "tlth.f.nolla",
+            "tlth.f.styrelsen",
+        ];
+
+        // Any direct membership reveals the complete root tree for filters.
         assert_eq!(
             sorted_paths(user_groups(&db, "user_a").await.unwrap()),
-            vec!["tlth.e", "tlth.e.styrelsen"],
+            complete_tlth_tree.clone(),
         );
 
-        // Direct membership is the only way into a limit_mv=true group.
         assert_eq!(
             sorted_paths(user_groups(&db, "user_b").await.unwrap()),
-            vec!["tlth.d.nolla"],
+            complete_tlth_tree.clone(),
         );
 
-        // Overlapping memberships dedupe; limit_mv=true `*.nolla` groups stay hidden.
         assert_eq!(
             sorted_paths(user_groups(&db, "user_c").await.unwrap()),
-            vec![
-                "tlth",
-                "tlth.d",
-                "tlth.d.styrelsen",
-                "tlth.e",
-                "tlth.e.styrelsen",
-                "tlth.f",
-                "tlth.f.styrelsen",
-            ],
+            complete_tlth_tree,
         );
 
         assert!(user_groups(&db, "nobody").await.unwrap().is_empty());
 
         assert_eq!(
             group_members(&db, id_of(&db, "tlth").await).await.unwrap(),
-            vec!["user_a", "user_b", "user_c"]
+            vec!["user_c"]
         );
 
         assert_eq!(

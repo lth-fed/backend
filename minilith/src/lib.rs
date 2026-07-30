@@ -23,11 +23,14 @@ pub mod user;
 pub use bin_common::PgPool;
 pub use context::{Context, ContextWrapper};
 pub use minilith_errors::*;
+#[cfg(not(test))]
 use tracing::error;
 
 pub type DbInternationalizedString = sqlx::types::Json<InternationalizedString>;
 // eventually implement Deserialize ourselves with restrictions
-#[derive(Debug, Clone, poem_openapi::NewType, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, poem_openapi::NewType, serde::Serialize, serde::Deserialize,
+)]
 #[oai(from_multipart = false, from_parameter = false, to_header = false)]
 #[serde(transparent)]
 pub struct InternationalizedString(HashMap<String, String>);
@@ -106,6 +109,9 @@ pub async fn get_endpoint(
     let transaction_context = JwkContext::<TransactionsUrl>::new("teknologappen").await?;
     let api_service = OpenApiService::new(
         (
+            admin::Router {
+                context: Arc::clone(&context),
+            },
             activities::Router {
                 context: Arc::clone(&context),
             },

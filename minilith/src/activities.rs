@@ -23,18 +23,18 @@ pub(crate) struct Location {
     url: Option<String>,
 }
 
-#[derive(Object)]
-struct Coords {
-    north: f64,
-    east: f64,
+#[derive(Debug, Object)]
+pub(crate) struct Coords {
+    pub(crate) north: f64,
+    pub(crate) east: f64,
 }
-#[derive(Object)]
+#[derive(Debug, Object)]
 #[oai(rename = "Location")]
 pub(crate) struct PoemLocation {
-    name: Option<InternationalizedString>,
-    directions: Option<InternationalizedString>,
-    coordinate_wgs84: Option<Coords>,
-    url: Option<String>,
+    pub(crate) name: Option<InternationalizedString>,
+    pub(crate) directions: Option<InternationalizedString>,
+    pub(crate) coordinate_wgs84: Option<Coords>,
+    pub(crate) url: Option<String>,
 }
 impl From<Location> for PoemLocation {
     fn from(value: Location) -> Self {
@@ -77,8 +77,11 @@ struct Activity {
     time_start: OffsetDateTime,
     time_end: OffsetDateTime,
     image_url: String,
+    image_id: Uuid,
     /// Will always be true for users, but may vary for admins.
     is_hidden: bool,
+    is_hidden_for_other_admins: bool,
+    max_tickets: i32,
     hosts: Vec<Host>,
     /// If there are any tickets for this event.
     tickets_exist: bool,
@@ -180,9 +183,11 @@ impl Router {
                 users.name as "responsible_name",
                 users.nonce as "responsible_nonce",
                 images.url as "image_url",
+                activities.image_id,
                 creator.id as creator_id,
                 creator.path as creator_path,
-                is_hidden
+                is_hidden,
+                is_hidden_for_other_admins
             from activities
             inner join users on users.id = responsible_id
             inner join images on images.id = image_id
@@ -246,7 +251,10 @@ impl Router {
             time_start: activity.time_start,
             time_end: activity.time_end,
             image_url: activity.image_url,
+            image_id: activity.image_id,
             is_hidden: activity.is_hidden,
+            is_hidden_for_other_admins: activity.is_hidden_for_other_admins,
+            max_tickets: activity.max_tickets,
             hosts,
             tickets_exist: tickets_available.value.unwrap_or(false),
         };
@@ -265,13 +273,19 @@ impl Router {
         self.test_activity_access(user.get_id(), &id.0).await?;
         let kinds = sqlx::query!(
             r#"
-            select id,
+            select kind.id,
             kind.name as "name!: DIS",
             kind.price,
             kind.purchasing_available_start,
             kind.purchasing_available_stop,
-            kind.reserved_or_purchased_tickets,
-            kind.max_tickets,
+            greatest(least(
+                kind.max_tickets - kind.reserved_or_purchased_tickets,
+                activities.max_tickets - (
+                    select coalesce(sum(all_kinds.reserved_or_purchased_tickets), 0)::int
+                    from ticket_kinds all_kinds
+                    where all_kinds.activity_id = activities.id
+                )
+            ), 0)::int as "available_tickets!",
             exists (
                 select 1
                 from group_memberships
@@ -288,22 +302,22 @@ impl Router {
             ) as membership_passing
 
             from ticket_kinds as kind
-            where activity_id = $1
-            and max_tickets > 0
+            inner join activities on activities.id = kind.activity_id
+            where kind.activity_id = $1
+            and kind.max_tickets > 0
             "#,
             id.0,
             user.get_id()
         )
         .map(|kind| {
             // todo(release): check activity max too
-            let tickets_left = kind.max_tickets - kind.reserved_or_purchased_tickets;
             ActivityTicketKind {
                 id: kind.id,
                 name: kind.name.0,
                 price: kind.price.0,
                 purchasing_available_start: kind.purchasing_available_start,
                 purchasing_available_stop: kind.purchasing_available_stop,
-                tickets_left: (tickets_left < 10i32).then_some(tickets_left),
+                tickets_left: (kind.available_tickets < 10).then_some(kind.available_tickets),
                 membership_passing: kind.membership_passing.unwrap_or(false),
             }
         })

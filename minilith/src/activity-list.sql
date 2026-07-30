@@ -1,6 +1,7 @@
 with visible_activities as (
     select distinct on (kind.activity_id)
-        kind.activity_id
+        kind.activity_id,
+        false as admin_access
     from group_memberships
     inner join groups member_group on member_group.id = group_memberships.group_id
     -- get the ticket_kinds we're allowed to purchase
@@ -38,7 +39,8 @@ with visible_activities as (
     -- admin
     -- explicitly invited to view other group's activities
     select distinct on (host.activity_id)
-        host.activity_id
+        host.activity_id,
+        true as admin_access
     from group_adminships
     inner join groups admin_group on admin_group.id = group_adminships.group_id
     inner join allow_admins_from_group_view_activities allowed_to_view on (allowed_to_view.access_group_id = admin_group.id)
@@ -56,13 +58,18 @@ with visible_activities as (
     -- admin
     -- one's own events
     select distinct on (host.activity_id)
-        host.activity_id
+        host.activity_id,
+        true as admin_access
     from group_adminships
-    inner join groups admin_group on admin_group.id = group_adminships.group_id
-    inner join groups subgroup on admin_group.path @> sungroup.path
-    inner join activity_hosts host on (host.group_id = subgroup.id)
+    inner join activity_hosts host
+        on host.group_id = group_adminships.group_id
     where
         group_adminships.user_id = $1
+),
+visible_activity_ids as (
+    select activity_id, bool_or(admin_access) as admin_access
+    from visible_activities
+    group by activity_id
 )
 
 select a.id,
@@ -75,14 +82,14 @@ select a.id,
     img.url,
     creator.name as "creator_name!: DIS",
     creator.path as creator_path
-from visible_activities
+from visible_activity_ids
 -- get the activity
 inner join activities a on a.id = activity_id
 
 -- extra data
 inner join groups creator on creator.id = a.creator_id
 inner join images img on img.id = a.image_id
-where a.is_hidden = false
+where (a.is_hidden = false or admin_access)
     and time_end + '6 hours' > now()
 order by time_start, a.id
 -- todo: add paging by month for admin calendar

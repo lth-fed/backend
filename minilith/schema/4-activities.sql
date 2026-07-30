@@ -26,24 +26,24 @@ create table activities (
     -- only for normal users, admins can always see them
     is_hidden boolean not null default true,
     is_hidden_for_other_admins boolean not null default false,
-    max_tickets integer not null check (max_tickets > 0) -- default MAX_INT
+    max_tickets integer not null check (max_tickets >= 0) -- default MAX_INT
 );
 
 -- co-hosts of event. MUST include activities.creator_id
 create table activity_hosts (
-    activity_id uuid not null references activities(id),
+    activity_id uuid not null references activities(id) on delete cascade,
     group_id uuid not null references groups(id),
     primary key (activity_id, group_id)
 );
 -- invites to be `activity_hosts`
 create table activity_host_invites (
-    activity_id uuid not null references activities(id),
+    activity_id uuid not null references activities(id) on delete cascade,
     group_id uuid not null references groups(id),
     primary key (activity_id, group_id)
 );
 
 create table activity_verifiers (
-    activity_id uuid not null references activities(id),
+    activity_id uuid not null references activities(id) on delete cascade,
     user_id text not null references users(id),
     primary key (activity_id, user_id)
 );

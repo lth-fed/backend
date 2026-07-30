@@ -1,8 +1,7 @@
 use std::ops::Deref;
 
 use fed_auth_verifier::{User, callbacks::AuthCallbackDataV1};
-use poem_openapi::{Object, OpenApi, payload::Json};
-use sqlx::postgres::types::PgLTree;
+use poem_openapi::{Enum, Object, OpenApi, param::Path as ApiPath, payload::Json};
 use sqlx::types::Uuid;
 use sqlx::types::time::OffsetDateTime;
 
@@ -10,7 +9,7 @@ use crate::context::ContextWrapper;
 use crate::group::Path;
 use crate::{
     DbInternationalizedString as DIS, InternationalizedString, MinilithErrorOptionExt as _,
-    MinilithErrorResultExt as _, MinilithResult,
+    MinilithResult,
 };
 
 #[derive(Clone, Debug)]
@@ -23,31 +22,6 @@ impl Deref for Router {
         &self.context
     }
 }
-const DEMO: &str = include_str!("./demo.csv");
-fn get_guild(stil_id: &str) -> Option<char> {
-    for line in DEMO.lines().skip(1) {
-        let Some(id) = line.split(',').nth(3) else {
-            continue;
-        };
-        let id = id
-            .strip_prefix('"')
-            .unwrap_or(id)
-            .strip_suffix('"')
-            .unwrap_or(id);
-        if id == stil_id {
-            let guild = line
-                .split(',')
-                .nth(4)?
-                .strip_prefix('"')
-                .unwrap_or(id)
-                .strip_suffix('"')
-                .unwrap_or(id);
-            return guild.chars().next().as_ref().map(char::to_ascii_lowercase);
-        }
-    }
-    None
-}
-
 #[derive(Object)]
 struct MyGroup {
     id: Uuid,
@@ -64,6 +38,28 @@ struct Me {
     language: String,
     creation: OffsetDateTime,
     groups: Vec<MyGroup>,
+}
+
+#[derive(Debug, Clone, Copy, Enum, sqlx::Type)]
+#[oai(rename_all = "lowercase")]
+#[sqlx(type_name = "notification_level", rename_all = "lowercase")]
+enum NotificationLevel {
+    None,
+    Personalized,
+    All,
+}
+
+#[derive(Debug, Object)]
+struct GroupSetting {
+    group_id: Uuid,
+    visible: bool,
+    notification_level: NotificationLevel,
+}
+
+#[derive(Debug, Object)]
+struct UpdateGroupSetting {
+    visible: bool,
+    notification_level: NotificationLevel,
 }
 
 #[OpenApi(prefix_path = "/user")]
@@ -114,6 +110,78 @@ impl Router {
             groups,
         }))
     }
+
+    /// Lists the user's explicit group filter settings. Groups without a row
+    /// inherit from their nearest configured ancestor.
+    #[oai(path = "/group-settings", method = "get")]
+    async fn group_settings(&self, user: User) -> MinilithResult<Json<Vec<GroupSetting>>> {
+        let settings = sqlx::query_as!(
+            GroupSetting,
+            r#"select
+                group_id,
+                visible,
+                notification_level as "notification_level!: NotificationLevel"
+            from user_group_settings
+            where user_id = $1
+            order by group_id"#,
+            user.get_id(),
+        )
+        .fetch_all(&self.db)
+        .await?;
+        Ok(Json(settings))
+    }
+
+    /// Creates or replaces an explicit group filter setting.
+    #[oai(path = "/group-settings/:group_id", method = "put")]
+    #[allow(trivial_casts, reason = "sqlx custom enum parameter type override")]
+    async fn update_group_setting(
+        &self,
+        user: User,
+        ApiPath(group_id): ApiPath<Uuid>,
+        Json(body): Json<UpdateGroupSetting>,
+    ) -> MinilithResult<Json<GroupSetting>> {
+        let in_user_tree = sqlx::query_scalar!(
+            r#"select exists (
+                select 1
+                from groups target
+                inner join group_memberships membership on membership.user_id = $1
+                inner join groups member_group on member_group.id = membership.group_id
+                where target.id = $2
+                and subpath(target.path, 0, 1) = subpath(member_group.path, 0, 1)
+            ) as "exists!""#,
+            user.get_id(),
+            group_id,
+        )
+        .fetch_one(&self.db)
+        .await?;
+        if !in_user_tree {
+            return Err(crate::MinilithEndpointError::bad_frontend_code(
+                "group is outside the user's group trees",
+                "",
+            ));
+        }
+
+        let setting = sqlx::query_as!(
+            GroupSetting,
+            r#"insert into user_group_settings
+                (user_id, group_id, visible, notification_level)
+            values ($1, $2, $3, $4)
+            on conflict (group_id, user_id) do update set
+                visible = excluded.visible,
+                notification_level = excluded.notification_level
+            returning
+                group_id,
+                visible,
+                notification_level as "notification_level!: NotificationLevel""#,
+            user.get_id(),
+            group_id,
+            body.visible,
+            body.notification_level as NotificationLevel,
+        )
+        .fetch_one(&self.db)
+        .await?;
+        Ok(Json(setting))
+    }
     /// # Errors
     ///
     /// DB, PARAM.
@@ -135,26 +203,6 @@ impl Router {
         )
         .execute(&self.db)
         .await?;
-
-        if let Some(guild) = get_guild(cb_data.sub.strip_prefix("test:").unwrap_or(&cb_data.sub)) {
-            let id = sqlx::query!(
-                "select id from groups where groups.path = $1",
-                format!("tlth.{guild}")
-                    .parse::<PgLTree>()
-                    .wrap_err_internal("guild invalid PgLTree")?
-            )
-            .fetch_one(&self.db)
-            .await?;
-            let id = id.id;
-            sqlx::query!(
-                "insert into group_memberships (group_id, user_id)
-                values ($1, $2) on conflict do nothing",
-                id,
-                cb_data.sub
-            )
-            .execute(&self.db)
-            .await?;
-        }
 
         Ok(())
     }

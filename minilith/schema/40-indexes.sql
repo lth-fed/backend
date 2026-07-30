@@ -16,6 +16,10 @@ create index ticket_kind_allowed_groups_by_ticket_kind
     on ticket_kind_allowed_groups using hash (ticket_kind_id);
 create index ticket_kind_notifications_by_notification
     on ticket_kind_notifications using hash (notification_id);
+create index ticket_kind_notifications_by_ticket_kind
+    on ticket_kind_notifications using hash (ticket_kind_id);
+create index activity_admin_access_by_access_group
+    on allow_admins_from_group_view_activities using hash (access_group_id);
 
 -- tickets
 create index ticket_kind_start on ticket_kinds using btree (purchasing_available_start);
@@ -27,3 +31,5 @@ create index ticket_reserved_transaction on ticket_reservations using hash (tran
 create index ticket_purchased_transaction on purchased_tickets using hash (transaction_id);
 create index purchased_tickets_by_owner_and_ticket_kind
     on purchased_tickets (owner_id, ticket_kind_id);
+create index purchased_tickets_by_ticket_kind
+    on purchased_tickets using hash (ticket_kind_id);

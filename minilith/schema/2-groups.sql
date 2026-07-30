@@ -54,6 +54,7 @@ create table group_adminships (
     user_id text not null references users(id),
     group_id uuid not null references groups(id),
     primary key (user_id, group_id),
+    constraint group_adminships_email_account check (user_id like 'email:%'),
     -- ensure there exists a group membership with the same user_id and group_id
     constraint group_adminships_group_membership_fk foreign key (user_id, group_id)
         references group_memberships (user_id, group_id)
@@ -72,6 +73,7 @@ create table user_group_settings (
 
 -- grants the admins of `access_group_id` view of the activities where we are creators or co-hosts
 create table allow_admins_from_group_view_activities (
-    host_group_id uuid not null,
-    access_group_id uuid not null
+    host_group_id uuid not null references groups(id) on delete cascade,
+    access_group_id uuid not null references groups(id) on delete cascade,
+    primary key (host_group_id, access_group_id)
 );

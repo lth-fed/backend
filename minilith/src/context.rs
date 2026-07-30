@@ -132,6 +132,7 @@ impl Context {
             #[cfg(debug_assertions)]
             Err(err) => {
                 warn!(
+                    ?err,
                     "Could not connect to s3 bucket. Continuing without suppoort. \
                     Add account at console: http://localhost:9001 \
                     password&user is rustfsadmin. Save as env vars."
@@ -302,21 +303,45 @@ impl Context {
         // this clusterfuck is the same logic as in `./activities.rs`, which checks if this
         // activity should be visible
         let allowed = sqlx::query_scalar!(
-            r#"select exists (select 1
-            from group_memberships
-            inner join groups member_group on member_group.id = group_memberships.group_id
-            -- get the ticket_kinds we're allowed to purchase
-            inner join groups allowed_group on allowed_group.path @> member_group.path
-            inner join ticket_kind_allowed_groups tk_ag on tk_ag.group_id = allowed_group.id
-            inner join ticket_kinds kind on kind.id = tk_ag.ticket_kind_id
-
-            where group_memberships.user_id = $1
-            and kind.activity_id = $2
-            and (
-                member_group.limit_membership_visibility = false
-                or tk_ag.group_id = group_memberships.group_id
-            )) as "exists!"
-            "#,
+            r#"select (
+                exists (
+                    select 1
+                    from group_memberships
+                    inner join groups member_group
+                        on member_group.id = group_memberships.group_id
+                    inner join groups allowed_group
+                        on allowed_group.path @> member_group.path
+                    inner join ticket_kind_allowed_groups tk_ag
+                        on tk_ag.group_id = allowed_group.id
+                    inner join ticket_kinds kind on kind.id = tk_ag.ticket_kind_id
+                    where group_memberships.user_id = $1
+                    and kind.activity_id = $2
+                    and (
+                        member_group.limit_membership_visibility = false
+                        or tk_ag.group_id = group_memberships.group_id
+                    )
+                )
+                or exists (
+                    select 1
+                    from activity_hosts
+                    inner join group_adminships
+                        on group_adminships.group_id = activity_hosts.group_id
+                    where activity_hosts.activity_id = $2
+                    and group_adminships.user_id = $1
+                )
+                or exists (
+                    select 1
+                    from activity_hosts
+                    inner join allow_admins_from_group_view_activities allowed
+                        on allowed.host_group_id = activity_hosts.group_id
+                    inner join group_adminships
+                        on group_adminships.group_id = allowed.access_group_id
+                    inner join activities on activities.id = activity_hosts.activity_id
+                    where activity_hosts.activity_id = $2
+                    and group_adminships.user_id = $1
+                    and activities.is_hidden_for_other_admins = false
+                )
+            ) as "exists!""#,
             user,
             activity_id
         )
