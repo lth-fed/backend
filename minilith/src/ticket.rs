@@ -886,7 +886,22 @@ impl Router {
             wares: transaction_wares,
             stripe_success_url: body.stripe_success_url,
         };
-        let url = match body.provider {
+        let total_amount = payment_req
+            .wares
+            .iter()
+            .fold(0, |acc, ware| acc + ware.amount);
+        if body.provider == PurchaseProvider::Free && total_amount != 0 {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "cannot pay for non-free ticket with free provider",
+                "",
+            ));
+        }
+        let provider = if total_amount == 0 {
+            PurchaseProvider::Free
+        } else {
+            body.provider
+        };
+        let url = match provider {
             PurchaseProvider::Free => "/v0/free",
             PurchaseProvider::Swish => "/v0/swish",
             PurchaseProvider::Stripe => "/v0/stripe",
@@ -909,7 +924,7 @@ impl Router {
         // ========
         // Handle transaction API response
         // ========
-        let (transaction_id, response) = match body.provider {
+        let (transaction_id, response) = match provider {
             PurchaseProvider::Free => {
                 let body = resp
                     .json::<transactions::CreatePaymentResponseFree>()
@@ -1205,7 +1220,7 @@ pub async fn check_all_tickets(db: &PgPool) -> MinilithResult<()> {
         // take one release job
         // this works concurrently too!
         let ticket_kind = sqlx::query!(
-            "select user_id, ticket_kind_id from ticket_reservation_queuers
+            "select user_id, ticket_kind_id from ticket_release_queuers
             inner join ticket_kinds kind on (kind.id = ticket_kind_id)
             where kind.has_been_released = true
             limit 1
@@ -1281,10 +1296,16 @@ pub async fn update_misplaced_queuer(
 ) -> MinilithResult<()> {
     sqlx::query!(
         "insert into ticket_reservation_queuers (user_id, ticket_kind_id, placement)
-        select $1 as user_id, $2 as ticket_kind_id, queuers.placement + 1 as placement
-        from ticket_reservation_queuers queuers
+        select $1 as user_id, $2 as ticket_kind_id, coalesce((
+            select placement
+            from ticket_reservation_queuers reserv
+            where reserv.ticket_kind_id = $2
+            order by placement desc 
+            limit 1
+        ), kind.reserved_or_purchased_tickets) + 1 as placement
+        from ticket_release_queuers queuers
+        inner join ticket_kinds kind on kind.id = $2
         where queuers.ticket_kind_id = $2
-        order by placement desc 
         limit 1",
         user_id,
         ticket_kind

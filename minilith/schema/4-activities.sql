@@ -14,6 +14,7 @@ create table activities (
     id uuid primary key default uuidv4(),
     -- has to be user with email
     responsible_id text not null references users(id),
+    responsible_contact text not null,
     creator_id uuid not null references groups(id),
     --
     title jsonb not null,

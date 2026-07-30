@@ -486,13 +486,19 @@ impl MainRouter {
             .map_err(|_| OAuth2ApiResponse::Internal)?;
             match cb_url.as_latest() {
                 context::CallbackUrlVersion::V1 { url } => {
-                    self.reqwest_client
+                    let resp = self
+                        .reqwest_client
                         .post(url)
                         .body(token)
                         .send()
                         .await
                         .inspect_err(|err| error!("auth callback POST failed: {err}"))
                         .map_err(|_| OAuth2ApiResponse::Internal)?;
+                    if !resp.status().is_success() {
+                        let status = resp.status();
+                        let body = resp.text().await.ok();
+                        warn!(%status, ?body, "auth callback POST failed")
+                    }
                 }
             }
         }
