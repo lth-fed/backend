@@ -13,7 +13,10 @@ create table ticket_kinds (
     purchasing_available_stop timestamptz not null,
     max_tickets integer not null check (max_tickets >= 0), -- default MAX_INT
     min_tickets integer not null check (min_tickets >= 0), -- default MAX_INT
-    check (min_tickets < max_tickets),
+    check (
+        (min_tickets = 0 and max_tickets = 0)
+        or min_tickets < max_tickets
+    ),
     -- we need this as a lock so we don't make too many
     -- https://github.com/lth-fed/backend/pull/7#discussion_r3145792223
     reserved_or_purchased_tickets integer not null
@@ -150,5 +153,5 @@ create table purchased_ticket_addons (
 create table purchased_ticket_validations (
     id uuid primary key,
     purchased_ticket_id uuid not null references purchased_tickets(id),
-    timestamptz timestamptz not null
+    timestamp timestamptz not null default now()
 );

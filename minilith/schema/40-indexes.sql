@@ -25,3 +25,5 @@ create index ticket_reservation_timeout on ticket_reservations using btree (time
 create index ticket_release_queuers_ticket_id on ticket_release_queuers using hash (ticket_kind_id);
 create index ticket_reserved_transaction on ticket_reservations using hash (transaction_id);
 create index ticket_purchased_transaction on purchased_tickets using hash (transaction_id);
+create index purchased_tickets_by_owner_and_ticket_kind
+    on purchased_tickets (owner_id, ticket_kind_id);

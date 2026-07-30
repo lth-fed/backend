@@ -191,6 +191,33 @@ struct TicketKind {
     available_addons: Vec<AvailableAddon>,
 }
 
+/// The frontend has to encode / decode the QR with both these datapoints, maybe through
+/// `<id>.<time>` or JSON.
+#[derive(Object)]
+struct ValidateRequest {
+    purchased_ticket_id: Uuid,
+    created_at: OffsetDateTime,
+}
+#[derive(Object)]
+struct Validation {
+    at: OffsetDateTime,
+}
+#[derive(Object)]
+struct ValidateResponse {
+    verified: bool,
+    user_id: Option<String>,
+    previous_verifications: Vec<Validation>,
+}
+impl ValidateResponse {
+    pub fn not_valid() -> Self {
+        Self {
+            verified: false,
+            user_id: None,
+            previous_verifications: vec![],
+        }
+    }
+}
+
 #[OpenApi(prefix_path = "/tickets")]
 impl Router {
     /// # Errors
@@ -1010,6 +1037,51 @@ impl Router {
         reservation_txn.commit().await?;
 
         Ok(Json(response))
+    }
+
+    #[oai(path = "/validate", method = "post")]
+    pub async fn validate(
+        &self,
+        auth: User,
+        body: Json<ValidateRequest>,
+    ) -> MinilithResult<Json<ValidateResponse>> {
+        if body.created_at < OffsetDateTime::now_utc().saturating_sub(time::Duration::MINUTE * 5) {
+            return Ok(Json(ValidateResponse::not_valid()));
+        }
+        let Some(user_id) = sqlx::query_scalar!(
+            "select user_id from purchased_tickets 
+            inner join ticket_kinds kind on kind.id = purchased_tickets.ticket_kind_id
+            inner join activity_verifiers on activity_verifiers.activity_id = kind.activity_id
+            where purchased_tickets.id = $1 
+                and activity_verifiers.user_id = $2",
+            body.purchased_ticket_id,
+            auth.get_id()
+        )
+        .fetch_optional(&self.db)
+        .await?
+        else {
+            return Ok(Json(ValidateResponse::not_valid()));
+        };
+        sqlx::query!(
+            "insert into purchased_ticket_validations (id, purchased_ticket_id)
+            values ($1, $2)",
+            Uuid::new_v4(),
+            body.purchased_ticket_id
+        )
+        .execute(&self.db)
+        .await?;
+        let previous_verifications = sqlx::query!(
+            "select timestamp from purchased_ticket_validations where purchased_ticket_id = $1",
+            body.purchased_ticket_id
+        )
+        .map(|row| Validation { at: row.timestamp })
+        .fetch_all(&self.db)
+        .await?;
+        Ok(Json(ValidateResponse {
+            verified: true,
+            user_id: Some(user_id),
+            previous_verifications,
+        }))
     }
 
     /// `/v0/tickets/callback`

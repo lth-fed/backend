@@ -98,6 +98,8 @@ MINILITH_DOMAIN=api.teknologappen.se
 FED_AUTH_DOMAIN=api.auth.teknologappen.se
 TRANSACTIONS_DOMAIN=transactions.teknologappen.se
 GRAFANA_DOMAIN=grafana.teknologappen.se
+S3_DOMAIN=s3.teknologappen.se
+S3_CONSOLE_DOMAIN=s3-console.teknologappen.se
 ```
 
 Copy each `.env.example` to `.env` in `minilith`, `fed-auth`, and

@@ -74,6 +74,18 @@ pub async fn check_adminship(
     }
 }
 
+pub async fn check_has_any_adminship(db: impl PgExecutor<'_>, user_id: &str) -> MinilithResult<()> {
+    sqlx::query!(
+        "select group_id from group_adminships
+        where user_id = $1",
+        user_id
+    )
+    .fetch_one(db)
+    .await?;
+
+    Ok(())
+}
+
 /// Checks that the user has administrative rights on the parent group of the
 /// given group.
 ///

@@ -24,6 +24,7 @@ poem.workspace = true
 poem-openapi.workspace = true
 rand.workspace = true
 reqwest.workspace = true
+rust-s3 = "0.37.2"
 serde.workspace = true
 serde_json = "1.0.149"
 serde_with = "3.20.0"

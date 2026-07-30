@@ -10,6 +10,7 @@ use poem::{Endpoint, EndpointExt as _, Route};
 use poem_openapi::OpenApiService;
 
 pub mod activities;
+pub mod admin;
 pub mod context;
 pub mod group;
 pub mod healthcheck;

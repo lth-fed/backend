@@ -77,6 +77,8 @@ struct Activity {
     time_start: OffsetDateTime,
     time_end: OffsetDateTime,
     image_url: String,
+    /// Will always be true for users, but may vary for admins.
+    is_hidden: bool,
     hosts: Vec<Host>,
     /// If there are any tickets for this event.
     tickets_exist: bool,
@@ -92,6 +94,8 @@ struct BriefActivity {
     time_start: OffsetDateTime,
     time_end: OffsetDateTime,
     image_url: String,
+    /// If there are any tickets for this event.
+    is_hidden: bool,
 }
 
 #[derive(Object)]
@@ -124,10 +128,10 @@ impl Router {
     /// DB, AUTH.
     #[oai(path = "/", method = "get")]
     async fn list(&self, user: User) -> MinilithResult<Json<Vec<BriefActivity>>> {
-        let mut activities = sqlx::query_file!("src/activity-list.sql", user.get_id())
+        let activities = sqlx::query_file!("src/activity-list.sql", user.get_id())
             .map(|activity| BriefActivity {
                 id: activity.id,
-                creator_path: activity.path.to_string(),
+                creator_path: activity.creator_path.to_string(),
                 creator_name: activity.creator_name.0,
                 title: activity.title.0,
                 description: activity.description.0,
@@ -135,45 +139,12 @@ impl Router {
                 time_start: activity.time_start,
                 time_end: activity.time_end,
                 image_url: activity.url,
+                is_hidden: activity.is_hidden,
             })
             .fetch_all(&self.context.db)
             .await?;
 
-        // can't sort in query because postgres doesn't allow separate columns for distinct on &
-        // order by
-        // this is kinda bad since we limit, so it there's more than 100 items some may be missed.
-        activities.sort_by_key(|act| act.time_start);
         Ok(Json(activities))
-    }
-    /// # Errors
-    ///
-    /// - user might not be allowed to access this activity
-    async fn test_activity_access(&self, user: &str, id: &Uuid) -> MinilithResult<()> {
-        // this clusterfuck is the same logic as above, which checks if this activity should be
-        // visible
-        sqlx::query!(
-            r#"select exists (select 1
-            from group_memberships
-            inner join groups member_group on member_group.id = group_memberships.group_id
-            -- get the ticket_kinds we're allowed to purchase
-            inner join groups allowed_group on allowed_group.path @> member_group.path
-            inner join ticket_kind_allowed_groups tk_ag on tk_ag.group_id = allowed_group.id
-            inner join ticket_kinds kind on kind.id = tk_ag.ticket_kind_id
-
-            where group_memberships.user_id = $1
-            and kind.activity_id = $2
-            and (
-                member_group.limit_membership_visibility = false
-                or tk_ag.group_id = group_memberships.group_id
-            ))
-            "#,
-            user,
-            id
-        )
-        .fetch_optional(&self.context.db)
-        .await?
-        .wrap_err_bad_frontend("user not allowed to access this activity")?;
-        Ok(())
     }
     /// # Errors
     ///
@@ -181,7 +152,23 @@ impl Router {
     /// - activity not found
     #[oai(path = "/:id", method = "get")]
     async fn details(&self, user: User, id: Path<Uuid>) -> MinilithResult<Json<Activity>> {
-        self.test_activity_access(user.get_id(), &id.0).await?;
+        let owns_ticket = sqlx::query_scalar!(
+            r#"select exists (
+                select 1
+                from purchased_tickets
+                inner join ticket_kinds
+                    on ticket_kinds.id = purchased_tickets.ticket_kind_id
+                where purchased_tickets.owner_id = $1
+                and ticket_kinds.activity_id = $2
+            ) as "exists!""#,
+            user.get_id(),
+            id.0,
+        )
+        .fetch_one(&self.db)
+        .await?;
+        if !owns_ticket {
+            self.test_activity_access(user.get_id(), &id.0).await?;
+        }
         let activity = sqlx::query!(
             r#"select activities.id,
                 title as "title!: DIS",
@@ -194,14 +181,12 @@ impl Router {
                 users.nonce as "responsible_nonce",
                 images.url as "image_url",
                 creator.id as creator_id,
-                creator.name as "creator_name!: DIS",
-                creator_logo.url as "creator_logo_url",
-                creator.path as creator_path
+                creator.path as creator_path,
+                is_hidden
             from activities
             inner join users on users.id = responsible_id
             inner join images on images.id = image_id
             inner join groups creator on creator.id = creator_id
-            inner join images creator_logo on creator_logo.id = creator.logo_id
             where activities.id = $1;
             "#,
             *id
@@ -209,14 +194,16 @@ impl Router {
         .fetch_optional(&self.context.db)
         .await?
         .wrap_err_not_found()?;
-        let other_hosts = sqlx::query!(
+        let hosts = sqlx::query!(
             r#"select hosts.id, path, name as "name!: DIS", url
             from activity_hosts
             inner join groups hosts on hosts.id = activity_hosts.group_id
             inner join images on hosts.logo_id = images.id
             where activity_id = $1
+            order by hosts.id = $2 desc, hosts.path
             "#,
-            *id
+            *id,
+            activity.creator_id,
         )
         .fetch_all(&self.context.db)
         .await?;
@@ -233,19 +220,15 @@ impl Router {
         .fetch_one(&self.context.db)
         .await?;
 
-        let hosts = std::iter::once(Host {
-            name: activity.creator_name.0,
-            id: activity.creator_id,
-            path: activity.creator_path.to_string(),
-            logo_url: activity.creator_logo_url,
-        })
-        .chain(other_hosts.into_iter().map(|other| Host {
-            name: other.name.0,
-            id: other.id,
-            path: other.path.to_string(),
-            logo_url: other.url,
-        }))
-        .collect();
+        let hosts = hosts
+            .into_iter()
+            .map(|host| Host {
+                name: host.name.0,
+                id: host.id,
+                path: host.path.to_string(),
+                logo_url: host.url,
+            })
+            .collect();
 
         let activity = Activity {
             id: activity.id,
@@ -263,6 +246,7 @@ impl Router {
             time_start: activity.time_start,
             time_end: activity.time_end,
             image_url: activity.image_url,
+            is_hidden: activity.is_hidden,
             hosts,
             tickets_exist: tickets_available.value.unwrap_or(false),
         };
@@ -305,6 +289,7 @@ impl Router {
 
             from ticket_kinds as kind
             where activity_id = $1
+            and max_tickets > 0
             "#,
             id.0,
             user.get_id()

@@ -69,3 +69,9 @@ create table user_group_settings (
     notification_level notification_level not null,
     primary key (group_id, user_id)
 );
+
+-- grants the admins of `access_group_id` view of the activities where we are creators or co-hosts
+create table allow_admins_from_group_view_activities (
+    host_group_id uuid not null,
+    access_group_id uuid not null
+);

@@ -405,13 +405,17 @@ async fn seed_activities(ctx: &ContextWrapper) -> color_eyre::Result<()> {
         // The `location` composite type doesn't have a clean sqlx
         // mapping for inserts via the macro, so we build it inline with
         // ROW(name, directions, coordinate, url)::location. Upsert
-        // semantics so re-runs pick up updated fixture times.
+        // semantics so re-runs pick up updated fixture data. Inserting the
+        // creator into activity_hosts in the same statement preserves the
+        // activity-host invariant atomically.
         sqlx::query!(
-            "insert into activities
+            "with upserted_activity as (
+             insert into activities
                 (id, responsible_id, creator_id, title, description, location,
                  time_start, time_end, image_id, is_hidden, max_tickets)
              values ($1, $2, $3, $4, $5, row($6::jsonb, null, null, null)::location, $7, $8, $9, false, $10)
              on conflict (id) do update set
+                creator_id = excluded.creator_id,
                 title = excluded.title,
                 description = excluded.description,
                 location = excluded.location,
@@ -419,7 +423,12 @@ async fn seed_activities(ctx: &ContextWrapper) -> color_eyre::Result<()> {
                 time_end = excluded.time_end,
                 image_id = excluded.image_id,
                 is_hidden = excluded.is_hidden,
-                max_tickets = excluded.max_tickets",
+                max_tickets = excluded.max_tickets
+             returning id, creator_id
+             )
+             insert into activity_hosts (activity_id, group_id)
+             select id, creator_id from upserted_activity
+             on conflict do nothing",
             a.id,
             a.responsible_id,
             creator_id,

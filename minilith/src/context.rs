@@ -8,7 +8,7 @@ use chacha20::cipher::KeyIvInit as _;
 use chacha20::cipher::StreamCipher as _;
 use color_eyre::Section as _;
 use color_eyre::eyre::Context as _;
-use minilith_errors::{MinilithEndpointError, MinilithResult};
+use minilith_errors::{MinilithEndpointError, MinilithResult, alert};
 use sqlx::migrate;
 use tracing::{error, warn};
 use uuid::Uuid;
@@ -30,7 +30,10 @@ pub struct Context {
     transactions_api: String,
     transactions_client: reqwest::Client,
     transactions_token: String,
+
     push_clients: Option<PushClients>,
+
+    s3_image_bucket: Box<s3::Bucket>,
 }
 
 impl Context {
@@ -97,13 +100,58 @@ impl Context {
                 None
             }
         };
+
+        let s3_access_key = std::env::var("S3_ACCESS_KEY")?;
+        let s3_secret_key = std::env::var("S3_SECRET_KEY")?;
+        #[cfg(debug_assertions)]
+        let s3_url = "http://localhost:9000";
+        #[cfg(not(debug_assertions))]
+        let s3_url = "http://fed-s3:9000";
+        let s3_image_bucket = s3::Bucket::new(
+            "image",
+            s3::Region::Custom {
+                // region: "tappen-1".to_owned(),
+                region: "us-east-1".to_owned(),
+                endpoint: s3_url.to_owned(),
+            },
+            s3::creds::Credentials::new(
+                Some(&s3_access_key),
+                Some(&s3_secret_key),
+                None,
+                None,
+                None,
+            )?,
+        )?
+        .with_path_style();
+
+        match s3_image_bucket.exists().await {
+            Ok(false) => {
+                alert(minilith_errors::AlertLevel::L2, "s3: no image bucket!");
+                warn!("No s3 image bucket exists! Please create one.");
+            }
+            #[cfg(debug_assertions)]
+            Err(err) => {
+                warn!(
+                    "Could not connect to s3 bucket. Continuing without suppoort. \
+                    Add account at console: http://localhost:9001 \
+                    password&user is rustfsadmin. Save as env vars."
+                );
+            }
+            res => {
+                res?;
+            }
+        }
+
         let context = Self {
             db,
             encryption_key,
             transactions_api: transactions_api.to_owned(),
             transactions_client: reqwest::Client::new(),
             transactions_token,
+
             push_clients,
+
+            s3_image_bucket,
         };
         Ok(context)
     }
@@ -241,6 +289,10 @@ impl Context {
         sender
             .send(platform, push_token, notification_id, title, content)
             .await
+    }
+
+    pub fn image_bucket(&self) -> &s3::Bucket {
+        &self.s3_image_bucket
     }
 
     /// # Errors
