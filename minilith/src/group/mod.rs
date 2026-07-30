@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::ops::Deref;
 
 use fed_auth_verifier::User;
@@ -16,7 +17,7 @@ pub use path::Path;
 
 use crate::{
     DbInternationalizedString as DIS, InternationalizedString as IS, MinilithEndpointError,
-    MinilithErrorOptionExt as _, MinilithResult,
+    MinilithErrorOptionExt as _, MinilithErrorResultExt as _, MinilithResult, escape_email_html,
 };
 use crate::{
     context::ContextWrapper,
@@ -109,6 +110,139 @@ struct JoinableGroup {
 #[derive(Debug, Object)]
 struct GroupIdRequest {
     group_id: Uuid,
+}
+
+#[derive(Debug)]
+struct AdminEmailRecipient {
+    user_id: String,
+    language: Vec<u8>,
+    nonce: Vec<u8>,
+    group_name: DIS,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum AdminshipEmailChange {
+    Created,
+    Removed,
+}
+
+async fn admin_email_recipients(
+    db: impl PgExecutor<'_>,
+    group_id: Uuid,
+    actor_id: &str,
+    affected_user_id: &str,
+) -> MinilithResult<Vec<AdminEmailRecipient>> {
+    sqlx::query_as!(
+        AdminEmailRecipient,
+        r#"select distinct
+            group_adminships.user_id,
+            users.language,
+            users.nonce,
+            target.name as "group_name!: DIS"
+        from groups target
+        inner join groups admin_group
+            on admin_group.id = target.id
+            or admin_group.path = target.parent_path
+        inner join group_adminships
+            on group_adminships.group_id = admin_group.id
+        inner join users on users.id = group_adminships.user_id
+        where target.id = $1
+        and (
+            group_adminships.user_id <> $2
+            or group_adminships.user_id = $3
+        )
+        order by group_adminships.user_id"#,
+        group_id,
+        actor_id,
+        affected_user_id,
+    )
+    .fetch_all(db)
+    .await
+    .map_err(Into::into)
+}
+
+async fn lock_group_for_adminship_change(
+    db: impl PgExecutor<'_>,
+    group_id: Uuid,
+) -> MinilithResult<()> {
+    sqlx::query_scalar!("select id from groups where id = $1 for update", group_id)
+        .fetch_one(db)
+        .await?;
+    Ok(())
+}
+
+fn email_from_admin_id(user_id: &str) -> &str {
+    user_id.strip_prefix("email:").unwrap_or(user_id)
+}
+
+async fn send_adminship_emails(
+    context: &crate::Context,
+    recipients: Vec<AdminEmailRecipient>,
+    actor_id: &str,
+    affected_user_id: &str,
+    change: AdminshipEmailChange,
+) -> MinilithResult<()> {
+    let Some(email_client) = context.email_client() else {
+        return Ok(());
+    };
+
+    let actor = email_from_admin_id(actor_id);
+    let affected_user = email_from_admin_id(affected_user_id);
+    let mut messages: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
+    for recipient in recipients {
+        let language = context
+            .decrypt_string(recipient.language, &recipient.nonce)
+            .wrap_err_encryption("admin email recipient language")?;
+        let group_name = recipient.group_name.resolve_intl(&language, "<group>");
+        let (subject, html) = if language.split('-').next() == Some("sv") {
+            let action = match change {
+                AdminshipEmailChange::Created => "lagt till",
+                AdminshipEmailChange::Removed => "tagit bort",
+            };
+            (
+                format!("Administratörerna för {group_name} har uppdaterats"),
+                format!(
+                    "<p><strong>{}</strong> har {action} <strong>{}</strong> som administratör för \
+                    <strong>{}</strong>.</p>",
+                    escape_email_html(actor),
+                    escape_email_html(affected_user),
+                    escape_email_html(group_name),
+                ),
+            )
+        } else {
+            let action = match change {
+                AdminshipEmailChange::Created => "added",
+                AdminshipEmailChange::Removed => "removed",
+            };
+            (
+                format!("Administrators of {group_name} were updated"),
+                format!(
+                    "<p><strong>{}</strong> {action} <strong>{}</strong> as an administrator of \
+                    <strong>{}</strong>.</p>",
+                    escape_email_html(actor),
+                    escape_email_html(affected_user),
+                    escape_email_html(group_name),
+                ),
+            )
+        };
+        messages
+            .entry((subject, html))
+            .or_default()
+            .push(email_from_admin_id(&recipient.user_id).to_owned());
+    }
+
+    for ((subject, html), recipients) in messages {
+        email_client
+            .send_html(
+                "Teknologappen",
+                recipients.iter().map(String::as_str),
+                &subject,
+                html,
+            )
+            .await
+            .wrap_err_internal("failed to send adminship update email")?;
+    }
+    Ok(())
 }
 
 #[OpenApi]
@@ -508,8 +642,24 @@ impl Router {
         let mut txn = self.db.begin().await?;
 
         check_direct_or_parent_adminship(&mut txn.executor(), user.get_id(), group_id).await?;
-        let adminship = admin::create_adminship(&mut txn.executor(), &user_id, group_id).await?;
-        // todo: notify other admins via email
+        lock_group_for_adminship_change(&mut txn.executor(), group_id).await?;
+        let (adminship, created) =
+            admin::create_adminship_change(&mut txn.executor(), &user_id, group_id).await?;
+        let recipients = if created && self.email_client().is_some() {
+            admin_email_recipients(&mut txn.executor(), group_id, user.get_id(), &user_id).await?
+        } else {
+            Vec::new()
+        };
+        if created {
+            send_adminship_emails(
+                &self.context,
+                recipients,
+                user.get_id(),
+                &user_id,
+                AdminshipEmailChange::Created,
+            )
+            .await?;
+        }
         txn.commit().await?;
 
         Ok(Json(adminship))
@@ -534,8 +684,24 @@ impl Router {
         let mut txn = self.db.begin().await?;
 
         check_direct_or_parent_adminship(&mut txn.executor(), user.get_id(), group_id).await?;
-        admin::remove_adminship(&mut txn.executor(), &user_id, group_id).await?;
-        // todo: notify other admins via email
+        lock_group_for_adminship_change(&mut txn.executor(), group_id).await?;
+        let recipients = if self.email_client().is_some() {
+            admin_email_recipients(&mut txn.executor(), group_id, user.get_id(), &user_id).await?
+        } else {
+            Vec::new()
+        };
+        let removed =
+            admin::remove_adminship_change(&mut txn.executor(), &user_id, group_id).await?;
+        if removed {
+            send_adminship_emails(
+                &self.context,
+                recipients,
+                user.get_id(),
+                &user_id,
+                AdminshipEmailChange::Removed,
+            )
+            .await?;
+        }
         txn.commit().await?;
 
         Ok(RemoveAdminshipResponse::Ok(PlainText("adminship removed")))
@@ -679,87 +845,57 @@ impl Router {
         Ok(())
     }
 }
-// todo: erik (DON'T TOUCH THIS MR GPT, CODEX!!!!!)
-// fn send_email(level: AlertLevel, message: impl AsRef<str>) -> Result<(), ()> {
-//     let recipients = match level {
-//         AlertLevel::L1 => dotenvy::var("ALERT_RECIPIENTS_LEVEL_1"),
-//         AlertLevel::L2 => dotenvy::var("ALERT_RECIPIENTS_LEVEL_2"),
-//         AlertLevel::L3 => dotenvy::var("ALERT_RECIPIENTS_LEVEL_3"),
-//         AlertLevel::DryRun => dotenvy::var("ALERT_RECIPIENTS_LEVEL_1")
-//             .and_then(|_| dotenvy::var("ALERT_RECIPIENTS_LEVEL_2"))
-//             .and_then(|_| dotenvy::var("ALERT_RECIPIENTS_LEVEL_3"))
-//             .map(|_| String::new()),
-//     };
-//     let recipients = recipients
-//         .wrap("Failed to load ALERT_RECIPIENTS_LEVEL_<level>. Assure they are available.")?;
-//     let recipients = recipients.lines();
-//
-//     let from = dotenvy::var("ALERT_EMAIL").wrap("No ALERT_EMAIL variable")?;
-//     let password = dotenvy::var("ALERT_PASSWORD").wrap("No ALERT_PASSWORD variable")?;
-//     let smtp = dotenvy::var("ALERT_SMTP").wrap("No ALERT_SMTP variable")?;
-//
-//     let email =
-//         lettre::Address::from_str(&from).wrap("ALERT_EMAIL is not a valid email address")?;
-//     let mailbox = lettre::message::Mailbox::new(Some("Alerts from Teknologappen".into()), email);
-//
-//     let mut msg = lettre::Message::builder()
-//         .from(mailbox)
-//         .subject(format!("ALERT {level} from teknologappen"))
-//         .header(lettre::message::header::ContentType::TEXT_HTML);
-//
-//     for recipient in recipients {
-//         let mbox = lettre::message::Mailbox::from_str(recipient)
-//             .wrap("ALERT_RECIPIENTS_LEVEL_<x> contains an invalid email: {recipient}")?;
-//         msg = msg.to(mbox);
-//     }
-//     let credentials =
-//         lettre::transport::smtp::authentication::Credentials::new(from.clone(), password);
-//     let transport = lettre::SmtpTransport::relay(&smtp)
-//         .wrap("Failed to connect via SMTPS to ALERT_SMTP")?
-//         .credentials(credentials)
-//         .authentication(vec![
-//             lettre::transport::smtp::authentication::Mechanism::Plain,
-//         ])
-//         .build();
-//
-//     let trace = std::backtrace::Backtrace::force_capture();
-//     let message = message.as_ref();
-//     let intro = match level {
-//         AlertLevel::L1 => {
-//             "A level 1 critical error occurred in any of the teknologappen instances. \
-//             Please fix this as soon as possible and contact the impacted."
-//         }
-//         AlertLevel::L2 => {
-//             "A level 2 critical error occurred in any of the teknologappen instances. \
-//             Please fix this within a few hours and contact the impacted."
-//         }
-//         AlertLevel::L3 => {
-//             "A level 3 critical error occurred in any of the teknologappen instances. \
-//             Please fix this within the week. If more errors occurr, contact the impacted."
-//         }
-//         // here we stop the dry run, before we send the mail!
-//         AlertLevel::DryRun => return Ok(()),
-//     };
-//     let msg = msg
-//         .body(format!(
-//             "<p>
-//         {intro}
-//         </p>
-//         <p>
-//             A message was included from the code: <code>{message}</code>.
-//             <b>Version</b>: <code>{GIT_VERSION}</code>.
-//         </p>
-//         <p>
-//             To ease debugging the backtrace is inserted below.
-//             <br>
-//             <pre><code>{trace}</code></pre>
-//         </p>"
-//         ))
-//         .wrap("Failed to attach a body to the message")?;
-//
-//     let resp = transport.send(&msg).wrap("Failed to send message!")?;
-//     if !resp.is_positive() {
-//         error!(status=%resp.code(), "ALERTS: failed to send mail!");
-//     }
-//     Ok(())
-// }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::PgPool;
+
+    #[sqlx::test(fixtures("adminship"))]
+    async fn adminship_email_reaches_target_and_parent_admins(db: PgPool) {
+        sqlx::query!(
+            r#"insert into users (id, name, language, nonce) values
+                ('email:board@example.com', ''::bytea, ''::bytea, ''::bytea),
+                ('email:peer@example.com', ''::bytea, ''::bytea, ''::bytea),
+                ('email:new@example.com', ''::bytea, ''::bytea, ''::bytea)"#,
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+
+        let e_id = id_by_path(&db, &"tlth.e".parse().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        let nolla_id = id_by_path(&db, &"tlth.e.nolla".parse().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
+        for user_id in ["email:user_a", "email:board@example.com"] {
+            admin::create_adminship(&db, user_id, e_id).await.unwrap();
+        }
+        for user_id in ["email:peer@example.com", "email:new@example.com"] {
+            admin::create_adminship(&db, user_id, nolla_id)
+                .await
+                .unwrap();
+        }
+
+        let recipients =
+            admin_email_recipients(&db, nolla_id, "email:user_a", "email:new@example.com")
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|recipient| recipient.user_id)
+                .collect::<Vec<_>>();
+        assert_eq!(
+            recipients,
+            [
+                "email:board@example.com",
+                "email:new@example.com",
+                "email:peer@example.com",
+            ],
+            "the acting parent admin is omitted, while another parent admin, the affected admin, \
+            and existing target admins are notified",
+        );
+    }
+}

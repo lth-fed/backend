@@ -8,7 +8,11 @@ use chacha20::cipher::KeyIvInit as _;
 use chacha20::cipher::StreamCipher as _;
 use color_eyre::Section as _;
 use color_eyre::eyre::Context as _;
-use minilith_errors::{MinilithEndpointError, MinilithResult, alert};
+#[cfg(not(debug_assertions))]
+use color_eyre::eyre::ContextCompat as _;
+use minilith_errors::{
+    AlertLevel, EmailClient, MinilithEndpointError, MinilithResult, alert, configure_alert_email,
+};
 use sqlx::migrate;
 use tracing::{error, warn};
 use uuid::Uuid;
@@ -33,6 +37,8 @@ pub struct Context {
 
     push_clients: Option<PushClients>,
 
+    email_client: Option<EmailClient>,
+
     s3_image_bucket: Box<s3::Bucket>,
 }
 
@@ -42,6 +48,18 @@ impl Context {
     /// Returns any errors stemming from setting up the DB or other services.
     pub async fn new(test_db: Option<PgPool>, migrate: bool) -> color_eyre::Result<Self> {
         let _: Result<PathBuf, dotenvy::Error> = dotenvy::dotenv();
+
+        let is_test = test_db.is_some();
+        let email_client = if is_test {
+            None
+        } else {
+            configure_alert_email(EmailClient::new("ALERT")?)?;
+            let email_client = EmailClient::new("MAIL")?;
+            #[cfg(not(debug_assertions))]
+            let email_client =
+                Some(email_client.wrap_err("`MAIL_*` email configuration is required")?);
+            email_client
+        };
 
         let db = if let Some(db) = test_db {
             db
@@ -89,10 +107,7 @@ impl Context {
             Ok(Some(push_clients)) => Some(push_clients),
             Err(err) => {
                 #[cfg(not(debug_assertions))]
-                minilith_errors::alert(
-                    minilith_errors::AlertLevel::L2,
-                    "push-notifications setup failed. See logs",
-                );
+                alert(AlertLevel::L2, "push-notifications setup failed. See logs");
                 error!(
                     ?err,
                     "push-notification runtime disabled because setup failed"
@@ -126,7 +141,7 @@ impl Context {
 
         match s3_image_bucket.exists().await {
             Ok(false) => {
-                alert(minilith_errors::AlertLevel::L2, "s3: no image bucket!");
+                alert(AlertLevel::L2, "s3: no image bucket!");
                 warn!("No s3 image bucket exists! Please create one.");
             }
             #[cfg(debug_assertions)]
@@ -151,6 +166,8 @@ impl Context {
             transactions_token,
 
             push_clients,
+
+            email_client,
 
             s3_image_bucket,
         };
@@ -268,6 +285,11 @@ impl Context {
     #[must_use]
     pub fn has_notification_support(&self) -> bool {
         self.push_clients.is_some()
+    }
+
+    #[must_use]
+    pub(crate) fn email_client(&self) -> Option<&EmailClient> {
+        self.email_client.as_ref()
     }
 
     /// # Errors

@@ -1,7 +1,9 @@
 use std::fmt::{Debug, Display};
 use std::str::FromStr as _;
+use std::sync::OnceLock;
 
-use lettre::Transport as _;
+use color_eyre::eyre::{Context as _, bail};
+use lettre::AsyncTransport as _;
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Object};
 use tracing::error;
@@ -327,63 +329,193 @@ impl Display for AlertLevel {
     }
 }
 
-trait AlertResultExt<T> {
-    fn wrap(self, message: impl AsRef<str>) -> Result<T, ()>;
+/// A reusable SMTP client configured from environment variables.
+///
+/// For a prefix such as `MAIL`, the expected variables are `MAIL_SMTP`,
+/// `MAIL_EMAIL`, and `MAIL_PASSWORD`. If all three are absent, email is
+/// disabled and [`EmailClient::new`] returns `Ok(None)`. A partial
+/// configuration is an error.
+#[derive(Clone)]
+pub struct EmailClient {
+    from: lettre::Address,
+    transport: lettre::AsyncSmtpTransport<lettre::Tokio1Executor>,
 }
-impl<T, E: Debug> AlertResultExt<T> for Result<T, E> {
-    fn wrap(self, message: impl AsRef<str>) -> Result<T, ()> {
-        self.inspect_err(|error| error!(?error, "ALERTS: {}", message.as_ref()))
-            .map_err(|_| ())
+
+impl Debug for EmailClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EmailClient")
+            .field("from", &self.from)
+            .finish_non_exhaustive()
     }
 }
-/// This assumes this crate (`minilith-errors`) is in the same repo as the rest of the backend!
-pub fn alert(level: AlertLevel, message: impl AsRef<str>) {
-    let _: Result<(), ()> = alert_inner(level, message);
+
+impl EmailClient {
+    /// Creates an SMTP client from `<prefix>_SMTP`, `<prefix>_EMAIL`, and
+    /// `<prefix>_PASSWORD`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a partial configuration, an invalid sender
+    /// address, or an invalid SMTP relay.
+    pub fn new(prefix: &str) -> color_eyre::Result<Option<Self>> {
+        let smtp_key = format!("{prefix}_SMTP");
+        let email_key = format!("{prefix}_EMAIL");
+        let password_key = format!("{prefix}_PASSWORD");
+
+        let smtp = dotenvy::var(&smtp_key);
+        let email = dotenvy::var(&email_key);
+        let password = dotenvy::var(&password_key);
+        if matches!(
+            smtp,
+            Err(dotenvy::Error::EnvVar(std::env::VarError::NotPresent))
+        ) && matches!(
+            email,
+            Err(dotenvy::Error::EnvVar(std::env::VarError::NotPresent))
+        ) && matches!(
+            password,
+            Err(dotenvy::Error::EnvVar(std::env::VarError::NotPresent))
+        ) {
+            return Ok(None);
+        }
+
+        let smtp = smtp.wrap_err_with(|| format!("`{smtp_key}` not set"))?;
+        let email = email.wrap_err_with(|| format!("`{email_key}` not set"))?;
+        let password = password.wrap_err_with(|| format!("`{password_key}` not set"))?;
+        let from = email
+            .parse()
+            .wrap_err_with(|| format!("`{email_key}` is not a valid email address"))?;
+        let credentials =
+            lettre::transport::smtp::authentication::Credentials::new(email, password);
+        let transport = lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::relay(&smtp)
+            .wrap_err_with(|| format!("failed to configure the `{prefix}` SMTP relay"))?
+            .credentials(credentials)
+            .authentication(vec![
+                lettre::transport::smtp::authentication::Mechanism::Plain,
+            ])
+            .build();
+
+        Ok(Some(Self { from, transport }))
+    }
+
+    /// Sends one HTML-only message to every supplied recipient.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if there are no recipients, an address or message is
+    /// invalid, or the SMTP server rejects delivery.
+    pub async fn send_html<'a>(
+        &self,
+        from_name: &str,
+        to: impl IntoIterator<Item = &'a str>,
+        subject: &str,
+        html: impl Into<String>,
+    ) -> color_eyre::Result<()> {
+        let mut message = lettre::Message::builder()
+            .from(lettre::message::Mailbox::new(
+                Some(from_name.to_owned()),
+                self.from.clone(),
+            ))
+            .subject(subject)
+            .header(lettre::message::header::ContentType::TEXT_HTML);
+
+        let mut has_recipient = false;
+        for recipient in to {
+            let mailbox = lettre::message::Mailbox::from_str(recipient)
+                .wrap_err_with(|| format!("invalid recipient email address: {recipient}"))?;
+            message = message.to(mailbox);
+            has_recipient = true;
+        }
+        if !has_recipient {
+            bail!("cannot send an email without recipients");
+        }
+
+        let message = message
+            .body(html.into())
+            .wrap_err("failed to format email")?;
+        let response = self
+            .transport
+            .send(message)
+            .await
+            .wrap_err("failed to send email")?;
+        if !response.is_positive() {
+            bail!("SMTP server rejected email with status {}", response.code());
+        }
+        Ok(())
+    }
 }
-fn alert_inner(level: AlertLevel, message: impl AsRef<str>) -> Result<(), ()> {
-    let recipients = match level {
-        AlertLevel::L1 => dotenvy::var("ALERT_RECIPIENTS_LEVEL_1"),
-        AlertLevel::L2 => dotenvy::var("ALERT_RECIPIENTS_LEVEL_2"),
-        AlertLevel::L3 => dotenvy::var("ALERT_RECIPIENTS_LEVEL_3"),
-        AlertLevel::DryRun => dotenvy::var("ALERT_RECIPIENTS_LEVEL_1")
-            .and_then(|_| dotenvy::var("ALERT_RECIPIENTS_LEVEL_2"))
-            .and_then(|_| dotenvy::var("ALERT_RECIPIENTS_LEVEL_3"))
-            .map(|_| String::new()),
+
+/// Escapes untrusted text before inserting it into an HTML email.
+#[must_use]
+pub fn escape_email_html(text: &str) -> std::borrow::Cow<'_, str> {
+    html_escape::encode_text(text)
+}
+
+static ALERT_EMAIL_CLIENT: OnceLock<EmailClient> = OnceLock::new();
+
+fn alert_recipients(level: AlertLevel) -> color_eyre::Result<Vec<String>> {
+    let variable = match level {
+        AlertLevel::L1 | AlertLevel::DryRun => "ALERT_RECIPIENTS_LEVEL_1",
+        AlertLevel::L2 => "ALERT_RECIPIENTS_LEVEL_2",
+        AlertLevel::L3 => "ALERT_RECIPIENTS_LEVEL_3",
     };
-    let recipients = recipients
-        .wrap("Failed to load ALERT_RECIPIENTS_LEVEL_<level>. Assure they are available.")?;
-    let recipients = recipients.lines();
-
-    let from = dotenvy::var("ALERT_EMAIL").wrap("No ALERT_EMAIL variable")?;
-    let password = dotenvy::var("ALERT_PASSWORD").wrap("No ALERT_PASSWORD variable")?;
-    let smtp = dotenvy::var("ALERT_SMTP").wrap("No ALERT_SMTP variable")?;
-
-    let email =
-        lettre::Address::from_str(&from).wrap("ALERT_EMAIL is not a valid email address")?;
-    let mailbox = lettre::message::Mailbox::new(Some("Alerts from Teknologappen".into()), email);
-
-    let mut msg = lettre::Message::builder()
-        .from(mailbox)
-        .subject(format!("ALERT {level} from teknologappen"))
-        .header(lettre::message::header::ContentType::TEXT_HTML);
-
-    for recipient in recipients {
-        let mbox = lettre::message::Mailbox::from_str(recipient)
-            .wrap("ALERT_RECIPIENTS_LEVEL_<x> contains an invalid email: {recipient}")?;
-        msg = msg.to(mbox);
+    let recipients = dotenvy::var(variable).wrap_err_with(|| format!("`{variable}` not set"))?;
+    let recipients: Vec<_> = recipients
+        .lines()
+        .map(str::trim)
+        .filter(|recipient| !recipient.is_empty())
+        .map(str::to_owned)
+        .collect();
+    if recipients.is_empty() {
+        bail!("`{variable}` contains no recipients");
     }
-    let credentials =
-        lettre::transport::smtp::authentication::Credentials::new(from.clone(), password);
-    let transport = lettre::SmtpTransport::relay(&smtp)
-        .wrap("Failed to connect via SMTPS to ALERT_SMTP")?
-        .credentials(credentials)
-        .authentication(vec![
-            lettre::transport::smtp::authentication::Mechanism::Plain,
-        ])
-        .build();
+    for recipient in &recipients {
+        lettre::message::Mailbox::from_str(recipient)
+            .wrap_err_with(|| format!("`{variable}` contains an invalid email: {recipient}"))?;
+    }
+    Ok(recipients)
+}
+
+/// Makes an already-created client available to the process-wide alert helper.
+///
+/// All alert recipient variables are validated here so configuration failures
+/// are reported by `Context::new`, rather than on the first production error.
+///
+/// # Errors
+///
+/// Returns an error if any alert recipient list is missing or invalid.
+pub fn configure_alert_email(client: Option<EmailClient>) -> color_eyre::Result<()> {
+    let Some(client) = client else {
+        return Ok(());
+    };
+    for level in [AlertLevel::L1, AlertLevel::L2, AlertLevel::L3] {
+        drop(alert_recipients(level)?);
+    }
+    drop(ALERT_EMAIL_CLIENT.set(client));
+    Ok(())
+}
+
+/// Sends an operational alert in English.
+///
+/// Delivery is scheduled on the application's existing Tokio runtime so this
+/// function remains usable by synchronous error-conversion code.
+pub fn alert(level: AlertLevel, message: impl AsRef<str>) {
+    if matches!(level, AlertLevel::DryRun) {
+        return;
+    }
+    let Some(client) = ALERT_EMAIL_CLIENT.get().cloned() else {
+        error!(%level, "ALERTS: email is not configured");
+        return;
+    };
+    let recipients = match alert_recipients(level) {
+        Ok(recipients) => recipients,
+        Err(error) => {
+            error!(?error, %level, "ALERTS: failed to load recipients");
+            return;
+        }
+    };
 
     let trace = std::backtrace::Backtrace::force_capture();
-    let message = message.as_ref();
+    let message = escape_email_html(message.as_ref());
     let intro = match level {
         AlertLevel::L1 => {
             "A level 1 critical error occurred in any of the teknologappen instances. \
@@ -397,32 +529,54 @@ fn alert_inner(level: AlertLevel, message: impl AsRef<str>) -> Result<(), ()> {
             "A level 3 critical error occurred in any of the teknologappen instances. \
             Please fix this within the week. If more errors occurr, contact the impacted."
         }
-        // here we stop the dry run, before we send the mail!
-        AlertLevel::DryRun => return Ok(()),
+        AlertLevel::DryRun => return,
     };
-    let msg = msg
-        .body(format!(
-            "<p>
-        {intro}
-        </p>
-        <p>
-            A message was included from the code: <code>{message}</code>.
-            <b>Version</b>: <code>{GIT_VERSION}</code>.
-        </p>
-        <p>
-            To ease debugging the backtrace is inserted below.
-            <br>
-            <pre><code>{trace}</code></pre>
-        </p>"
-        ))
-        .wrap("Failed to attach a body to the message")?;
-
-    let resp = transport.send(&msg).wrap("Failed to send message!")?;
-    if !resp.is_positive() {
-        error!(status=%resp.code(), "ALERTS: failed to send mail!");
-    }
-    Ok(())
+    let subject = format!("ALERT {level} from teknologappen");
+    let html = format!(
+        "<p>{intro}</p>\
+         <p>A message was included from the code: <code>{message}</code>. \
+         <strong>Version</strong>: <code>{GIT_VERSION}</code>.</p>\
+         <p>To ease debugging the backtrace is inserted below.</p>\
+         <pre><code>{}</code></pre>",
+        escape_email_html(&trace.to_string()),
+    );
+    let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+        error!(%level, "ALERTS: no Tokio runtime is available for email delivery");
+        return;
+    };
+    drop(runtime.spawn(async move {
+        if let Err(error) = client
+            .send_html(
+                "Alerts from Teknologappen",
+                recipients.iter().map(String::as_str),
+                &subject,
+                html,
+            )
+            .await
+        {
+            error!(?error, %level, "ALERTS: failed to send email");
+        }
+    }));
 }
+
+/// Validates alert recipient configuration without sending any email.
 pub fn test_alerts() {
-    alert(AlertLevel::DryRun, "test");
+    for level in [AlertLevel::L1, AlertLevel::L2, AlertLevel::L3] {
+        if let Err(error) = alert_recipients(level) {
+            error!(?error, "ALERTS: invalid recipient configuration");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::escape_email_html;
+
+    #[test]
+    fn escapes_email_html_text() {
+        assert_eq!(
+            escape_email_html("<admin's \"group\" & users>"),
+            "&lt;admin's \"group\" &amp; users&gt;",
+        );
+    }
 }

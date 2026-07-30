@@ -16,7 +16,6 @@ dotenvy.workspace = true
 ed25519-dalek.workspace = true
 fed-auth-verifier.path = "../fed-auth-verifier"
 jsonwebtoken.workspace = true
-lettre.workspace = true
 mini-moka = "0.10.3"
 minilith-errors = { version = "0.1.0", path = "../minilith-errors" }
 openssl = "0.10.79"

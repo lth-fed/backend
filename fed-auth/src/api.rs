@@ -1,9 +1,8 @@
 use std::ops::Deref;
 
-use lettre::AsyncTransport as _;
 use minilith_errors::{MinilithEndpointError, MinilithErrorResultExt as _, MinilithResult};
 use poem_openapi::payload::{Json, PlainText};
-use poem_openapi::{Object, OpenApi};
+use poem_openapi::{Enum, Object, OpenApi};
 use sqlx::query;
 use uuid::Uuid;
 
@@ -15,6 +14,13 @@ pub(crate) struct EmailLoginRequest {
     email: String,
     name: String,
     code: String,
+    language: EmailLanguage,
+}
+#[derive(Clone, Copy, Debug, Enum)]
+#[oai(rename_all = "lowercase")]
+enum EmailLanguage {
+    En,
+    Sv,
 }
 #[derive(Object)]
 struct EmailApproveResponse {
@@ -77,29 +83,25 @@ impl MainRouter {
             ));
         }
         let token = random_id();
-        // having this as format_args made the await point for lettre fail because format_args is
-        // not Send??
         let link = format!("{WEBSITE_DOMAIN}/providers/email/approve/?token={token}");
-        if let Some((from, email)) = &self.email {
-            let html = format!(
-                "<p>Någon har försökt logga in med denna e-post adress. Om detta inte var du bör du slänga detta mailet. Tryck på länken för att logga in.</p><p><a href='{link}'>{link}</a>"
-            );
-            let message = lettre::Message::builder()
-                .from(lettre::message::Mailbox::new(
-                    Some("Teknologappens inloggningstjänst".to_owned()),
-                    from.clone(),
-                ))
-                .to(body
-                    .email
-                    .parse::<lettre::Address>()
-                    .wrap_err_bad_user("please enter a valid email address", "email")?
-                    .into())
-                .subject("Logga in med teknologappens inloggningstjänst")
-                .header(lettre::message::header::ContentType::TEXT_HTML)
-                .body(html)
-                .wrap_err_internal("format email")?;
-            email
-                .send(message)
+        if let Some(email_client) = &self.email_client {
+            let (from_name, subject, description) = match body.language {
+                EmailLanguage::En => (
+                    "Teknologappen login service",
+                    "Log in to Teknologappen",
+                    "Someone requested a login using this email address. If this was not you, \
+                    you can ignore this email. Follow the link to log in.",
+                ),
+                EmailLanguage::Sv => (
+                    "Teknologappens inloggningstjänst",
+                    "Logga in på Teknologappen",
+                    "Någon har försökt logga in med den här e-postadressen. Om det inte var du \
+                    kan du ignorera det här mejlet. Följ länken för att logga in.",
+                ),
+            };
+            let html = format!("<p>{description}</p><p><a href=\"{link}\">{link}</a></p>");
+            email_client
+                .send_html(from_name, [body.email.as_str()], subject, html)
                 .await
                 .wrap_err_internal("failed to send email")?;
         } else {
@@ -137,7 +139,7 @@ impl MainRouter {
             return Err(MinilithEndpointError::unauthorized("session not valid", ""));
         };
         session.validated_user = Some(context::UserData {
-            sub: format!("mail:{}", login_data.email),
+            sub: format!("email:{}", login_data.email),
             full_name: login_data.name,
             email: login_data.email,
         });

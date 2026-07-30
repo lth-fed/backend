@@ -8,8 +8,11 @@ use poem_openapi::Object;
 use samael::service_provider::ServiceProvider;
 
 use base64::Engine as _;
+#[cfg(not(debug_assertions))]
+use color_eyre::eyre::ContextCompat as _;
 use color_eyre::{Section as _, eyre::Context as _};
 use jsonwebtoken::EncodingKey;
+use minilith_errors::{EmailClient, configure_alert_email};
 use serde::{Deserialize, Serialize};
 use sqlx::migrate;
 use tracing_subscriber::EnvFilter;
@@ -94,10 +97,7 @@ pub(crate) struct Context {
     // service connections
     pub db: PgPool,
     pub reqwest_client: reqwest::Client,
-    pub email: Option<(
-        lettre::Address,
-        lettre::AsyncSmtpTransport<lettre::Tokio1Executor>,
-    )>,
+    pub email_client: Option<EmailClient>,
 
     // keys
     pub private_key: EncodingKey,
@@ -135,6 +135,17 @@ impl Context {
     pub async fn new(db: Option<PgPool>) -> color_eyre::Result<Self> {
         let _: Result<PathBuf, dotenvy::Error> = dotenvy::dotenv();
 
+        let email_client = if db.is_some() {
+            None
+        } else {
+            configure_alert_email(EmailClient::new("ALERT")?)?;
+            let email_client = EmailClient::new("MAIL")?;
+            #[cfg(not(debug_assertions))]
+            let email_client =
+                Some(email_client.wrap_err("`MAIL_*` email configuration is required")?);
+            email_client
+        };
+
         // for tests we only want to attach once
         let _: Result<(), _> = tracing_subscriber::fmt()
             .with_env_filter(
@@ -160,35 +171,13 @@ impl Context {
 
         let (sp, saml_pk) = saml2::get_service_provider().await?;
 
-        let email = if let Ok(url) = std::env::var("SMTP_URL") {
-            let user = std::env::var("SMTP_USER").wrap_err("`SMTP_USER` not set")?;
-            let password = std::env::var("SMTP_PASSWORD").wrap_err("`SMTP_PASSWORD` not set")?;
-
-            let credentials =
-                lettre::transport::smtp::authentication::Credentials::new(user.clone(), password);
-            let transport = lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::relay(&url)
-                .wrap_err("SMTP setup failed")?
-                .credentials(credentials)
-                .authentication(vec![
-                    lettre::transport::smtp::authentication::Mechanism::Plain,
-                ])
-                .build();
-            Some((
-                user.parse()
-                    .wrap_err("`SMTP_USER` is not a valid email address")?,
-                transport,
-            ))
-        } else {
-            None
-        };
-
         // so they are grouped with the usual poem errors:
         // https://docs.rs/poem/latest/src/poem/middleware/opentelemetry_metrics.rs.html
         let meter = opentelemetry::global::meter("poem");
         let context = Context {
             db,
             reqwest_client: reqwest::Client::new(),
-            email,
+            email_client,
             private_key,
             jwks,
             service_provider: sp,

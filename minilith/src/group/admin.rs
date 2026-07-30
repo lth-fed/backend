@@ -289,35 +289,64 @@ pub async fn create_adminship(
     user_id: &str,
     group_id: Uuid,
 ) -> MinilithResult<Adminship> {
+    create_adminship_change(db, user_id, group_id)
+        .await
+        .map(|(adminship, _)| adminship)
+}
+
+/// Creates an adminship and reports whether a row was actually inserted.
+///
+/// # Errors
+///
+/// DB.
+pub async fn create_adminship_change(
+    db: impl PgExecutor<'_>,
+    user_id: &str,
+    group_id: Uuid,
+) -> MinilithResult<(Adminship, bool)> {
     if !user_id.starts_with("email:") {
         return Err(MinilithEndpointError::bad_frontend_code(
             "administrators must use an email account",
             "the user id must start with `email:`",
         ));
     }
-    sqlx::query_as!(
-        Adminship,
+    let row = sqlx::query!(
         r#"with ensure_membership as (
             insert into group_memberships (user_id, group_id)
             values ($1, $2)
             on conflict do nothing
-        ), upsert_adminship as (
+        ), inserted_adminship as (
             insert into group_adminships (user_id, group_id)
             values ($1, $2)
-            -- Noop because if we had `on conflict do nothing`, nothing would be
-            -- returned on conflict.
-            on conflict(user_id, group_id) do update set user_id = $1, group_id = $2
+            on conflict do nothing
             returning user_id, group_id
+        ), changed_adminship as (
+            select user_id, group_id, true as created
+            from inserted_adminship
+            union all
+            select user_id, group_id, false as created
+            from group_adminships
+            where user_id = $1 and group_id = $2
+            and not exists (select 1 from inserted_adminship)
         )
-        select ua.user_id, g.path as "group_path!: Path"
-        from upsert_adminship ua
-        join groups g on g.id = ua.group_id"#,
+        select
+            changed_adminship.user_id as "user_id!",
+            groups.path as "group_path!: Path",
+            changed_adminship.created as "created!"
+        from changed_adminship
+        inner join groups on groups.id = changed_adminship.group_id"#,
         user_id,
         group_id
     )
     .fetch_one(db)
-    .await
-    .map_err(Into::into)
+    .await?;
+    Ok((
+        Adminship {
+            group_path: row.group_path,
+            user_id: row.user_id,
+        },
+        row.created,
+    ))
 }
 
 /// Removes the adminship for the given user in the given group.
@@ -330,15 +359,30 @@ pub async fn remove_adminship(
     user_id: &str,
     group_id: Uuid,
 ) -> MinilithResult<()> {
-    sqlx::query!(
+    remove_adminship_change(db, user_id, group_id)
+        .await
+        .map(|_| ())
+}
+
+/// Removes an adminship and reports whether a row was actually deleted.
+///
+/// # Errors
+///
+/// DB.
+pub async fn remove_adminship_change(
+    db: impl PgExecutor<'_>,
+    user_id: &str,
+    group_id: Uuid,
+) -> MinilithResult<bool> {
+    let deleted = sqlx::query!(
         "delete from group_adminships where user_id = $1 and group_id = $2",
         user_id,
         group_id
     )
     .execute(db)
-    .await
-    .map(|_| ())
-    .map_err(Into::into)
+    .await?
+    .rows_affected();
+    Ok(deleted != 0)
 }
 
 /// Returns the list of admins for the given group.
@@ -417,8 +461,14 @@ mod tests {
     #[sqlx::test(fixtures("adminship"))]
     async fn create_adminship_idempotent(db: PgPool) {
         let e_id = id_of(&db, "tlth.e").await;
-        create_adminship(&db, "email:user_a", e_id).await.unwrap();
-        create_adminship(&db, "email:user_a", e_id).await.unwrap();
+        let (_, created) = create_adminship_change(&db, "email:user_a", e_id)
+            .await
+            .unwrap();
+        assert!(created, "the first call should create the adminship");
+        let (_, created) = create_adminship_change(&db, "email:user_a", e_id)
+            .await
+            .unwrap();
+        assert!(!created, "the second call should be a no-op");
     }
 
     #[sqlx::test(fixtures("adminship"))]

@@ -9,8 +9,8 @@ use ed25519_dalek::pkcs8::DecodePrivateKey as _;
 use jsonwebtoken::EncodingKey;
 use jsonwebtoken::jwk::JwkSet;
 use minilith_errors::{
-    AlertLevel, MinilithEndpointError, MinilithErrorOptionExt as _, MinilithErrorResultExt as _,
-    MinilithResult, alert,
+    AlertLevel, EmailClient, MinilithEndpointError, MinilithErrorOptionExt as _,
+    MinilithErrorResultExt as _, MinilithResult, alert, configure_alert_email,
 };
 use sqlx::migrate;
 use stripe_misc::webhook_endpoint::CreateWebhookEndpointEnabledEvents;
@@ -203,6 +203,10 @@ impl Context {
     /// Returns any errors stemming from setting up the DB or other services.
     pub async fn new(test_db: Option<PgPool>) -> color_eyre::Result<Self> {
         let _: Result<PathBuf, dotenvy::Error> = dotenvy::dotenv();
+
+        if test_db.is_none() {
+            configure_alert_email(EmailClient::new("ALERT")?)?;
+        }
 
         let (encoding_key, jwks) = Self::get_jwt_keys()?;
 
