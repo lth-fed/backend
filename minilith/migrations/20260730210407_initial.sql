@@ -10,6 +10,7 @@ create type "public"."location" as (
 create table "public"."activities" (
     "id" uuid not null default uuidv4(),
     "responsible_id" text not null,
+    "responsible_contact" text not null,
     "creator_id" uuid not null,
     "title" jsonb not null,
     "description" jsonb not null,

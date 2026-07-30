@@ -53,6 +53,8 @@ impl From<Location> for PoemLocation {
 struct Responsible {
     id: String,
     name: String,
+    /// Should be tel: or mailto:
+    contact: String,
 }
 #[derive(Object)]
 struct Host {
@@ -187,6 +189,7 @@ impl Router {
                 location as "location!: Location", time_start, time_end,
                 max_tickets,
                 users.id as "responsible_id",
+                responsible_contact,
                 users.name as "responsible_name",
                 users.nonce as "responsible_nonce",
                 images.url as "image_url",
@@ -252,6 +255,7 @@ impl Router {
                 name: self
                     .decrypt_string(activity.responsible_name, &activity.responsible_nonce)
                     .wrap_err_encryption("responsible_name")?,
+                contact: activity.responsible_contact,
             },
             title: activity.title.0,
             description: activity.description.0,
