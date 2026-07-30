@@ -497,7 +497,7 @@ impl MainRouter {
                     if !resp.status().is_success() {
                         let status = resp.status();
                         let body = resp.text().await.ok();
-                        warn!(%status, ?body, "auth callback POST failed")
+                        warn!(%status, ?body, "auth callback POST failed");
                     }
                 }
             }
