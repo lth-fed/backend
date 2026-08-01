@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into ticket_addons (\n                    id, ticket_kind_id, idx, name,\n                    multiple_alternatives, has_text_field, required\n                ) values ($1, $2, $3, $4, $5, $6, $7)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int4",
+        "Jsonb",
+        "Bool",
+        "Bool",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2bb50a2738a978f271f79b796f2bba58cb0855e2b07404319f334a3d735afb9d"
+}

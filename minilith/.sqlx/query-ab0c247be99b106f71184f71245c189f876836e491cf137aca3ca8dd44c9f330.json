@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into activities (\n                id, responsible_id, responsible_contact, creator_id,\n                title, description, location, time_start, time_end, image_id,\n                is_hidden, is_hidden_for_other_admins, max_tickets\n            )\n            values (\n                $1, $2, $3, $4, $5, $6,\n                row(\n                    $7::jsonb,\n                    $8::jsonb,\n                    case when $9::float8 is null or $10::float8 is null\n                        then null else point($9, $10) end,\n                    $11\n                )::location,\n                $12, $13, $14, $15, $16, $17\n            )\n            on conflict (id) do update set\n                responsible_id = excluded.responsible_id,\n                responsible_contact = excluded.responsible_contact,\n                creator_id = excluded.creator_id,\n                title = excluded.title,\n                description = excluded.description,\n                location = excluded.location,\n                time_start = excluded.time_start,\n                time_end = excluded.time_end,\n                image_id = excluded.image_id,\n                is_hidden = excluded.is_hidden,\n                is_hidden_for_other_admins = excluded.is_hidden_for_other_admins,\n                max_tickets = excluded.max_tickets",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Uuid",
+        "Jsonb",
+        "Jsonb",
+        "Jsonb",
+        "Jsonb",
+        "Float8",
+        "Float8",
+        "Text",
+        "Timestamptz",
+        "Timestamptz",
+        "Uuid",
+        "Bool",
+        "Bool",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ab0c247be99b106f71184f71245c189f876836e491cf137aca3ca8dd44c9f330"
+}

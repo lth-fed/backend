@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select exists (\n                select 1\n                from purchased_tickets\n                inner join ticket_kinds\n                    on ticket_kinds.id = purchased_tickets.ticket_kind_id\n                where purchased_tickets.owner_id = $1\n                and ticket_kinds.activity_id = $2\n            ) as \"exists!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "bd38c88748cd720098a449d64ef7a7546b6faa2a0ea66786b859282f9721bf98"
+}

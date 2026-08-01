@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into groups_ask_to_join (target_id, joiner_id)\n            values ($1, $2) on conflict do nothing",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "251232c29cff51be8da455e4fdfb63895d0200fed8d6a3c28ce7b98cb4a7e1c8"
+}

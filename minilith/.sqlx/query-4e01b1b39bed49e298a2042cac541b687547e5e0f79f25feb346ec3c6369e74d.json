@@ -1,0 +1,45 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n                group_id,\n                visible,\n                notification_level as \"notification_level!: NotificationLevel\"\n            from user_group_settings\n            where user_id = $1\n            order by group_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "group_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "visible",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 2,
+        "name": "notification_level!: NotificationLevel",
+        "type_info": {
+          "Custom": {
+            "name": "notification_level",
+            "kind": {
+              "Enum": [
+                "none",
+                "personalized",
+                "all"
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "4e01b1b39bed49e298a2042cac541b687547e5e0f79f25feb346ec3c6369e74d"
+}

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into activity_hosts (activity_id, group_id)\n            select $1, group_id from unnest($2::uuid[]) as host(group_id)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a13028edf4fb8d85fff47896d7e2513aadec4971ffb6bf57483518e4b52e3116"
+}

@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select hosts.id, path, name as \"name!: DIS\", url\n            from activity_hosts\n            inner join groups hosts on hosts.id = activity_hosts.group_id\n            inner join images on hosts.logo_id = images.id\n            where activity_id = $1\n            order by hosts.id = $2 desc, hosts.path\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "path",
+        "type_info": {
+          "Custom": {
+            "name": "ltree",
+            "kind": "Simple"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "name!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 3,
+        "name": "url",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "56a476ac6ff5584c16d01cdfd7779dba0577da1cecc1c1de90f8dfe74305d96f"
+}

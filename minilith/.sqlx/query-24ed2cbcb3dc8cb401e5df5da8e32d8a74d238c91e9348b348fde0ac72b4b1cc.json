@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select (\n                exists (\n                    select 1\n                    from group_memberships\n                    inner join groups member_group\n                        on member_group.id = group_memberships.group_id\n                    inner join groups allowed_group\n                        on allowed_group.path @> member_group.path\n                    inner join ticket_kind_allowed_groups tk_ag\n                        on tk_ag.group_id = allowed_group.id\n                    inner join ticket_kinds kind on kind.id = tk_ag.ticket_kind_id\n                    where group_memberships.user_id = $1\n                    and kind.activity_id = $2\n                    and (\n                        member_group.limit_membership_visibility = false\n                        or tk_ag.group_id = group_memberships.group_id\n                    )\n                )\n                or exists (\n                    select 1\n                    from activity_hosts\n                    inner join group_adminships\n                        on group_adminships.group_id = activity_hosts.group_id\n                    where activity_hosts.activity_id = $2\n                    and group_adminships.user_id = $1\n                )\n                or exists (\n                    select 1\n                    from activity_hosts\n                    inner join allow_admins_from_group_view_activities allowed\n                        on allowed.host_group_id = activity_hosts.group_id\n                    inner join group_adminships\n                        on group_adminships.group_id = allowed.access_group_id\n                    inner join activities on activities.id = activity_hosts.activity_id\n                    where activity_hosts.activity_id = $2\n                    and group_adminships.user_id = $1\n                    and activities.is_hidden_for_other_admins = false\n                )\n            ) as \"exists!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "24ed2cbcb3dc8cb401e5df5da8e32d8a74d238c91e9348b348fde0ac72b4b1cc"
+}

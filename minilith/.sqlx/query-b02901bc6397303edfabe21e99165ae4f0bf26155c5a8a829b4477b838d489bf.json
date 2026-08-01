@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select exists (\n                select 1\n                from groups_ask_to_join\n                inner join group_memberships\n                    on group_memberships.group_id = groups_ask_to_join.joiner_id\n                where groups_ask_to_join.target_id = $2\n                and group_memberships.user_id = $1\n            ) as \"exists!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "b02901bc6397303edfabe21e99165ae4f0bf26155c5a8a829b4477b838d489bf"
+}

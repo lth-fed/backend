@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select exists (\n            select 1\n            from groups target\n            inner join group_adminships ga\n                on ga.user_id = $1\n                and (\n                    ga.group_id = target.id\n                    or ga.group_id = (\n                        select parent.id\n                        from groups parent\n                        where parent.path = target.parent_path\n                    )\n                )\n            where target.id = $2\n        ) as \"exists!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "d6b6c2ecf8137516840d416c6ad4ee0c806c30849ef17ab9bd31998e70a4ae6b"
+}

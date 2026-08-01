@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n                notifications.title as \"title!: DIS\",\n                notifications.content as \"content!: DIS\",\n                notifications.send_at\n            from ticket_kind_notifications\n            inner join notifications\n                on notifications.id = ticket_kind_notifications.notification_id\n            where ticket_kind_notifications.ticket_kind_id = $1\n            and ticket_kind_notifications.id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "title!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 1,
+        "name": "content!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 2,
+        "name": "send_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "277cf36ecb6aa7d29c5963e8b62bf2fc89910a9354ea6c620b683a76dbbafec1"
+}

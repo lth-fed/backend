@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into allow_admins_from_group_view_activities\n                (host_group_id, access_group_id)\n            values ($1, $2) on conflict do nothing",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7e3dab1a72d5b9987ecab3b320e0a8f7589067fb47ac3e395d67a041d01e2190"
+}

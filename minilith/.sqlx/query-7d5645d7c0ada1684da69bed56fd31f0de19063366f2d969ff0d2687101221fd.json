@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select activities.id\n        from activities\n        inner join ticket_kinds target\n            on target.activity_id = activities.id\n        where target.id = $1\n        for update of activities",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "7d5645d7c0ada1684da69bed56fd31f0de19063366f2d969ff0d2687101221fd"
+}

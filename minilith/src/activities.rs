@@ -192,10 +192,7 @@ impl Router {
     /// - user might not be allowed to access this activity
     /// - activity not found
     #[oai(path = "/:id", method = "get")]
-    #[allow(
-        clippy::too_many_lines,
-        reason = "it's very easy to read"
-    )]
+    #[allow(clippy::too_many_lines, reason = "it's very easy to read")]
     async fn details(&self, user: User, id: Path<Uuid>) -> MinilithResult<Json<Activity>> {
         let owns_ticket = sqlx::query_scalar!(
             r#"select exists (

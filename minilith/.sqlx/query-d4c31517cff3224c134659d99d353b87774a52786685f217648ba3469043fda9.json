@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select has_been_purchased\n                from ticket_kinds\n                where id = $1\n                for update",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "has_been_purchased",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "d4c31517cff3224c134659d99d353b87774a52786685f217648ba3469043fda9"
+}

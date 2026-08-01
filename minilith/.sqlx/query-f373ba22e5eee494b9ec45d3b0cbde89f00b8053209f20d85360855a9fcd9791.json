@@ -1,0 +1,27 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select path as \"path!: group::Path\" from groups where id = $1 for update",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "path!: group::Path",
+        "type_info": {
+          "Custom": {
+            "name": "ltree",
+            "kind": "Simple"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "f373ba22e5eee494b9ec45d3b0cbde89f00b8053209f20d85360855a9fcd9791"
+}

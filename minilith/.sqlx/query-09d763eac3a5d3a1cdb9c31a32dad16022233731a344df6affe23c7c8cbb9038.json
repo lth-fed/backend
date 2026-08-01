@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n                purchased_tickets.id,\n                purchased_tickets.ticket_kind_id,\n                purchased_tickets.purchaser_id,\n                purchased_tickets.owner_id,\n                purchased_tickets.transaction_id\n            from purchased_tickets\n            where purchased_tickets.ticket_kind_id = $1\n            order by purchased_tickets.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "ticket_kind_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "purchaser_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "owner_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "transaction_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "09d763eac3a5d3a1cdb9c31a32dad16022233731a344df6affe23c7c8cbb9038"
+}

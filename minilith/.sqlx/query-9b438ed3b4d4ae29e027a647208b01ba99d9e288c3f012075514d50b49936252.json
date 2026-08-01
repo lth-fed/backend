@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select notification_id from ticket_kind_notifications\n            where ticket_kind_id = $1 and id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "notification_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "9b438ed3b4d4ae29e027a647208b01ba99d9e288c3f012075514d50b49936252"
+}

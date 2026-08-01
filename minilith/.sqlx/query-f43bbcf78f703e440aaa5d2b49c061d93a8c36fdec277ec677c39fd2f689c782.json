@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into group_member_requests (member_id, group_id)\n            values ($1, $2) on conflict do nothing",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f43bbcf78f703e440aaa5d2b49c061d93a8c36fdec277ec677c39fd2f689c782"
+}

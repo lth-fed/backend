@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from groups_ask_to_join where target_id = $1 and joiner_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "687325e6de4dbb864e49df808a782cab0db09ad7649d68fc194d231370f18483"
+}

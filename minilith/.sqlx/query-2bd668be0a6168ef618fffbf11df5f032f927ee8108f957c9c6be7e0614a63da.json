@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into user_group_settings\n                (user_id, group_id, visible, notification_level)\n            values ($1, $2, $3, $4)\n            on conflict (group_id, user_id) do update set\n                visible = excluded.visible,\n                notification_level = excluded.notification_level",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Bool",
+        {
+          "Custom": {
+            "name": "notification_level",
+            "kind": {
+              "Enum": [
+                "none",
+                "personalized",
+                "all"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2bd668be0a6168ef618fffbf11df5f032f927ee8108f957c9c6be7e0614a63da"
+}

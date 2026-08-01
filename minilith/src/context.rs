@@ -46,10 +46,7 @@ impl Context {
     /// # Errors
     ///
     /// Returns any errors stemming from setting up the DB or other services.
-    #[allow(
-        clippy::too_many_lines,
-        reason = "it's very linear and easy to read"
-    )]
+    #[allow(clippy::too_many_lines, reason = "it's very linear and easy to read")]
     pub async fn new(test_db: Option<PgPool>, migrate: bool) -> color_eyre::Result<Self> {
         let _: Result<PathBuf, dotenvy::Error> = dotenvy::dotenv();
 

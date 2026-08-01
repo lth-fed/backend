@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into purchased_ticket_validations (id, purchased_ticket_id)\n            values ($1, $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3bdb743507f97eb6bc2f6f62c01796c9e9a4b004dbabb55e9e4c9da687b35d3c"
+}

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "with removed as (\n                delete from group_member_requests\n                where group_id = $1 and member_id = $2\n                returning member_id, group_id\n            ), inserted as (\n                insert into group_memberships (user_id, group_id)\n                select member_id, group_id from removed\n                on conflict do nothing\n            )\n            select member_id from removed",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "member_id",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "74540a85e61ae5f1b3c4e9f500e3714b68c467c58f14752a31f85bb93611cfd3"
+}

@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select member_id from group_member_requests where group_id = $1 order by member_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "member_id",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "dff869435c5f2d21a0dbe78e5dc6b24bf429ed7d024fe0d7832361ee66da8cb8"
+}
