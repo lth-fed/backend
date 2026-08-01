@@ -36,6 +36,114 @@ impl Deref for Router {
     }
 }
 
+impl Router {
+    /// Loads a ticket kind without checking activity access. Callers must
+    /// authorize the request before returning the value to a client.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keeps the existing ticket-kind query and mapping in one reusable loader"
+    )]
+    pub(crate) async fn load_ticket_kind_unchecked(&self, id: Uuid) -> MinilithResult<Kind> {
+        let mut ticket_kind = sqlx::query!(
+            "select
+                name as \"name!: DIS\", activity_id, price,
+                purchasing_available_start, purchasing_available_stop,
+                max_tickets, min_tickets, reserved_or_purchased_tickets,
+                allow_transfer_ticket_start, allow_transfer_ticket_stop,
+                allow_transfer_ticket_bypass_allowed_groups,
+                has_been_purchased,
+                has_been_released
+            from ticket_kinds where id = $1",
+            id
+        )
+        .map(|row| Kind {
+            inner: TicketBase {
+                ticket_kind_id: id,
+                ticket_kind_name: row.name.0,
+                activity_id: row.activity_id,
+            },
+            price: row.price.0,
+            purchasing_available_start: row.purchasing_available_start,
+            purchasing_available_stop: row.purchasing_available_stop,
+            max_tickets: row.max_tickets,
+            min_tickets: row.min_tickets,
+            reserved_or_purchased_tickets: row.reserved_or_purchased_tickets,
+            allow_transfer_ticket_start: row.allow_transfer_ticket_start,
+            allow_transfer_ticket_stop: row.allow_transfer_ticket_stop,
+            allow_transfer_ticket_bypass_allowed_groups: row
+                .allow_transfer_ticket_bypass_allowed_groups,
+            has_been_purchased: row.has_been_purchased,
+            has_been_released: row.has_been_released,
+            allowed_group_ids: Vec::new(),
+            available_addons: Vec::new(),
+        })
+        .fetch_optional(&self.db)
+        .await?
+        .wrap_err_not_found()?;
+
+        ticket_kind.allowed_group_ids = sqlx::query_scalar!(
+            r#"select group_id from ticket_kind_allowed_groups
+            where ticket_kind_id = $1 order by group_id"#,
+            id,
+        )
+        .fetch_all(&self.db)
+        .await?;
+
+        let options: HashMap<Uuid, Vec<AddonOption>> = sqlx::query!(
+            "select ticket_addon_options.id, ticket_addon_id,
+            ticket_addon_options.name as \"name: DIS\", price,
+            -- wait wtf this Vec<i64> syntax actually works??
+            bookkeeping_prices as \"bkp: Vec<i64>\", bookkeeping_price_categories
+            from ticket_addon_options
+            inner join ticket_addons on (ticket_addons.id = ticket_addon_options.ticket_addon_id)
+            where ticket_kind_id = $1
+            order by ticket_addon_options.idx",
+            id
+        )
+        .map(|row| {
+            (
+                row.ticket_addon_id,
+                AddonOption {
+                    id: row.id,
+                    name: row.name.0,
+                    price: row.price.0,
+                    bookkeeping_prices: row.bkp,
+                    bookkeeping_price_categories: row.bookkeeping_price_categories,
+                },
+            )
+        })
+        .fetch_all(&self.context.db)
+        .await?
+        .into_iter()
+        .fold(HashMap::new(), |mut map, (addon_id, option)| {
+            map.entry(addon_id).or_default().push(option);
+            map
+        });
+        ticket_kind.available_addons = sqlx::query!(
+            "select id, name as \"name: DIS\",
+            multiple_alternatives, has_text_field, required
+            from ticket_addons
+            where ticket_kind_id = $1
+            order by ticket_addons.idx",
+            id
+        )
+        .map(|row| AvailableAddon {
+            inner: Addon {
+                id: row.id,
+                name: row.name.0,
+                multiple_alternatives: row.multiple_alternatives,
+                has_text_field: row.has_text_field,
+                required: row.required,
+            },
+            options: options.get(&row.id).cloned().unwrap_or_default(),
+        })
+        .fetch_all(&self.context.db)
+        .await?;
+
+        Ok(ticket_kind)
+    }
+}
+
 #[derive(Debug, Clone, Copy, Enum, PartialEq, Eq)]
 #[oai(rename_all = "lowercase")]
 pub enum PurchaseProvider {
@@ -130,46 +238,47 @@ pub struct PurchaseStatusResponse {
     status: PurchaseStatus,
 }
 
-#[derive(Object)]
-struct Addon {
-    id: Uuid,
-    name: IS,
-    multiple_alternatives: bool,
-    has_text_field: bool,
-    required: bool,
+#[derive(Object, Debug)]
+pub struct Addon {
+    pub id: Uuid,
+    pub name: IS,
+    pub multiple_alternatives: bool,
+    pub has_text_field: bool,
+    pub required: bool,
 }
-#[derive(Object)]
-struct PurchasedAddon {
+#[derive(Object, Debug)]
+pub struct PurchasedAddon {
     #[oai(flatten)]
-    inner: Addon,
-    selected_options: Vec<i32>,
-    selected_text: String,
+    pub inner: Addon,
+    pub selected_options: Vec<i32>,
+    pub selected_text: String,
 }
-#[derive(Object, Clone)]
-struct AddonOption {
-    id: Uuid,
-    name: IS,
-    price: i64,
+#[derive(Object, Clone, Debug)]
+pub struct AddonOption {
+    pub id: Uuid,
+    pub name: IS,
+    pub price: i64,
     // for admins mostly
-    bookkeeping_prices: Vec<i64>,
-    bookkeeping_price_categories: Vec<String>,
+    pub bookkeeping_prices: Vec<i64>,
+    pub bookkeeping_price_categories: Vec<String>,
 }
-#[derive(Object)]
-struct AvailableAddon {
+#[derive(Object, Debug)]
+pub struct AvailableAddon {
     #[oai(flatten)]
-    inner: Addon,
-    options: Vec<AddonOption>,
+    pub inner: Addon,
+    pub options: Vec<AddonOption>,
 }
 
-#[derive(Object)]
-struct TicketBase {
+#[allow(clippy::module_name_repetitions, reason = "Base is a shit name")]
+#[derive(Object, Debug)]
+pub struct TicketBase {
     #[allow(clippy::struct_field_names, reason = "reasonable name")]
     ticket_kind_id: Uuid,
     #[allow(clippy::struct_field_names, reason = "reasonable name")]
     ticket_kind_name: IS,
     activity_id: Uuid,
 }
-#[derive(Object)]
+#[derive(Object, Debug)]
 struct PurchasedTicket {
     #[oai(flatten)]
     inner: TicketBase,
@@ -183,8 +292,8 @@ struct PurchasedTicket {
     time_end: OffsetDateTime,
     purchased_addons: Vec<PurchasedAddon>,
 }
-#[derive(Object)]
-struct TicketKind {
+#[derive(Object, Debug)]
+pub struct Kind {
     #[oai(flatten)]
     inner: TicketBase,
     price: i64,
@@ -200,6 +309,54 @@ struct TicketKind {
     has_been_released: bool,
     allowed_group_ids: Vec<Uuid>,
     available_addons: Vec<AvailableAddon>,
+}
+
+impl Kind {
+    pub(crate) fn activity_id(&self) -> Uuid {
+        self.inner.activity_id
+    }
+
+    pub(crate) fn reserved_or_purchased_tickets(&self) -> i32 {
+        self.reserved_or_purchased_tickets
+    }
+
+    pub(crate) fn has_been_purchased(&self) -> bool {
+        self.has_been_purchased
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "compares the corresponding API fields"
+    )]
+    pub(crate) fn immutable_fields_match(
+        &self,
+        activity_id: Uuid,
+        price: i64,
+        allowed_group_ids: &[Uuid],
+        addons: &[AvailableAddon],
+    ) -> bool {
+        self.inner.activity_id == activity_id
+            && self.price == price
+            && self.allowed_group_ids == allowed_group_ids
+            && self.available_addons.len() == addons.len()
+            && self.available_addons.iter().zip(addons).all(|(old, new)| {
+                old.inner.id == new.inner.id
+                    && old.inner.name == new.inner.name
+                    && old.inner.multiple_alternatives == new.inner.multiple_alternatives
+                    && old.inner.has_text_field == new.inner.has_text_field
+                    && old.inner.required == new.inner.required
+                    && old.options.len() == new.options.len()
+                    && old
+                        .options
+                        .iter()
+                        .zip(&new.options)
+                        .all(|(old_option, new_option)| {
+                            old_option.id == new_option.id
+                                && old_option.name == new_option.name
+                                && old_option.price == new_option.price
+                        })
+            })
+    }
 }
 
 /// The frontend has to encode / decode the QR with both these datapoints, maybe through
@@ -388,113 +545,11 @@ impl Router {
         &self,
         user: User,
         Path(id): Path<Uuid>,
-    ) -> MinilithResult<Json<TicketKind>> {
-        let mut ticket_kind = sqlx::query!(
-            "select
-                name as \"name!: DIS\", activity_id, price,
-                purchasing_available_start, purchasing_available_stop,
-                max_tickets, min_tickets, reserved_or_purchased_tickets,
-                allow_transfer_ticket_start, allow_transfer_ticket_stop,
-                allow_transfer_ticket_bypass_allowed_groups,
-                (
-                    has_been_purchased
-                    or exists (
-                        select 1 from purchased_tickets
-                        where purchased_tickets.ticket_kind_id = ticket_kinds.id
-                    )
-                ) as \"has_been_purchased!\",
-                has_been_released
-            from ticket_kinds where id = $1",
-            id
-        )
-        .map(|row| TicketKind {
-            inner: TicketBase {
-                ticket_kind_id: id,
-                ticket_kind_name: row.name.0,
-                activity_id: row.activity_id,
-            },
-            price: row.price.0,
-            purchasing_available_start: row.purchasing_available_start,
-            purchasing_available_stop: row.purchasing_available_stop,
-            max_tickets: row.max_tickets,
-            min_tickets: row.min_tickets,
-            reserved_or_purchased_tickets: row.reserved_or_purchased_tickets,
-            allow_transfer_ticket_start: row.allow_transfer_ticket_start,
-            allow_transfer_ticket_stop: row.allow_transfer_ticket_stop,
-            allow_transfer_ticket_bypass_allowed_groups: row
-                .allow_transfer_ticket_bypass_allowed_groups,
-            has_been_purchased: row.has_been_purchased,
-            has_been_released: row.has_been_released,
-            allowed_group_ids: Vec::new(),
-            available_addons: Vec::new(),
-        })
-        .fetch_optional(&self.db)
-        .await?
-        .wrap_err_not_found()?;
+    ) -> MinilithResult<Json<Kind>> {
+        let ticket_kind = self.load_ticket_kind_unchecked(id).await?;
 
-        self.test_activity_access(user.get_id(), &ticket_kind.inner.activity_id)
+        self.test_activity_access(user.get_id(), &ticket_kind.activity_id())
             .await?;
-
-        ticket_kind.allowed_group_ids = sqlx::query_scalar!(
-            r#"select group_id from ticket_kind_allowed_groups
-            where ticket_kind_id = $1 order by group_id"#,
-            id,
-        )
-        .fetch_all(&self.db)
-        .await?;
-
-        let options: HashMap<Uuid, Vec<AddonOption>> = sqlx::query!(
-            "select ticket_addon_options.id, ticket_addon_id,
-            ticket_addon_options.name as \"name: DIS\", price,
-            -- wait wtf this Vec<i64> syntax actually works??
-            bookkeeping_prices as \"bkp: Vec<i64>\", bookkeeping_price_categories
-            from ticket_addon_options
-            inner join ticket_addons on (ticket_addons.id = ticket_addon_options.ticket_addon_id)
-            where ticket_kind_id = $1
-            order by ticket_addon_options.idx",
-            id
-        )
-        .map(|row| {
-            (
-                row.ticket_addon_id,
-                AddonOption {
-                    id: row.id,
-                    name: row.name.0,
-                    price: row.price.0,
-                    bookkeeping_prices: row.bkp,
-                    bookkeeping_price_categories: row.bookkeeping_price_categories,
-                },
-            )
-        })
-        .fetch_all(&self.context.db)
-        .await?
-        .into_iter()
-        .fold(HashMap::new(), |mut map, (addon_id, option)| {
-            map.entry(addon_id).or_default().push(option);
-            map
-        });
-        let addons = sqlx::query!(
-            "select id, name as \"name: DIS\",
-            multiple_alternatives, has_text_field, required
-            from ticket_addons
-            where ticket_kind_id = $1
-            order by ticket_addons.idx",
-            id
-        )
-        .map(|row| AvailableAddon {
-            inner: Addon {
-                id: row.id,
-                name: row.name.0,
-                multiple_alternatives: row.multiple_alternatives,
-                has_text_field: row.has_text_field,
-                required: row.required,
-            },
-            options: options.get(&row.id).cloned().unwrap_or_default(),
-        })
-        .fetch_all(&self.context.db)
-        .await?;
-
-        ticket_kind.available_addons = addons;
 
         Ok(Json(ticket_kind))
     }
@@ -751,8 +806,6 @@ impl Router {
         )
         .execute(&mut txn.executor())
         .await?;
-        txn.commit().await?;
-        let mut txn = self.db.begin().await?;
         give_reservations(row.ticket_kind_id, 1, &mut txn).await?;
         txn.commit().await?;
         Ok(Json(DropReservationResponse {
@@ -906,7 +959,7 @@ impl Router {
             available_addons
                 .iter()
                 .find(|addon| addon.id == id)
-                .map_or(0i32, |addon| addon.idx)
+                .map_or(0, |addon| addon.idx)
         };
         // these got shuffled by `validate_addons`.
         body.addons
@@ -1076,7 +1129,7 @@ impl Router {
     }
 
     #[oai(path = "/validate", method = "post")]
-    pub async fn validate(
+    async fn validate(
         &self,
         auth: User,
         body: Json<ValidateRequest>,
@@ -1194,6 +1247,7 @@ impl Router {
                         )
                         .execute(&mut txn.executor())
                         .await?;
+                        give_reservations(row.ticket_kind_id, 1, &mut txn).await?;
                     }
                     txn.commit().await?;
                 }
@@ -1308,15 +1362,18 @@ pub async fn release(db: &mut Transaction<'_>, id: Uuid) -> MinilithResult<()> {
     queuers.shuffle(&mut rng());
 
     #[allow(
-        clippy::cast_sign_loss,
-        reason = "it's constrained to be postitive in sql"
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        reason = "we won't have that many queuers"
     )]
-    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
     let requested = (ticket_kind.max_tickets - ticket_kind.reserved_or_purchased_tickets)
         .min(queuers.len() as i32)
         .max(0);
     let granted = reserve_ticket_capacity(db, id, requested).await?;
-    #[allow(clippy::cast_sign_loss)]
+    #[allow(
+        clippy::cast_sign_loss,
+        reason = "i goddamn hope not granted will be negative"
+    )]
     let (reservations, reservation_queuers) = queuers.split_at(granted as usize);
 
     let timestamps: Vec<PgInterval> = std::iter::repeat_with(new_timeout_interval)
@@ -1429,8 +1486,10 @@ pub async fn check_all_tickets(db: &PgPool) -> MinilithResult<()> {
             break;
         }
     }
+
     // remove_reservation
     while remove_reservation(db).await?.is_continue() {}
+
     // give_reservations:
     let mut reservations = sqlx::query!(
         "select id as \"ticket_kind_id!\", -- count(user_id),
@@ -1456,13 +1515,20 @@ pub async fn check_all_tickets(db: &PgPool) -> MinilithResult<()> {
         txn.commit().await?;
     }
 
-    // clear reservation queue when there are no more tickets
-    // we use purchased_tickets since they never decrease so the lock on it doesn't matter!
+    remove_queuers_when_sold_out(db).await?;
+
+    Ok(())
+}
+/// Clear reservation queue when there are no more tickets.
+/// We use `purchased_tickets` since they never decrease so the lock on it doesn't matter!
+async fn remove_queuers_when_sold_out(db: impl PgExecutor<'_>) -> MinilithResult<()> {
     sqlx::query!(
         r#"delete from ticket_reservation_queuers queuer
         using ticket_kinds kind
         where kind.id = queuer.ticket_kind_id
-        and (
+        and
+        (
+            -- inidvidual ticket
             (
                 kind.max_tickets = kind.reserved_or_purchased_tickets
                 and (
@@ -1470,6 +1536,8 @@ pub async fn check_all_tickets(db: &PgPool) -> MinilithResult<()> {
                     where ticket_kind_id = kind.id
                 ) >= kind.max_tickets
             )
+            -- other ticket_kinds
+            -- this pathway should not often be reached since ticket kinds often are not released simultaneously
             or exists (
                 select 1
                 from activities
@@ -1486,7 +1554,6 @@ pub async fn check_all_tickets(db: &PgPool) -> MinilithResult<()> {
     )
     .execute(db)
     .await?;
-
     Ok(())
 }
 /// Checks for people in the queue once the `ticket_kind` has been released.
@@ -1597,10 +1664,14 @@ pub async fn give_reservations(
     if removed_reservations.is_empty() {
         return Ok(());
     }
-    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        reason = "we'll never get this high"
+    )]
     let granted =
         reserve_ticket_capacity(db, ticket_kind, removed_reservations.len() as i32).await?;
-    #[allow(clippy::cast_sign_loss)]
+    #[allow(clippy::cast_sign_loss, reason = "removed will always be positive")]
     removed_reservations.truncate(granted as usize);
     if removed_reservations.is_empty() {
         return Ok(());
@@ -1714,87 +1785,6 @@ async fn pay_for_reservation(
     }
     Ok(Some(id))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[sqlx::test(fixtures("ticket_capacity"))]
-    async fn reservation_capacity_is_shared_by_ticket_kinds(db: sqlx::PgPool) {
-        let db = sqlx_tracing::Pool::from(db);
-        let first = Uuid::parse_str("00000000-0000-0000-0000-000000000004").unwrap();
-        let second = Uuid::parse_str("00000000-0000-0000-0000-000000000005").unwrap();
-
-        let mut txn = db.begin().await.unwrap();
-        assert_eq!(
-            reserve_ticket_capacity(&mut txn, first, 2).await.unwrap(),
-            2
-        );
-        assert_eq!(
-            reserve_ticket_capacity(&mut txn, second, 2).await.unwrap(),
-            1
-        );
-        assert_eq!(
-            reserve_ticket_capacity(&mut txn, first, 1).await.unwrap(),
-            0
-        );
-        txn.commit().await.unwrap();
-
-        let total = sqlx::query_scalar!(
-            r#"select sum(reserved_or_purchased_tickets)::int
-            from ticket_kinds where activity_id =
-                '00000000-0000-0000-0000-000000000003'"#
-        )
-        .fetch_one(&db)
-        .await
-        .unwrap();
-        assert_eq!(total, Some(3));
-    }
-
-    #[sqlx::test(fixtures("ticket_capacity"))]
-    async fn concurrent_ticket_kinds_cannot_exceed_activity_capacity(db: sqlx::PgPool) {
-        let db = sqlx_tracing::Pool::from(db);
-        let first = Uuid::parse_str("00000000-0000-0000-0000-000000000004").unwrap();
-        let second = Uuid::parse_str("00000000-0000-0000-0000-000000000005").unwrap();
-
-        let reserve = |ticket_kind| {
-            let db = db.clone();
-            async move {
-                let mut txn = db.begin().await.unwrap();
-                let granted = reserve_ticket_capacity(&mut txn, ticket_kind, 2)
-                    .await
-                    .unwrap();
-                txn.commit().await.unwrap();
-                granted
-            }
-        };
-        let (first_granted, second_granted) = tokio::join!(reserve(first), reserve(second));
-        assert_eq!(first_granted + second_granted, 3);
-
-        let total = sqlx::query_scalar!(
-            r#"select sum(reserved_or_purchased_tickets)::int
-            from ticket_kinds where activity_id =
-                '00000000-0000-0000-0000-000000000003'"#
-        )
-        .fetch_one(&db)
-        .await
-        .unwrap();
-        assert_eq!(total, Some(3));
-    }
-}
-
-// ticket buy:
-// - [x] place in queue
-//   - if queue response is queued, get queue status & display wait &
-//     (if reservation queue: refresh every 15 seconds, else refresh after the ticket is released)
-//   - if queue response is reserved, go to buy
-// - [x] (runtime in minilith releases tickets)
-// - [_] go to buy screen
-// - user starts transaction
-// - transaction backend messages minilith this happened
-// - if transaction successful, transfer ticket & move from reserved -> purchased
-// - if transaction unsuccessful, return to transact screen, minilith knows this and removes
-//   transaction id
 
 struct ReturnedAddonOption {
     ticket_addon_id: Uuid,
@@ -1962,4 +1952,72 @@ async fn ensure_user_may_purchase_ticket(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[sqlx::test(fixtures("ticket_capacity"))]
+    async fn reservation_capacity_is_shared_by_ticket_kinds(db: sqlx::PgPool) {
+        let db = sqlx_tracing::Pool::from(db);
+        let first = Uuid::parse_str("00000000-0000-0000-0000-000000000004").unwrap();
+        let second = Uuid::parse_str("00000000-0000-0000-0000-000000000005").unwrap();
+
+        let mut txn = db.begin().await.unwrap();
+        assert_eq!(
+            reserve_ticket_capacity(&mut txn, first, 2).await.unwrap(),
+            2
+        );
+        assert_eq!(
+            reserve_ticket_capacity(&mut txn, second, 2).await.unwrap(),
+            1
+        );
+        assert_eq!(
+            reserve_ticket_capacity(&mut txn, first, 1).await.unwrap(),
+            0
+        );
+        txn.commit().await.unwrap();
+
+        let total = sqlx::query_scalar!(
+            r#"select sum(reserved_or_purchased_tickets)::int
+            from ticket_kinds where activity_id =
+                '00000000-0000-0000-0000-000000000003'"#
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert_eq!(total, Some(3));
+    }
+
+    #[sqlx::test(fixtures("ticket_capacity"))]
+    async fn concurrent_ticket_kinds_cannot_exceed_activity_capacity(db: sqlx::PgPool) {
+        let db = sqlx_tracing::Pool::from(db);
+        let first = Uuid::parse_str("00000000-0000-0000-0000-000000000004").unwrap();
+        let second = Uuid::parse_str("00000000-0000-0000-0000-000000000005").unwrap();
+
+        let reserve = |ticket_kind| {
+            let db = db.clone();
+            async move {
+                let mut txn = db.begin().await.unwrap();
+                let granted = reserve_ticket_capacity(&mut txn, ticket_kind, 2)
+                    .await
+                    .unwrap();
+                txn.commit().await.unwrap();
+                granted
+            }
+        };
+        let (first_granted, second_granted) = tokio::join!(reserve(first), reserve(second));
+        assert_eq!(first_granted + second_granted, 3);
+
+        let total = sqlx::query_scalar!(
+            r#"select sum(reserved_or_purchased_tickets)::int
+            from ticket_kinds where activity_id =
+                '00000000-0000-0000-0000-000000000003'"#
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert_eq!(total, Some(3));
+    }
 }

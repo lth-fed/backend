@@ -2,7 +2,7 @@ use std::fmt::{Debug, Display};
 use std::str::FromStr as _;
 use std::sync::OnceLock;
 
-use color_eyre::eyre::{Context as _, bail};
+use color_eyre::eyre::Context as _;
 use lettre::AsyncTransport as _;
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Object};
@@ -305,31 +305,8 @@ impl<T> MinilithErrorOptionExt<T> for Option<T> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum AlertLevel {
-    /// For the most critical things. This could be errors with payments such that someone could
-    /// lose money.
-    L1,
-    /// Critical systems are not working or can not talk. Not for individual application errors,
-    /// rather for very critical such and connection errors.
-    L2,
-    /// For all random internal server errors. Our goal is for these to never exist.
-    L3,
-    /// Use this for testing this system at startup.
-    DryRun,
-}
-impl Display for AlertLevel {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            AlertLevel::L1 => f.write_str("LEVEL 1"),
-            AlertLevel::L2 => f.write_str("LEVEL 2"),
-            AlertLevel::L3 => f.write_str("LEVEL 3"),
-            AlertLevel::DryRun => f.write_str("DRY RUN (for testing the alert system)"),
-        }
-    }
-}
-
 /// A reusable SMTP client configured from environment variables.
+/// This is in this crate so [`alert`] can use it.
 ///
 /// For a prefix such as `MAIL`, the expected variables are `MAIL_SMTP`,
 /// `MAIL_EMAIL`, and `MAIL_PASSWORD`. If all three are absent, email is
@@ -365,6 +342,7 @@ impl EmailClient {
         let smtp = dotenvy::var(&smtp_key);
         let email = dotenvy::var(&email_key);
         let password = dotenvy::var(&password_key);
+
         if matches!(
             smtp,
             Err(dotenvy::Error::EnvVar(std::env::VarError::NotPresent))
@@ -384,8 +362,10 @@ impl EmailClient {
         let from = email
             .parse()
             .wrap_err_with(|| format!("`{email_key}` is not a valid email address"))?;
+
         let credentials =
             lettre::transport::smtp::authentication::Credentials::new(email, password);
+
         let transport = lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::relay(&smtp)
             .wrap_err_with(|| format!("failed to configure the `{prefix}` SMTP relay"))?
             .credentials(credentials)
@@ -409,7 +389,7 @@ impl EmailClient {
         to: impl IntoIterator<Item = &'a str>,
         subject: &str,
         html: impl Into<String>,
-    ) -> color_eyre::Result<()> {
+    ) -> MinilithResult<()> {
         let mut message = lettre::Message::builder()
             .from(lettre::message::Mailbox::new(
                 Some(from_name.to_owned()),
@@ -421,26 +401,53 @@ impl EmailClient {
         let mut has_recipient = false;
         for recipient in to {
             let mailbox = lettre::message::Mailbox::from_str(recipient)
-                .wrap_err_with(|| format!("invalid recipient email address: {recipient}"))?;
+                .wrap_err_internal("invalid recipient email address")?;
             message = message.to(mailbox);
             has_recipient = true;
         }
         if !has_recipient {
-            bail!("cannot send an email without recipients");
+            return Ok(());
         }
 
         let message = message
             .body(html.into())
-            .wrap_err("failed to format email")?;
+            .wrap_err_internal("failed to format email")?;
         let response = self
             .transport
             .send(message)
             .await
-            .wrap_err("failed to send email")?;
+            .wrap_err_internal("failed to send email")?;
         if !response.is_positive() {
-            bail!("SMTP server rejected email with status {}", response.code());
+            alert(
+                AlertLevel::L2,
+                format!("failed to send email: {:?}", response.code()),
+            );
+            error!("Failed to send email: {:?}", response.code());
         }
         Ok(())
+    }
+}
+
+static ALERT_EMAIL_CLIENT: OnceLock<EmailClient> = OnceLock::new();
+
+#[derive(Debug, Clone, Copy)]
+pub enum AlertLevel {
+    /// For the most critical things. This could be errors with payments such that someone could
+    /// lose money.
+    L1,
+    /// Critical systems are not working or can not talk. Not for individual application errors,
+    /// rather for very critical such and connection errors.
+    L2,
+    /// For all random internal server errors. Our goal is for these to never exist.
+    L3,
+}
+impl Display for AlertLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AlertLevel::L1 => f.write_str("LEVEL 1"),
+            AlertLevel::L2 => f.write_str("LEVEL 2"),
+            AlertLevel::L3 => f.write_str("LEVEL 3"),
+        }
     }
 }
 
@@ -450,11 +457,9 @@ pub fn escape_email_html(text: &str) -> std::borrow::Cow<'_, str> {
     html_escape::encode_text(text)
 }
 
-static ALERT_EMAIL_CLIENT: OnceLock<EmailClient> = OnceLock::new();
-
 fn alert_recipients(level: AlertLevel) -> color_eyre::Result<Vec<String>> {
     let variable = match level {
-        AlertLevel::L1 | AlertLevel::DryRun => "ALERT_RECIPIENTS_LEVEL_1",
+        AlertLevel::L1 => "ALERT_RECIPIENTS_LEVEL_1",
         AlertLevel::L2 => "ALERT_RECIPIENTS_LEVEL_2",
         AlertLevel::L3 => "ALERT_RECIPIENTS_LEVEL_3",
     };
@@ -466,7 +471,7 @@ fn alert_recipients(level: AlertLevel) -> color_eyre::Result<Vec<String>> {
         .map(str::to_owned)
         .collect();
     if recipients.is_empty() {
-        bail!("`{variable}` contains no recipients");
+        return Ok(vec![]);
     }
     for recipient in &recipients {
         lettre::message::Mailbox::from_str(recipient)
@@ -487,9 +492,7 @@ pub fn configure_alert_email(client: Option<EmailClient>) -> color_eyre::Result<
     let Some(client) = client else {
         return Ok(());
     };
-    for level in [AlertLevel::L1, AlertLevel::L2, AlertLevel::L3] {
-        drop(alert_recipients(level)?);
-    }
+    test_alerts();
     drop(ALERT_EMAIL_CLIENT.set(client));
     Ok(())
 }
@@ -499,9 +502,6 @@ pub fn configure_alert_email(client: Option<EmailClient>) -> color_eyre::Result<
 /// Delivery is scheduled on the application's existing Tokio runtime so this
 /// function remains usable by synchronous error-conversion code.
 pub fn alert(level: AlertLevel, message: impl AsRef<str>) {
-    if matches!(level, AlertLevel::DryRun) {
-        return;
-    }
     let Some(client) = ALERT_EMAIL_CLIENT.get().cloned() else {
         error!(%level, "ALERTS: email is not configured");
         return;
@@ -529,7 +529,6 @@ pub fn alert(level: AlertLevel, message: impl AsRef<str>) {
             "A level 3 critical error occurred in any of the teknologappen instances. \
             Please fix this within the week. If more errors occurr, contact the impacted."
         }
-        AlertLevel::DryRun => return,
     };
     let subject = format!("ALERT {level} from teknologappen");
     let html = format!(
@@ -560,6 +559,7 @@ pub fn alert(level: AlertLevel, message: impl AsRef<str>) {
 }
 
 /// Validates alert recipient configuration without sending any email.
+/// This is done in [`configure_alert_email`].
 pub fn test_alerts() {
     for level in [AlertLevel::L1, AlertLevel::L2, AlertLevel::L3] {
         if let Err(error) = alert_recipients(level) {

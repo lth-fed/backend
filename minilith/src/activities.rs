@@ -1,7 +1,8 @@
 use std::ops::Deref;
 
 use fed_auth_verifier::User;
-use poem_openapi::param::Path;
+use minilith_errors::MinilithEndpointError;
+use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::{Object, OpenApi};
 use sqlx::postgres::types::PgPoint;
@@ -16,32 +17,32 @@ use crate::{
 
 #[derive(sqlx::Type, Debug)]
 #[sqlx(type_name = "location")]
-pub(crate) struct Location {
+pub struct Location {
     name: Option<DIS>,
     directions: Option<DIS>,
     coordinate_wgs84: Option<PgPoint>,
     url: Option<String>,
 }
 
-#[derive(Debug, Object)]
-pub(crate) struct Coords {
-    pub(crate) north: f64,
-    pub(crate) east: f64,
+#[derive(Debug, Object, Clone, Copy)]
+pub struct Coordinates {
+    pub north: f64,
+    pub east: f64,
 }
 #[derive(Debug, Object)]
 #[oai(rename = "Location")]
-pub(crate) struct PoemLocation {
-    pub(crate) name: Option<InternationalizedString>,
-    pub(crate) directions: Option<InternationalizedString>,
-    pub(crate) coordinate_wgs84: Option<Coords>,
-    pub(crate) url: Option<String>,
+pub struct PoemLocation {
+    pub name: Option<InternationalizedString>,
+    pub directions: Option<InternationalizedString>,
+    pub coordinate_wgs84: Option<Coordinates>,
+    pub url: Option<String>,
 }
 impl From<Location> for PoemLocation {
     fn from(value: Location) -> Self {
         Self {
             name: value.name.map(|name| name.0),
             directions: value.directions.map(|dir| dir.0),
-            coordinate_wgs84: value.coordinate_wgs84.map(|point| Coords {
+            coordinate_wgs84: value.coordinate_wgs84.map(|point| Coordinates {
                 north: point.x,
                 east: point.y,
             }),
@@ -70,6 +71,7 @@ struct Activity {
     responsible: Responsible,
     /// The creator is the first in the `hosts` too.
     /// Used to find out which guild holds the event.
+    creator_id: Uuid,
     creator_path: String,
     title: InternationalizedString,
     description: InternationalizedString,
@@ -126,26 +128,62 @@ impl Deref for Router {
 
 #[OpenApi(prefix_path = "/activities")]
 impl Router {
+    /// `paging_start` & `paging_end` have to both be null or not null.
+    /// They cannot be more than 50 days apart.
+    /// That is mainly useful for admins, for normal users not including them results in all
+    /// upcoming activities.
+    ///
     /// # Errors
     ///
     /// DB, AUTH.
     #[oai(path = "/", method = "get")]
-    async fn list(&self, user: User) -> MinilithResult<Json<Vec<BriefActivity>>> {
-        let activities = sqlx::query_file!("src/activity-list.sql", user.get_id())
-            .map(|activity| BriefActivity {
-                id: activity.id,
-                creator_path: activity.creator_path.to_string(),
-                creator_name: activity.creator_name.0,
-                title: activity.title.0,
-                description: activity.description.0,
-                location: activity.location.into(),
-                time_start: activity.time_start,
-                time_end: activity.time_end,
-                image_url: activity.url,
-                is_hidden: activity.is_hidden,
-            })
-            .fetch_all(&self.context.db)
-            .await?;
+    async fn list(
+        &self,
+        user: User,
+        paging_start: Query<Option<OffsetDateTime>>,
+        paging_end: Query<Option<OffsetDateTime>>,
+    ) -> MinilithResult<Json<Vec<BriefActivity>>> {
+        match (paging_start.0, paging_end.0) {
+            (Some(start), Some(end)) if end - start < time::Duration::ZERO => {
+                return Err(MinilithEndpointError::bad_frontend_code(
+                    "paging interval negative",
+                    "",
+                ));
+            }
+            (Some(start), Some(end)) if end - start > time::Duration::DAY * 50 => {
+                return Err(MinilithEndpointError::bad_frontend_code(
+                    "paging interval too long",
+                    "",
+                ));
+            }
+            (Some(_), Some(_)) | (None, None) => {}
+            _ => {
+                return Err(MinilithEndpointError::bad_frontend_code(
+                    "paging has to have both start and end",
+                    "",
+                ));
+            }
+        }
+        let activities = sqlx::query_file!(
+            "src/activity-list.sql",
+            user.get_id(),
+            paging_start.0,
+            paging_end.0,
+        )
+        .map(|activity| BriefActivity {
+            id: activity.id,
+            creator_path: activity.creator_path.to_string(),
+            creator_name: activity.creator_name.0,
+            title: activity.title.0,
+            description: activity.description.0,
+            location: activity.location.into(),
+            time_start: activity.time_start,
+            time_end: activity.time_end,
+            image_url: activity.url,
+            is_hidden: activity.is_hidden,
+        })
+        .fetch_all(&self.context.db)
+        .await?;
 
         Ok(Json(activities))
     }
@@ -154,6 +192,10 @@ impl Router {
     /// - user might not be allowed to access this activity
     /// - activity not found
     #[oai(path = "/:id", method = "get")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "it's very easy to read"
+    )]
     async fn details(&self, user: User, id: Path<Uuid>) -> MinilithResult<Json<Activity>> {
         let owns_ticket = sqlx::query_scalar!(
             r#"select exists (
@@ -237,6 +279,7 @@ impl Router {
 
         let activity = Activity {
             id: activity.id,
+            creator_id: activity.creator_id,
             creator_path: activity.creator_path.to_string(),
             responsible: Responsible {
                 id: activity.responsible_id,

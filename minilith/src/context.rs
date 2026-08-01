@@ -46,6 +46,10 @@ impl Context {
     /// # Errors
     ///
     /// Returns any errors stemming from setting up the DB or other services.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "it's very linear and easy to read"
+    )]
     pub async fn new(test_db: Option<PgPool>, migrate: bool) -> color_eyre::Result<Self> {
         let _: Result<PathBuf, dotenvy::Error> = dotenvy::dotenv();
 
@@ -105,11 +109,11 @@ impl Context {
                 None
             }
             Ok(Some(push_clients)) => Some(push_clients),
-            Err(err) => {
+            Err(error) => {
                 #[cfg(not(debug_assertions))]
                 alert(AlertLevel::L2, "push-notifications setup failed. See logs");
                 error!(
-                    ?err,
+                    ?error,
                     "push-notification runtime disabled because setup failed"
                 );
                 None
@@ -145,9 +149,9 @@ impl Context {
                 warn!("No s3 image bucket exists! Please create one.");
             }
             #[cfg(debug_assertions)]
-            Err(err) => {
+            Err(error) => {
                 warn!(
-                    ?err,
+                    ?error,
                     "Could not connect to s3 bucket. Continuing without suppoort. \
                     Add account at console: http://localhost:9001 \
                     password&user is rustfsadmin. Save as env vars."
@@ -314,6 +318,7 @@ impl Context {
             .await
     }
 
+    #[must_use]
     pub fn image_bucket(&self) -> &s3::Bucket {
         &self.s3_image_bucket
     }

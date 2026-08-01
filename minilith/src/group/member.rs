@@ -33,13 +33,40 @@ pub async fn closest_user_membership(
 }
 
 /// Returns every group in each root tree where the user has a direct
-/// membership. This intentionally includes sibling branches so the client can
-/// configure visibility and notification settings for the whole organization.
+/// membership.
 ///
 /// # Errors
 ///
 /// DB.
 pub async fn user_groups(db: impl PgExecutor<'_>, user_id: &str) -> MinilithResult<Vec<Group>> {
+    sqlx::query_as!(
+        Group,
+        r#"
+            select distinct
+                g.id, g.path, g.limit_membership_visibility,
+                g.name as "name!: DIS",
+                g.description as "description!: DIS",
+                g.deleted
+            from group_memberships gm
+            join groups g on g.id = gm.group_id
+            where gm.user_id = $1
+            order by g.path
+        "#,
+        user_id
+    )
+    .fetch_all(db)
+    .await
+    .map_err(Into::into)
+}
+/// Returns the groups in the user's accessible tree.
+///
+/// # Errors
+///
+/// DB.
+pub async fn user_groups_tree(
+    db: impl PgExecutor<'_>,
+    user_id: &str,
+) -> MinilithResult<Vec<Group>> {
     sqlx::query_as!(
         Group,
         r#"

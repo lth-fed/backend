@@ -1,3 +1,5 @@
+-- ALSO UPDATE THE ACCESS QUERY IN `./context.rs`
+
 with visible_activities as (
     select distinct on (kind.activity_id)
         kind.activity_id,
@@ -61,11 +63,14 @@ with visible_activities as (
         host.activity_id,
         true as admin_access
     from group_adminships
-    inner join activity_hosts host
-        on host.group_id = group_adminships.group_id
+    inner join groups admin_group on admin_group.id = group_adminships.group_id
+    inner join groups subgroup on admin_group.path @> subgroup.path
+    inner join activity_hosts host on (host.group_id = subgroup.id)
     where
         group_adminships.user_id = $1
 ),
+-- this is here so that if the query gets a result from an admin and non-admin pathway, we always
+-- get the admin_access = true
 visible_activity_ids as (
     select activity_id, bool_or(admin_access) as admin_access
     from visible_activities
@@ -90,7 +95,9 @@ inner join activities a on a.id = activity_id
 inner join groups creator on creator.id = a.creator_id
 inner join images img on img.id = a.image_id
 where (a.is_hidden = false or admin_access)
-    and time_end + '6 hours' > now()
+    -- $2: paging start, $3: paging end
+    -- if $2 == null, apply this filter
+    and ($2::timestamptz is not null or time_end + '6 hours' > now())
+    -- if $2 != null, apply this filter
+    and ($2::timestamptz is null or (time_end > $2::timestamptz and time_start < $3::timestamptz))
 order by time_start, a.id
--- todo: add paging by month for admin calendar
-limit 100

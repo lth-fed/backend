@@ -1,3 +1,4 @@
+use minilith_errors::MinilithErrorOptionExt as _;
 use poem_openapi::Object;
 use sqlx::PgExecutor;
 use uuid::Uuid;
@@ -222,14 +223,18 @@ pub async fn check_ticket_kind_adminship(
     }
 }
 
+/// # Errors
+///
+/// Returns an error if the user doesn't have an adminship.
 pub async fn check_has_any_adminship(db: impl PgExecutor<'_>, user_id: &str) -> MinilithResult<()> {
     sqlx::query!(
         "select group_id from group_adminships
         where user_id = $1",
         user_id
     )
-    .fetch_one(db)
-    .await?;
+    .fetch_optional(db)
+    .await?
+    .wrap_err_bad_frontend("has to have at least one adminship")?;
 
     Ok(())
 }

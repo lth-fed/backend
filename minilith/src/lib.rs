@@ -23,8 +23,6 @@ pub mod user;
 pub use bin_common::PgPool;
 pub use context::{Context, ContextWrapper};
 pub use minilith_errors::*;
-#[cfg(not(test))]
-use tracing::error;
 
 pub type DbInternationalizedString = sqlx::types::Json<InternationalizedString>;
 // eventually implement Deserialize ourselves with restrictions
@@ -39,9 +37,9 @@ impl InternationalizedString {
     ///
     /// None.
     #[must_use]
-    pub fn to_json_value(self) -> serde_json::Value {
+    pub fn to_json_value(&self) -> serde_json::Value {
         #[allow(clippy::expect_used, reason = "See string below")]
-        serde_json::to_value(self.0)
+        serde_json::to_value(&self.0)
             .expect("we know a hashmap will always serialize & we also know it has string keys")
     }
     #[must_use]
@@ -88,22 +86,13 @@ pub async fn get_endpoint(
 
     let context = Arc::new(Context::new(test_db, migrate).await?);
 
-    #[allow(
-        clippy::cfg_not_test,
-        reason = "it causes errors because the DB is closed before this can start up"
-    )]
-    #[cfg(not(test))]
-    if let Err(err) = runtime::initial_checks(&context).await {
-        error!(?err, "failed to run initial checks!");
-        return Err(color_eyre::Report::msg(""));
+    if cfg!(not(test)) {
+        if let Err(err) = runtime::initial_checks(&context).await {
+            tracing::error!(?err, "failed to run initial checks!");
+            return Err(color_eyre::Report::msg(""));
+        }
+        runtime::spawn(&context);
     }
-
-    #[allow(
-        clippy::cfg_not_test,
-        reason = "it causes errors because the DB is closed before this can start up"
-    )]
-    #[cfg(not(test))]
-    runtime::spawn(&context);
 
     let auth_context = JwkContext::<AuthUrl>::new("teknologappen").await?;
     let transaction_context = JwkContext::<TransactionsUrl>::new("teknologappen").await?;

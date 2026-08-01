@@ -8,7 +8,7 @@ use serde_with::{DeserializeFromStr, SerializeDisplay};
 use sqlx::postgres::types::{PgLTree, PgLTreeLabel};
 
 /// Represents a group path as a string, parsed into a [`PgLTree`] internally.
-#[derive(sqlx::Type, Debug, Default)]
+#[derive(sqlx::Type, Debug, Default, PartialEq)]
 #[sqlx(transparent)]
 #[derive(DeserializeFromStr, SerializeDisplay)]
 pub struct Path(pub PgLTree);
