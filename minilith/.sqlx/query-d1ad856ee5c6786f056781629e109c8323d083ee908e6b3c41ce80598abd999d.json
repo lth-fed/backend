@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select (\n            exists (\n                select 1\n                from group_memberships\n                inner join groups member_group on member_group.id = group_memberships.group_id\n                inner join ticket_kind_allowed_groups tk_ag on tk_ag.ticket_kind_id = $1\n                inner join groups allowed_group on allowed_group.id = tk_ag.group_id\n                    and allowed_group.path @> member_group.path\n\n                where group_memberships.user_id = $2\n                and (\n                    member_group.limit_membership_visibility = false\n                    or tk_ag.group_id = group_memberships.group_id\n                )\n            )\n        ) as \"may_purchase!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "may_purchase!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "d1ad856ee5c6786f056781629e109c8323d083ee908e6b3c41ce80598abd999d"
+}

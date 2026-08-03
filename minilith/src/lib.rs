@@ -9,12 +9,20 @@ use poem::middleware::{Cors, OpenTelemetryMetrics, OpenTelemetryTracing};
 use poem::{Endpoint, EndpointExt as _, Route};
 use poem_openapi::OpenApiService;
 
+const CORS_ALLOWED_ORIGINS: [&str; 4] = [
+    "https://app.teknologappen.se",
+    "https://admin.teknologappen.se",
+    "http://localhost:5173",
+    "http://localhost:5175",
+];
+
 pub mod activities;
 pub mod admin;
 pub mod context;
 pub mod group;
 pub mod healthcheck;
 pub mod push_notifications;
+mod report;
 mod runtime;
 pub mod ticket;
 mod transactions;
@@ -128,15 +136,7 @@ pub async fn get_endpoint(
     let ui = api_service.swagger_ui();
     let spec = api_service.spec_endpoint();
 
-    let cors = Cors::new()
-        .allow_origin("https://teknologappen.se")
-        .allow_method(Method::GET)
-        .allow_method(Method::POST)
-        .allow_method(Method::PUT)
-        .allow_method(Method::DELETE)
-        .allow_header("content-type")
-        .allow_header("authorization")
-        .allow_credentials(true);
+    let cors = minilith_cors();
 
     Ok(Route::new()
         .nest(
@@ -150,4 +150,16 @@ pub async fn get_endpoint(
             otel.tracer(env!("CARGO_PKG_NAME")),
         ))
         .with(cors))
+}
+
+fn minilith_cors() -> Cors {
+    Cors::new()
+        .allow_origins(CORS_ALLOWED_ORIGINS)
+        .allow_method(Method::GET)
+        .allow_method(Method::POST)
+        .allow_method(Method::PUT)
+        .allow_method(Method::DELETE)
+        .allow_header("content-type")
+        .allow_header("authorization")
+        .allow_credentials(true)
 }

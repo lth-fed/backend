@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select\n                groups.id, path as \"path!: Path\",\n                name as \"name!: DIS\",\n                description as \"description!: DIS\",\n                url as logo_url from group_memberships \n            inner join groups on\n                groups.id = group_memberships.group_id \n            inner join images logo on\n                logo.id = groups.logo_id where user_id = $1",
+  "query": "select\n                groups.id, path as \"path!: Path\",\n                name as \"name!: DIS\",\n                description as \"description!: DIS\",\n                url as logo_url from group_memberships \n            inner join groups on\n                groups.id = group_memberships.group_id \n            inner join images logo on\n                logo.id = groups.logo_id\n            where user_id = $1\n                and deleted = false",
   "describe": {
     "columns": [
       {
@@ -47,5 +47,5 @@
       false
     ]
   },
-  "hash": "aec48861a5de590f3f4def634bc5bada4e5b5e8e3835d8fa8bd7fc07d6120036"
+  "hash": "0ff82084b0e26c2603f6be525aafd89abb3010ba6f0fb28011fe94e085399770"
 }

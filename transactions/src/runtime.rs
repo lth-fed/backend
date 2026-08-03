@@ -12,8 +12,8 @@ use crate::{CallbackEvent, CallbackInfo, Provider, TransactionInfo, TransactionS
 
 struct TxnData {
     id: Uuid,
-    provider: Provider,
     client_id: String,
+    provider: Provider,
     stripe_id: Option<String>,
 }
 /// # Errors
@@ -127,6 +127,8 @@ pub async fn initial_checks(ctx: &Arc<Context>) -> MinilithResult<()> {
         }
     }
 
+    check_timeouts(ctx).await?;
+
     Ok(())
 }
 
@@ -178,7 +180,8 @@ pub async fn check_timeouts(ctx: &Context) -> MinilithResult<()> {
         } else {
             let txn = sqlx::query_as!(
                 TxnData,
-                "select id, client_id, provider as \"provider: Provider\", stripe_id
+                "select id, client_id, provider as \"provider: Provider\",
+                stripe_id as \"stripe_id?\"
                 from transactions
                 left outer join stripe_checkouts
                     on (stripe_checkouts.transaction_id = transactions.id)

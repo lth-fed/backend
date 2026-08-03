@@ -11,11 +11,11 @@ mod path;
 
 pub use path::Path;
 
+use crate::context::ContextWrapper;
 use crate::{
     DbInternationalizedString as DIS, InternationalizedString as IS, MinilithEndpointError,
     MinilithResult,
 };
-use crate::{context::ContextWrapper, group::member::user_groups};
 
 use self::member::user_groups_tree;
 
@@ -52,6 +52,8 @@ pub struct Group {
     pub name: IS,
     pub description: IS,
     pub deleted: bool,
+    pub logo_id: Uuid,
+    pub logo_url: String,
 }
 
 #[derive(Debug, Object)]
@@ -63,17 +65,6 @@ struct JoinableGroup {
 
 #[OpenApi(prefix_path = "/groups")]
 impl Router {
-    /// List all groups the user is a direct member of.
-    ///
-    /// # Errors
-    ///
-    /// DB, AUTH
-    #[oai(path = "/", method = "get")]
-    async fn list_groups(&self, user: User) -> MinilithResult<Json<Vec<Group>>> {
-        let groups = user_groups(&self.context.db, user.get_id()).await?;
-
-        Ok(Json(groups))
-    }
     /// List all groups the user is a direct or transitive member of. Useful for setting the filters
     /// for groups.
     ///
@@ -98,12 +89,15 @@ impl Router {
                 target.name as "name!: DIS",
                 target.description as "description!: DIS",
                 target.deleted,
-                (request.member_id is not null) as "requested!"
+                (request.member_id is not null) as "requested!",
+                logo.id as logo_id,
+                logo.url as logo_url
             from groups_ask_to_join allowed
             inner join group_memberships membership
                 on membership.group_id = allowed.joiner_id
                 and membership.user_id = $1
             inner join groups target on target.id = allowed.target_id
+            inner join images logo on logo.id = target.logo_id
             left join group_member_requests request
                 on request.group_id = target.id and request.member_id = $1
             where target.deleted = false
@@ -118,6 +112,8 @@ impl Router {
                 name: row.name.0,
                 description: row.description.0,
                 deleted: row.deleted,
+                logo_id: row.logo_id,
+                logo_url: row.logo_url,
             },
             requested: row.requested,
         })

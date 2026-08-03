@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select sum(reserved_or_purchased_tickets)::int\n            from ticket_kinds where activity_id =\n                '00000000-0000-0000-0000-000000000003'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "sum",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "98f9a07ce4644b900c7bf7be52f9dc0bc5263ea9a78cc74ae64beaa20baf1b62"
+}

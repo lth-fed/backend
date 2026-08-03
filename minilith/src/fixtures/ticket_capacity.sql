@@ -1,9 +1,6 @@
 insert into images (id, size, url)
 values ('00000000-0000-0000-0000-000000000001', 0, 'https://example.invalid/image');
 
-insert into users (id, name, language, nonce)
-values ('email:responsible@example.com', ''::bytea, ''::bytea, ''::bytea);
-
 insert into groups (id, path, name, description, logo_id, limit_membership_visibility)
 values (
     '00000000-0000-0000-0000-000000000002',
@@ -15,12 +12,12 @@ values (
 );
 
 insert into activities (
-    id, responsible_id, responsible_contact, creator_id,
+    id, responsible_name, responsible_contact, creator_id,
     title, description, location, time_start, time_end, image_id,
     is_hidden, is_hidden_for_other_admins, max_tickets
 ) values (
     '00000000-0000-0000-0000-000000000003',
-    'email:responsible@example.com',
+    'Responsible Person',
     'mailto:responsible@example.com',
     '00000000-0000-0000-0000-000000000002',
     '{}'::jsonb,

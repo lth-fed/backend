@@ -32,32 +32,6 @@ pub async fn closest_user_membership(
     .map_err(Into::into)
 }
 
-/// Returns every group in each root tree where the user has a direct
-/// membership.
-///
-/// # Errors
-///
-/// DB.
-pub async fn user_groups(db: impl PgExecutor<'_>, user_id: &str) -> MinilithResult<Vec<Group>> {
-    sqlx::query_as!(
-        Group,
-        r#"
-            select distinct
-                g.id, g.path, g.limit_membership_visibility,
-                g.name as "name!: DIS",
-                g.description as "description!: DIS",
-                g.deleted
-            from group_memberships gm
-            join groups g on g.id = gm.group_id
-            where gm.user_id = $1
-            order by g.path
-        "#,
-        user_id
-    )
-    .fetch_all(db)
-    .await
-    .map_err(Into::into)
-}
 /// Returns the groups in the user's accessible tree.
 ///
 /// # Errors
@@ -74,10 +48,13 @@ pub async fn user_groups_tree(
                 g.id, g.path, g.limit_membership_visibility,
                 g.name as "name!: DIS",
                 g.description as "description!: DIS",
-                g.deleted
+                g.deleted,
+                logo.id as logo_id,
+                logo.url as logo_url
             from groups g
             join group_memberships gm on gm.user_id = $1
             join groups mg on mg.id = gm.group_id
+            join images logo on logo.id = g.logo_id
             where subpath(g.path, 0, 1) = subpath(mg.path, 0, 1)
             order by g.path
         "#,
@@ -145,21 +122,21 @@ mod tests {
 
         // Any direct membership reveals the complete root tree for filters.
         assert_eq!(
-            sorted_paths(user_groups(&db, "user_a").await.unwrap()),
+            sorted_paths(user_groups_tree(&db, "user_a").await.unwrap()),
             complete_tlth_tree.clone(),
         );
 
         assert_eq!(
-            sorted_paths(user_groups(&db, "user_b").await.unwrap()),
+            sorted_paths(user_groups_tree(&db, "user_b").await.unwrap()),
             complete_tlth_tree.clone(),
         );
 
         assert_eq!(
-            sorted_paths(user_groups(&db, "user_c").await.unwrap()),
+            sorted_paths(user_groups_tree(&db, "user_c").await.unwrap()),
             complete_tlth_tree,
         );
 
-        assert!(user_groups(&db, "nobody").await.unwrap().is_empty());
+        assert!(user_groups_tree(&db, "nobody").await.unwrap().is_empty());
 
         assert_eq!(
             group_members(&db, id_of(&db, "tlth").await).await.unwrap(),

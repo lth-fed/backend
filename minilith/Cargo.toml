@@ -7,6 +7,7 @@ edition = "2024"
 a2 = { version = "0.10.0", default-features = false, features = ["ring", "tracing"] }
 base64.workspace = true
 bin-common = { version = "0.1.0", path = "../bin-common" }
+bytes.workspace = true
 # NOTE: this doesn't verify authenticity: i.e. that the encrypted data comes from someone with the key (us)
 # this is not needed for user data encryption because we don't need to validate the integrity of the data,
 # the only purpose is to anonymise it.
@@ -35,6 +36,10 @@ tokio = { workspace = true, features = ["rt-multi-thread"] }
 tracing.workspace = true
 tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
+typst.workspace = true
+typst-kit.workspace = true
+typst-layout.workspace = true
+typst-pdf.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]

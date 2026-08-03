@@ -59,6 +59,27 @@ pub struct Ware {
     /// The currency in which this transactions is made.
     pub currency: Currency,
 }
+
+#[derive(Debug, Object, Clone)]
+// ALSO UPDATE `minilith/transactions.rs`
+struct InfoRequest {
+    transaction_ids: Vec<Uuid>,
+    // ALSO UPDATE `minilith/transactions.rs`
+}
+#[derive(Debug, Object, Clone)]
+// ALSO UPDATE `minilith/transactions.rs`
+struct SingleInfoResponse {
+    id: Uuid,
+    state: TransactionState,
+    customer_id: Option<String>,
+    total_fees: i64,
+    /// `null` if `state == Cancelled`.
+    provider: Option<Provider>,
+    payment_reference: Option<String>,
+    refund_reference: Option<String>,
+    // ALSO UPDATE `minilith/transactions.rs`
+}
+
 #[derive(Debug, Object, Clone)]
 // ALSO UPDATE `minilith/transactions.rs`
 struct CreatePaymentRequest {
@@ -142,34 +163,75 @@ impl Route {
         Response::new(Json(poem_openapi::types::Any(&self.jwks)))
     }
 
+    /// Will return as many infos as ids we received. The order is not guaranteed.
+    ///
+    /// # Errors
+    ///
+    /// If any is not associated with your client id, this fails.
+    #[oai(path = "/info", method = "post")]
+    async fn info(
+        &self,
+        auth: ApiAuth,
+        body: Json<InfoRequest>,
+    ) -> MinilithResult<Json<Vec<SingleInfoResponse>>> {
+        if body.transaction_ids.is_empty() {
+            return Ok(Json(vec![]));
+        }
+        let transactions = sqlx::query!(
+            r#"select payment_reference as "payment_reference?", client_id as "client_id?",
+            refund_reference as "refund_reference?",
+            total_transaction_fee as "total_transaction_fee?",
+            customer_id as "customer_id?", provider as "provider?: Provider",
+            --
+            t.id as "id!"
+            from unnest($1::uuid[]) as t(id)
+            left join transactions on transactions.id = t.id"#,
+            &body.transaction_ids
+        )
+        .fetch_all(&self.db)
+        .await?;
+        for transaction in &transactions {
+            if let Some(cid) = &transaction.client_id {
+                check_client_id(&auth, cid)?;
+            }
+        }
+        let mapped = transactions.into_iter().map(|row| SingleInfoResponse {
+            id: row.id,
+            state: if row.client_id.is_none() {
+                TransactionState::Cancelled
+            } else if row.refund_reference.is_some() {
+                TransactionState::Refunded
+            } else if row.payment_reference.is_some() {
+                TransactionState::Paid
+            } else {
+                TransactionState::Pending
+            },
+            customer_id: row.customer_id,
+            total_fees: row.total_transaction_fee.map_or(0, |money| money.0),
+            provider: row.provider,
+            payment_reference: row.payment_reference,
+            refund_reference: row.refund_reference,
+        });
+        Ok(Json(mapped.collect()))
+    }
     #[oai(path = "/:id", method = "get")]
     async fn state(
         &self,
         auth: ApiAuth,
         Path(id): Path<Uuid>,
     ) -> MinilithResult<Json<TransactionInfo>> {
-        let Some(transaction) = sqlx::query!(
-            "select payment_reference is not null as \"paid!\", client_id,
-            refund_reference is not null as \"refunded!\"
-            from transactions
-            where id = $1",
-            id
-        )
-        .fetch_optional(&self.db)
-        .await?
-        else {
-            return Ok(Json(TransactionInfo {
-                state: TransactionState::Cancelled,
-            }));
-        };
-        check_client_id(&auth, &transaction.client_id)?;
-        let state = if transaction.refunded {
-            TransactionState::Refunded
-        } else if transaction.paid {
-            TransactionState::Paid
-        } else {
-            TransactionState::Pending
-        };
+        let state = self
+            .info(
+                auth,
+                Json(InfoRequest {
+                    transaction_ids: vec![id],
+                }),
+            )
+            .await?
+            .0
+            .first()
+            .wrap_err_internal("info should return as many as it got")?
+            .state;
         Ok(Json(TransactionInfo { state }))
     }
     /// From the instant this returns the transaction is guaranteed to be cancelled.

@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select has_been_released, purchasing_available_stop from ticket_kinds where id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "has_been_released",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 1,
+        "name": "purchasing_available_stop",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "c593adf54e8e3de3c458dbda9231681cb7b6580481efebdb5e8a7f6492207c77"
+}

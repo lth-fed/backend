@@ -17,8 +17,8 @@ use sqlx::migrate;
 use tracing::{error, warn};
 use uuid::Uuid;
 
-use crate::PgPool;
 use crate::push_notifications::{PushClients, PushPlatform, PushSendResult};
+use crate::{PgPool, report};
 
 #[allow(
     clippy::module_name_repetitions,
@@ -26,7 +26,7 @@ use crate::push_notifications::{PushClients, PushPlatform, PushSendResult};
 )]
 pub type ContextWrapper = Arc<Context>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Context {
     pub db: PgPool,
     encryption_key: [u8; 32],
@@ -38,8 +38,10 @@ pub struct Context {
     push_clients: Option<PushClients>,
 
     email_client: Option<EmailClient>,
+    report_typst: report::OurWonderfulTypstWorldBase,
 
     s3_image_bucket: Box<s3::Bucket>,
+    s3_image_public_url: String,
 }
 
 impl Context {
@@ -139,6 +141,10 @@ impl Context {
             )?,
         )?
         .with_path_style();
+        let s3_image_public_url = std::env::var("S3_PUBLIC_URL")
+            .unwrap_or_else(|_| s3_image_bucket.url())
+            .trim_end_matches('/')
+            .to_owned();
 
         match s3_image_bucket.exists().await {
             Ok(false) => {
@@ -169,8 +175,10 @@ impl Context {
             push_clients,
 
             email_client,
+            report_typst: report::OurWonderfulTypstWorldBase::default(),
 
             s3_image_bucket,
+            s3_image_public_url,
         };
         Ok(context)
     }
@@ -320,6 +328,15 @@ impl Context {
         &self.s3_image_bucket
     }
 
+    #[must_use]
+    pub fn image_public_url(&self) -> &str {
+        &self.s3_image_public_url
+    }
+
+    pub(crate) fn report_typst(&self) -> &report::OurWonderfulTypstWorldBase {
+        &self.report_typst
+    }
+
     /// # Errors
     ///
     /// - user might not be allowed to access this activity
@@ -348,8 +365,10 @@ impl Context {
                 or exists (
                     select 1
                     from activity_hosts
+                    inner join groups host_group on host_group.id = activity_hosts.group_id
+                    inner join groups admin_group on admin_group.path @> host_group.path
                     inner join group_adminships
-                        on group_adminships.group_id = activity_hosts.group_id
+                        on group_adminships.group_id = admin_group.id
                     where activity_hosts.activity_id = $2
                     and group_adminships.user_id = $1
                 )
@@ -358,8 +377,10 @@ impl Context {
                     from activity_hosts
                     inner join allow_admins_from_group_view_activities allowed
                         on allowed.host_group_id = activity_hosts.group_id
+                    inner join groups allowed_g on allowed_g.id = allowed.access_group_id
+                    inner join groups admin_group on admin_group.path <@ allowed_g.path
                     inner join group_adminships
-                        on group_adminships.group_id = allowed.access_group_id
+                        on group_adminships.group_id = admin_group.id
                     inner join activities on activities.id = activity_hosts.activity_id
                     where activity_hosts.activity_id = $2
                     and group_adminships.user_id = $1

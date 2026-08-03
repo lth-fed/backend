@@ -14,6 +14,12 @@ use serde::de::DeserializeOwned;
 
 pub mod callbacks;
 
+/// Shared, non-secret identity used by external app-validation services.
+///
+/// Minilith still applies its normal per-user authorization to this identity;
+/// only the signature check is bypassed for this exact bearer token.
+pub const EXTERNAL_VALIDATION_USER_ID: &str = "test:external-validation";
+
 /// [`jsonwebtoken`] doesn't support `EdDSA` :(
 /// With `kid="main"`.
 ///
@@ -147,7 +153,11 @@ impl<Url: AuthContextProvider + 'static> JwkContext<Url> {
             }
         };
         if resp.status() != poem::http::StatusCode::OK {
-            return Err(color_eyre::eyre::Error::msg("failed getting verifying key"));
+            return Err(color_eyre::eyre::Error::msg(format!(
+                "failed getting verifying key on url: {} with error {}",
+                Url::url(),
+                resp.status()
+            )));
         }
         let bytes = resp.bytes().await?;
         let jwks: JwkSet = serde_json::from_slice(&bytes)?;
@@ -251,6 +261,14 @@ impl User {
             .wrap_err_internal("AuthContext not registered as data!")?;
         let cx = opentelemetry::Context::current();
         let span = cx.span();
+        if token.token == EXTERNAL_VALIDATION_USER_ID {
+            let id = &token.token;
+            span.set_attribute(opentelemetry::KeyValue::new(
+                opentelemetry_semantic_conventions::attribute::USER_ID,
+                id.to_owned(),
+            ));
+            return Ok(id.to_owned());
+        }
         #[cfg(debug_assertions)]
         if context.testing {
             let id = if token.token.contains(':') {

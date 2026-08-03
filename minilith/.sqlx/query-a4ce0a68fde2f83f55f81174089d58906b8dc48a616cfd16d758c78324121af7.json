@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into group_adminships (user_id, group_id) values ($1, $2)\n                 on conflict do nothing",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a4ce0a68fde2f83f55f81174089d58906b8dc48a616cfd16d758c78324121af7"
+}

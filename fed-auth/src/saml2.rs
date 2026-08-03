@@ -4,6 +4,7 @@ use std::ops::Deref;
 
 use base64::Engine as _;
 use color_eyre::eyre::Context as _;
+use fed_auth_verifier::callbacks::AuthCallbackDataV1;
 use poem::http::StatusCode;
 use poem_openapi::OpenApi;
 use poem_openapi::payload::{Binary, Form, Response};
@@ -16,7 +17,7 @@ use samael::traits::ToXml as _;
 use tracing::error;
 use xmltree::XMLNode;
 
-use crate::{API_DOMAIN, Context, context};
+use crate::{API_DOMAIN, Context};
 
 pub async fn get_service_provider()
 -> color_eyre::Result<(ServiceProvider, openssl::pkey::PKey<openssl::pkey::Private>)> {
@@ -302,10 +303,11 @@ impl SamlRouter {
             .subject
             .as_ref()
             .and_then(|sub| sub.name_id.as_ref())
-            .map(|name_id| context::UserData {
+            .map(|name_id| AuthCallbackDataV1 {
                 sub: format!("lund-university:{}", name_id.value.clone()),
                 email: String::new(),
                 full_name: "Erika Davidssona".to_owned(),
+                lth_guild: None,
             });
         self.auth_sessions.insert(request_id.clone(), data.clone());
         Ok(Response::new(())

@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "with upserted_activity as (\n             insert into activities\n                (id, responsible_name, responsible_contact, creator_id, title, description, location,\n                 time_start, time_end, image_id, is_hidden, max_tickets)\n             values ($1, $2, $3, $4, $5, $6, row($7::jsonb, null, null, null)::location, $8, $9, $10, false, $11)\n             on conflict (id) do update set\n                responsible_name = excluded.responsible_name,\n                responsible_contact = excluded.responsible_contact,\n                creator_id = excluded.creator_id,\n                title = excluded.title,\n                description = excluded.description,\n                location = excluded.location,\n                time_start = excluded.time_start,\n                time_end = excluded.time_end,\n                image_id = excluded.image_id,\n                is_hidden = excluded.is_hidden,\n                max_tickets = excluded.max_tickets\n             returning id, creator_id\n             )\n             insert into activity_hosts (activity_id, group_id)\n             select id, creator_id from upserted_activity\n             on conflict do nothing",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Uuid",
+        "Jsonb",
+        "Jsonb",
+        "Jsonb",
+        "Timestamptz",
+        "Timestamptz",
+        "Uuid",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0ba0e18fbd85977db9288f2081b2c9a02600197b3afbb1fedd7d46ae44674b18"
+}

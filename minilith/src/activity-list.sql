@@ -45,14 +45,15 @@ with visible_activities as (
         true as admin_access
     from group_adminships
     inner join groups admin_group on admin_group.id = group_adminships.group_id
-    inner join allow_admins_from_group_view_activities allowed_to_view on (allowed_to_view.access_group_id = admin_group.id)
+    inner join groups supergroup on admin_group.path <@ supergroup.path
+    inner join allow_admins_from_group_view_activities allowed_to_view on (allowed_to_view.access_group_id = supergroup.id)
     inner join activity_hosts host on (host.group_id = allowed_to_view.host_group_id)
     inner join activities a on a.id = host.activity_id
     where
         group_adminships.user_id = $1
         and (
             a.is_hidden_for_other_admins = false
-            or host.group_id = admin_group.id
+            or host.group_id = supergroup.id
         )
 
     union all

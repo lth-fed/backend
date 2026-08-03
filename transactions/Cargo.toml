@@ -30,10 +30,10 @@ sqlx.workspace = true
 time.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 tracing.workspace = true
-typst = "0.15.1"
-typst-kit = { version = "0.15.1", features = ["datetime", "embedded-fonts"] }
-typst-layout = "0.15.1"
-typst-pdf = "0.15.1"
+typst.workspace = true
+typst-kit.workspace = true
+typst-layout.workspace = true
+typst-pdf.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]

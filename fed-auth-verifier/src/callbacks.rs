@@ -85,11 +85,27 @@ macro_rules! impl_api_extractor {
 ///     }
 /// }
 /// ```
-#[derive(Debug, Object, Deserialize)]
+#[derive(Debug, Enum, Deserialize, Serialize, Clone, Copy)]
+#[allow(clippy::min_ident_chars, reason = "duh")]
+pub enum Guild {
+    F,
+    E,
+    M,
+    V,
+    A,
+    K,
+    D,
+    Doct,
+    Ing,
+    W,
+    I,
+}
+#[derive(Debug, Object, Deserialize, Serialize, Clone)]
 pub struct AuthCallbackDataV1 {
     pub sub: String,
     pub email: String,
     pub full_name: String,
+    pub lth_guild: Option<Guild>,
 }
 impl_api_extractor!(AuthCallbackDataV1, JwkContext<AuthUrl>);
 

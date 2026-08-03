@@ -26,7 +26,8 @@ use crate::context::CallbackUrl;
 use crate::{API_DOMAIN, Context, WEBSITE_DOMAIN, context, jwt, random_id};
 
 const TEKNOLOGAPPEN_ALLOWED_DOMAINS: &[&str] = &[
-    "https://teknologappen.se",
+    "https://app.teknologappen.se",
+    "https://admin.teknologappen.se",
     "https://api.teknologappen.se",
     // ios app
     "capacitor://localhost",
@@ -47,6 +48,7 @@ fn eq_uri_domain(uri: &Uri, domain: &str) -> bool {
 fn is_allowed_domain(client_id: &str, domain: &Uri) -> bool {
     #[cfg(debug_assertions)]
     if eq_uri_domain(domain, "http://localhost:5173")
+        || eq_uri_domain(domain, "http://localhost:5175")
         || eq_uri_domain(domain, "http://localhost:8000")
         || eq_uri_domain(domain, API_DOMAIN)
         || eq_uri_domain(domain, WEBSITE_DOMAIN)
@@ -60,6 +62,7 @@ fn is_allowed_domain(client_id: &str, domain: &Uri) -> bool {
 fn is_teknologappen_domain(domain: &Uri) -> bool {
     #[cfg(debug_assertions)]
     if eq_uri_domain(domain, "http://localhost:5173")
+        || eq_uri_domain(domain, "http://localhost:5175")
         || eq_uri_domain(domain, "http://localhost:8000")
         || eq_uri_domain(domain, API_DOMAIN)
         || eq_uri_domain(domain, WEBSITE_DOMAIN)

@@ -23,6 +23,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use color_eyre::eyre::WrapErr as _;
+use fed_auth_verifier::EXTERNAL_VALIDATION_USER_ID;
 use minilith::{Context, ContextWrapper};
 use sqlx::postgres::types::{PgLTree, PgMoney};
 use sqlx::types::Json;
@@ -31,6 +32,39 @@ use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 
 const LOGO_IMG: Uuid = Uuid::from_u128(0x7c315a13_eff7_4268_89b9_5e072611ea21);
+const TESTING_ID_XOR: u128 = 0x7e57_0000_0000_0000_0000_0000_0000_0000;
+
+#[derive(Clone, Copy)]
+struct SeedNamespace {
+    root_path: &'static str,
+    name_prefix: &'static str,
+    id_xor: u128,
+}
+
+impl SeedNamespace {
+    fn path(self, path: &str) -> String {
+        let suffix = path
+            .strip_prefix("tlth")
+            .expect("all fixture paths are below tlth");
+        format!("{}{suffix}", self.root_path)
+    }
+
+    fn id(self, id: Uuid) -> Uuid {
+        Uuid::from_u128(id.as_u128() ^ self.id_xor)
+    }
+}
+
+const MAIN_NAMESPACE: SeedNamespace = SeedNamespace {
+    root_path: "tlth",
+    name_prefix: "",
+    id_xor: 0,
+};
+const EXTERNAL_VALIDATION_NAMESPACE: SeedNamespace = SeedNamespace {
+    // PostgreSQL ltree labels (and SQLx's parser) do not permit hyphens.
+    root_path: "testing_tlth",
+    name_prefix: "Testing – ",
+    id_xor: TESTING_ID_XOR,
+};
 
 /// Shared image id every seed group + activity points at, to avoid
 /// re-uploading the same placeholder per row.
@@ -56,6 +90,13 @@ async fn seed_image(ctx: &ContextWrapper) -> color_eyre::Result<()> {
 ///
 /// Return an error if the DB connection fails.
 pub async fn seed_groups(ctx: &ContextWrapper) -> color_eyre::Result<()> {
+    seed_group_namespace(ctx, MAIN_NAMESPACE).await
+}
+
+async fn seed_group_namespace(
+    ctx: &ContextWrapper,
+    namespace: SeedNamespace,
+) -> color_eyre::Result<()> {
     let groups: &[(&str, &str, &str, &str)] = &[
         (
             "tlth",
@@ -131,13 +172,17 @@ pub async fn seed_groups(ctx: &ContextWrapper) -> color_eyre::Result<()> {
         ),
     ];
     for (path, name, sv_desc, en_desc) in groups {
+        let path = namespace.path(path);
+        let name = format!("{}{name}", namespace.name_prefix);
         let name = serde_json::json!({ "en": name, "sv": name });
-        let description = serde_json::json!({ "en": sv_desc, "sv": en_desc });
+        let description = serde_json::json!({ "en": en_desc, "sv": sv_desc });
         let path = path.parse::<PgLTree>().wrap_err("parse path")?;
         sqlx::query!(
             "insert into groups (path, limit_membership_visibility, name, description, logo_id, deleted)
              values ($1, false, $2, $3, $4, false)
-             on conflict do nothing",
+             on conflict (path) do update set
+                name = excluded.name,
+                description = excluded.description",
             path,
             name,
             description,
@@ -168,12 +213,20 @@ async fn group_id(ctx: &ContextWrapper, path: &str) -> color_eyre::Result<Uuid> 
 /// the demo-csv detour — the activity-list query requires membership in
 /// a group that's allowed to purchase one of the activity's kinds.
 async fn seed_users(ctx: &ContextWrapper) -> color_eyre::Result<()> {
-    let users: &[(&str, &str, &str)] = &[
-        ("test:si1234mc-s", "Simon Mechler", "tlth.d"),
-        ("test:ma5657ed-s", "Max Edman", "tlth.e"),
-        ("test:er7826an-s", "Erik Andersson", "tlth.e"),
+    let users: &[(&str, &str, &str, bool)] = &[
+        ("test:si1234mc-s", "Simon Mechler", "tlth.d", false),
+        ("test:ma5657ed-s", "Max Edman", "tlth.e", false),
+        ("test:er7826an-s", "Erik Andersson", "tlth.e", false),
+        (
+            EXTERNAL_VALIDATION_USER_ID,
+            "External validation",
+            "testing_tlth.e",
+            false,
+        ),
+        ("email:e@example.org", "E administrator", "tlth.e", true),
+        ("email:tlth@example.org", "TLTH administrator", "tlth", true),
     ];
-    for (id, name, guild_path) in users {
+    for (id, name, guild_path, is_admin) in users {
         let nonce: [u8; 12] = rand::random();
         let mut name_bytes: Vec<u8> = (*name).as_bytes().to_vec();
         ctx.endecrypt_mut_slice(&mut name_bytes, &nonce);
@@ -198,6 +251,18 @@ async fn seed_users(ctx: &ContextWrapper) -> color_eyre::Result<()> {
         .execute(&ctx.db)
         .await
         .wrap_err_with(|| format!("seed membership {id} -> {guild_path}"))?;
+
+        if *is_admin {
+            sqlx::query!(
+                "insert into group_adminships (user_id, group_id) values ($1, $2)
+                 on conflict do nothing",
+                id,
+                group_id,
+            )
+            .execute(&ctx.db)
+            .await
+            .wrap_err_with(|| format!("seed adminship {id} -> {guild_path}"))?;
+        }
     }
     Ok(())
 }
@@ -206,7 +271,8 @@ struct ActivitySeed<'a> {
     id: Uuid,
     creator_path: &'a str,
     host_paths: &'a [&'a str],
-    responsible_id: &'a str,
+    responsible_name: &'a str,
+    responsible_contact: &'a str,
     title_en: &'a str,
     title_sv: &'a str,
     description_en: &'a str,
@@ -239,13 +305,14 @@ fn dt(rfc3339: &str) -> OffsetDateTime {
     OffsetDateTime::parse(rfc3339, &Rfc3339).expect("valid rfc3339 datetime")
 }
 
-async fn seed_activities(ctx: &ContextWrapper) -> color_eyre::Result<()> {
+async fn seed_activities(ctx: &ContextWrapper, namespace: SeedNamespace) -> color_eyre::Result<()> {
     let activities: &[ActivitySeed] = &[
         ActivitySeed {
             id: Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_000a),
             creator_path: "tlth.a",
             host_paths: &["tlth.f"],
-            responsible_id: "test:si1234mc-s",
+            responsible_name: "Simon Mechler",
+            responsible_contact: "mailto:e@example.org",
             title_en: "Other sitting kinda",
             title_sv: "Annan sittning typ",
             description_en: "english: Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.",
@@ -281,7 +348,7 @@ async fn seed_activities(ctx: &ContextWrapper) -> color_eyre::Result<()> {
                     name_sv: "Sponsor",
                     price_ore: 0,
                     purchasing_start: dt("2026-05-20T00:00:00Z"),
-                    purchasing_stop: dt("2026-06-15T12:00:00Z"),
+                    purchasing_stop: dt("2126-06-15T12:00:00Z"),
                     max_tickets: 50,
                 },
             ],
@@ -290,7 +357,8 @@ async fn seed_activities(ctx: &ContextWrapper) -> color_eyre::Result<()> {
             id: Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_000b),
             creator_path: "tlth.d",
             host_paths: &[],
-            responsible_id: "test:si1234mc-s",
+            responsible_name: "Simon Mechler",
+            responsible_contact: "mailto:e@example.org",
             title_en: "Spring fest",
             title_sv: "Vårfest",
             description_en: "english: Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.",
@@ -335,7 +403,8 @@ async fn seed_activities(ctx: &ContextWrapper) -> color_eyre::Result<()> {
             id: Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_0000_000c),
             creator_path: "tlth.i",
             host_paths: &[],
-            responsible_id: "test:si1234mc-s",
+            responsible_name: "Simon Mechler",
+            responsible_contact: "mailto:e@example.org",
             title_en: "Tuesday pub",
             title_sv: "Tisdagspub",
             description_en: "Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur.",
@@ -375,8 +444,10 @@ async fn seed_activities(ctx: &ContextWrapper) -> color_eyre::Result<()> {
     // same row (idempotency).
     let mut image_ids: HashMap<&str, Uuid> = HashMap::new();
     for a in activities {
-        let id =
-            Uuid::from_u128(a.id.as_u128() ^ 0x49_4d_47_5f_53_45_45_44_49_44_5f_5f_5f_5f_5f_5f);
+        let activity_id = namespace.id(a.id);
+        let id = Uuid::from_u128(
+            activity_id.as_u128() ^ 0x49_4d_47_5f_53_45_45_44_49_44_5f_5f_5f_5f_5f_5f,
+        );
         sqlx::query!(
             "insert into images (id, size, url) values ($1, 0, $2) on conflict do nothing",
             id,
@@ -389,13 +460,16 @@ async fn seed_activities(ctx: &ContextWrapper) -> color_eyre::Result<()> {
     }
 
     // Allow every seeded ticket_kind to be purchased by anyone under
-    // the `tlth` root. Without rows in `ticket_kind_allowed_groups` the
+    // the namespace root. Without rows in `ticket_kind_allowed_groups` the
     // activity-list inner join finds no matches and the homepage stays
     // empty.
-    let tlth_id = group_id(ctx, "tlth").await?;
+    let root_path = namespace.path("tlth");
+    let root_id = group_id(ctx, &root_path).await?;
 
     for a in activities {
-        let creator_id = group_id(ctx, a.creator_path).await?;
+        let activity_id = namespace.id(a.id);
+        let creator_path = namespace.path(a.creator_path);
+        let creator_id = group_id(ctx, &creator_path).await?;
         let image_id = *image_ids.get(a.image_url).expect("inserted above");
         let title = serde_json::json!({ "en": a.title_en, "sv": a.title_sv });
         let description = serde_json::json!({ "en": a.description_en, "sv": a.description_sv });
@@ -410,10 +484,12 @@ async fn seed_activities(ctx: &ContextWrapper) -> color_eyre::Result<()> {
         sqlx::query!(
             "with upserted_activity as (
              insert into activities
-                (id, responsible_id, creator_id, title, description, location,
+                (id, responsible_name, responsible_contact, creator_id, title, description, location,
                  time_start, time_end, image_id, is_hidden, max_tickets)
-             values ($1, $2, $3, $4, $5, row($6::jsonb, null, null, null)::location, $7, $8, $9, false, $10)
+             values ($1, $2, $3, $4, $5, $6, row($7::jsonb, null, null, null)::location, $8, $9, $10, false, $11)
              on conflict (id) do update set
+                responsible_name = excluded.responsible_name,
+                responsible_contact = excluded.responsible_contact,
                 creator_id = excluded.creator_id,
                 title = excluded.title,
                 description = excluded.description,
@@ -428,8 +504,9 @@ async fn seed_activities(ctx: &ContextWrapper) -> color_eyre::Result<()> {
              insert into activity_hosts (activity_id, group_id)
              select id, creator_id from upserted_activity
              on conflict do nothing",
-            a.id,
-            a.responsible_id,
+            activity_id,
+            a.responsible_name,
+            a.responsible_contact,
             creator_id,
             title,
             description,
@@ -441,13 +518,14 @@ async fn seed_activities(ctx: &ContextWrapper) -> color_eyre::Result<()> {
         )
         .execute(&ctx.db)
         .await
-        .wrap_err_with(|| format!("seed activity {}", a.id))?;
+        .wrap_err_with(|| format!("seed activity {activity_id}"))?;
 
         for path in a.host_paths {
-            let group_id = group_id(ctx, path).await?;
+            let host_path = namespace.path(path);
+            let group_id = group_id(ctx, &host_path).await?;
             sqlx::query!(
                 "insert into activity_hosts (activity_id, group_id) values ($1, $2) on conflict do nothing",
-                a.id,
+                activity_id,
                 group_id,
             )
             .execute(&ctx.db)
@@ -456,6 +534,7 @@ async fn seed_activities(ctx: &ContextWrapper) -> color_eyre::Result<()> {
         }
 
         for k in a.ticket_kinds {
+            let ticket_kind_id = namespace.id(k.id);
             let name = serde_json::json!({ "en": k.name_en, "sv": k.name_sv });
             // `money` is i64 minor units. PgMoney binds straight to the
             // money column type without any text-format detour.
@@ -480,8 +559,8 @@ async fn seed_activities(ctx: &ContextWrapper) -> color_eyre::Result<()> {
                     reserved_or_purchased_tickets = excluded.reserved_or_purchased_tickets,
                     has_been_purchased = false,
                     has_been_released = excluded.has_been_released",
-                k.id,
-                a.id,
+                ticket_kind_id,
+                activity_id,
                 Json(&name) as _,
                 price,
                 k.purchasing_start,
@@ -490,17 +569,17 @@ async fn seed_activities(ctx: &ContextWrapper) -> color_eyre::Result<()> {
             )
             .execute(&ctx.db)
             .await
-            .wrap_err_with(|| format!("seed ticket kind {}", k.id))?;
+            .wrap_err_with(|| format!("seed ticket kind {ticket_kind_id}"))?;
 
             sqlx::query!(
                 "insert into ticket_kind_allowed_groups (ticket_kind_id, group_id)
                  values ($1, $2) on conflict do nothing",
-                k.id,
-                tlth_id,
+                ticket_kind_id,
+                root_id,
             )
             .execute(&ctx.db)
             .await
-            .wrap_err_with(|| format!("seed ticket kind allowed group {}", k.id))?;
+            .wrap_err_with(|| format!("seed ticket kind allowed group {ticket_kind_id}"))?;
         }
     }
     Ok(())
@@ -509,8 +588,10 @@ async fn seed_activities(ctx: &ContextWrapper) -> color_eyre::Result<()> {
 async fn seed(ctx: &ContextWrapper) -> color_eyre::Result<()> {
     seed_image(ctx).await?;
     seed_groups(ctx).await?;
+    seed_group_namespace(ctx, EXTERNAL_VALIDATION_NAMESPACE).await?;
     seed_users(ctx).await?;
-    seed_activities(ctx).await?;
+    seed_activities(ctx, MAIN_NAMESPACE).await?;
+    seed_activities(ctx, EXTERNAL_VALIDATION_NAMESPACE).await?;
     Ok(())
 }
 
@@ -522,4 +603,23 @@ async fn main() -> color_eyre::Result<()> {
     seed(&ctx).await?;
     tracing::info!("seed-dev: done");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EXTERNAL_VALIDATION_NAMESPACE, MAIN_NAMESPACE};
+    use uuid::Uuid;
+
+    #[test]
+    fn external_validation_namespace_is_isolated() {
+        assert_eq!(MAIN_NAMESPACE.path("tlth.e"), "tlth.e");
+        assert_eq!(
+            EXTERNAL_VALIDATION_NAMESPACE.path("tlth.e"),
+            "testing_tlth.e"
+        );
+
+        let fixture_id = Uuid::from_u128(10);
+        assert_eq!(MAIN_NAMESPACE.id(fixture_id), fixture_id);
+        assert_ne!(EXTERNAL_VALIDATION_NAMESPACE.id(fixture_id), fixture_id);
+    }
 }

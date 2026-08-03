@@ -1,5 +1,6 @@
 use std::ops::Deref;
 
+use fed_auth_verifier::callbacks::AuthCallbackDataV1;
 use minilith_errors::{MinilithEndpointError, MinilithErrorResultExt as _, MinilithResult};
 use poem_openapi::payload::{Json, PlainText};
 use poem_openapi::{Enum, Object, OpenApi};
@@ -7,7 +8,7 @@ use sqlx::query;
 use uuid::Uuid;
 
 use crate::oidc::ACCESS_TOKEN_VALID_FOR;
-use crate::{Context, WEBSITE_DOMAIN, context, jwt, random_id};
+use crate::{Context, WEBSITE_DOMAIN, jwt, random_id};
 
 #[derive(Object, Clone)]
 pub(crate) struct EmailLoginRequest {
@@ -138,10 +139,11 @@ impl MainRouter {
         let Some(mut session) = self.auth_sessions.get(&login_data.code) else {
             return Err(MinilithEndpointError::unauthorized("session not valid", ""));
         };
-        session.validated_user = Some(context::UserData {
+        session.validated_user = Some(AuthCallbackDataV1 {
             sub: format!("email:{}", login_data.email),
             full_name: login_data.name,
             email: login_data.email,
+            lth_guild: None,
         });
         self.auth_sessions
             .insert(login_data.code.clone(), session.clone());
@@ -169,10 +171,11 @@ impl MainRouter {
         let Some(mut session) = self.auth_sessions.get(&body.code) else {
             return Err(MinilithEndpointError::unauthorized("code not valid", ""));
         };
-        session.validated_user = Some(context::UserData {
+        session.validated_user = Some(AuthCallbackDataV1 {
             sub: format!("test:{}", body.stil_id),
             full_name: body.name.clone(),
             email: format!("{}@student.lu.se", body.stil_id),
+            lth_guild: None,
         });
         self.auth_sessions
             .insert(body.code.clone(), session.clone());

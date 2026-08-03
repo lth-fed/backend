@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select\n                groups.id, groups.path,\n                groups.limit_membership_visibility,\n                groups.name as \"name!: DIS\",\n                groups.description as \"description!: DIS\",\n                groups.deleted\n            from groups_ask_to_join\n            inner join groups on groups.id = groups_ask_to_join.joiner_id\n            where groups_ask_to_join.target_id = $1\n            order by groups.path",
+  "query": "select\n                groups.id, groups.path,\n                groups.limit_membership_visibility,\n                groups.name as \"name!: DIS\",\n                groups.description as \"description!: DIS\",\n                groups.deleted,\n                logo.id as logo_id,\n                logo.url as logo_url\n            from groups_ask_to_join\n            inner join groups on groups.id = groups_ask_to_join.joiner_id\n            inner join images logo on logo.id = groups.logo_id\n            where groups_ask_to_join.target_id = $1\n            order by groups.path",
   "describe": {
     "columns": [
       {
@@ -37,6 +37,16 @@
         "ordinal": 5,
         "name": "deleted",
         "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
+        "name": "logo_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 7,
+        "name": "logo_url",
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -50,8 +60,10 @@
       false,
       false,
       false,
+      false,
+      false,
       false
     ]
   },
-  "hash": "ecb8894a3a701e34ef5f678f7fadffbdfc561abe51f5c7d0790eb99e45cf93ef"
+  "hash": "9e2549b2c4f43174a5d3c5338b4212b0490f8c759504874d3182eaa540293e3e"
 }

@@ -142,6 +142,7 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@fed-postgres:5432/fed
       OTEL_EXPORTER_OTLP_ENDPOINT: http://fed-collector:4317
+      S3_PUBLIC_URL: https://${S3_DOMAIN:-s3.teknologappen.se}/image
     depends_on:
       fed-postgres:
         condition: service_healthy

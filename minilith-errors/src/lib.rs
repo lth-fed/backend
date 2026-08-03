@@ -80,7 +80,7 @@ impl MinilithEndpointError {
             "Bad frontend code."
         );
         Self::Forbidden(Json(MinilithError {
-            message: "contact app developers".into(),
+            message: error_message.as_ref().into(),
             field: None,
         }))
     }
@@ -133,15 +133,27 @@ impl MinilithEndpointError {
     /// An internal error happened! You MUST nog an error too.
     #[track_caller]
     pub fn internal_error(error_message: impl AsRef<str>, error: impl Debug) -> Self {
-        alert(
-            AlertLevel::L3,
-            format!(
-                "internal error from wrap_err_internal, \
-                message:<code>{}</code>, \
-                error:<pre><code>{error:?}</code></pre>",
-                error_message.as_ref()
-            ),
-        );
+        // so it doesn't just loop
+        if !error_message.as_ref().starts_with("email:") {
+            let level = match error_message
+                .as_ref()
+                .get(..2)
+                .unwrap_or(error_message.as_ref())
+            {
+                "l2" => AlertLevel::L2,
+                "l1" => AlertLevel::L1,
+                _ => AlertLevel::L3,
+            };
+            alert(
+                level,
+                format!(
+                    "internal error from wrap_err_internal, \
+                    message:<code>{}</code>, \
+                    error:<pre><code>{error:?}</code></pre>",
+                    error_message.as_ref()
+                ),
+            );
+        }
         // to get the trace
         error!(message = error_message.as_ref(), ?error, "Internal error.");
         Self::InternalServerError(Json(MinilithError {
@@ -401,7 +413,7 @@ impl EmailClient {
         let mut has_recipient = false;
         for recipient in to {
             let mailbox = lettre::message::Mailbox::from_str(recipient)
-                .wrap_err_internal("invalid recipient email address")?;
+                .wrap_err_internal("email: invalid recipient email address")?;
             message = message.to(mailbox);
             has_recipient = true;
         }
@@ -411,18 +423,19 @@ impl EmailClient {
 
         let message = message
             .body(html.into())
-            .wrap_err_internal("failed to format email")?;
+            .wrap_err_internal("email: failed to format email")?;
         let response = self
             .transport
             .send(message)
             .await
-            .wrap_err_internal("failed to send email")?;
+            .wrap_err_internal("email: failed to send email")?;
         if !response.is_positive() {
-            alert(
-                AlertLevel::L2,
-                format!("failed to send email: {:?}", response.code()),
-            );
-            error!("Failed to send email: {:?}", response.code());
+            // we can't alert here, that could cause loops
+            // alert(
+            //     AlertLevel::L2,
+            //     format!("failed to send email: {:?}", response.code()),
+            // );
+            error!("email: Failed to send email: {:?}", response.code());
         }
         Ok(())
     }

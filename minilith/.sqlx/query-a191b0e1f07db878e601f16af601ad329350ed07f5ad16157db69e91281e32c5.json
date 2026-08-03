@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select activities.id,\n                title as \"title!: DIS\",\n                activities.description as \"description!: DIS\",\n                location as \"location!: Location\", time_start, time_end,\n                max_tickets,\n                users.id as \"responsible_id\",\n                responsible_contact,\n                users.name as \"responsible_name\",\n                users.nonce as \"responsible_nonce\",\n                images.url as \"image_url\",\n                activities.image_id,\n                creator.id as creator_id,\n                creator.path as creator_path,\n                is_hidden,\n                is_hidden_for_other_admins\n            from activities\n            inner join users on users.id = responsible_id\n            inner join images on images.id = image_id\n            inner join groups creator on creator.id = creator_id\n            where activities.id = $1;\n            ",
+  "query": "select activities.id,\n                title as \"title!: DIS\",\n                activities.description as \"description!: DIS\",\n                location as \"location!: Location\", time_start, time_end,\n                max_tickets,\n                responsible_name,\n                responsible_contact,\n                images.url as \"image_url\",\n                activities.image_id,\n                creator_id,\n                is_hidden,\n                is_hidden_for_other_admins\n            from activities\n            inner join images on images.id = image_id\n            where activities.id = $1;\n            ",
   "describe": {
     "columns": [
       {
@@ -64,7 +64,7 @@
       },
       {
         "ordinal": 7,
-        "name": "responsible_id",
+        "name": "responsible_name",
         "type_info": "Text"
       },
       {
@@ -74,46 +74,26 @@
       },
       {
         "ordinal": 9,
-        "name": "responsible_name",
-        "type_info": "Bytea"
-      },
-      {
-        "ordinal": 10,
-        "name": "responsible_nonce",
-        "type_info": "Bytea"
-      },
-      {
-        "ordinal": 11,
         "name": "image_url",
         "type_info": "Text"
       },
       {
-        "ordinal": 12,
+        "ordinal": 10,
         "name": "image_id",
         "type_info": "Uuid"
       },
       {
-        "ordinal": 13,
+        "ordinal": 11,
         "name": "creator_id",
         "type_info": "Uuid"
       },
       {
-        "ordinal": 14,
-        "name": "creator_path",
-        "type_info": {
-          "Custom": {
-            "name": "ltree",
-            "kind": "Simple"
-          }
-        }
-      },
-      {
-        "ordinal": 15,
+        "ordinal": 12,
         "name": "is_hidden",
         "type_info": "Bool"
       },
       {
-        "ordinal": 16,
+        "ordinal": 13,
         "name": "is_hidden_for_other_admins",
         "type_info": "Bool"
       }
@@ -137,11 +117,8 @@
       false,
       false,
       false,
-      false,
-      false,
-      false,
       false
     ]
   },
-  "hash": "96867bf61209535556570ccd80144fc4a7054e84a5f252987283b759297e22a4"
+  "hash": "a191b0e1f07db878e601f16af601ad329350ed07f5ad16157db69e91281e32c5"
 }

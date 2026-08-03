@@ -2,6 +2,14 @@
 
 ## SQLx
 
+> Before committing, run `cargo sqlx prepare -- --all-targets`. Without
+> `--all-targets` it doesn't generate the test files.
+
+> Outer joins must override the variable to be optional:
+> `select id, stripe_id as "stripe_id?" from transactions txn left outer join stripe_checkouts s on txn.id = s.transaction_id`
+> otherwise SQLx will try to parse it as if it could not be null. This might be
+> true even if the field in question is nullable.
+
 We glue Rust together with Postgres using
 [SQLx](https://github.com/launchbadge/sqlx/blob/main/README.md). It handles
 migrations and does compile-time checks of the queries. To create new

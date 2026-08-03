@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use bin_common::setup_db;
 use ed25519_dalek::pkcs8::DecodePrivateKey as _;
+use fed_auth_verifier::callbacks::AuthCallbackDataV1;
 use jsonwebtoken::jwk::JwkSet;
 use mini_moka::sync::Cache;
 use poem_openapi::Object;
@@ -30,7 +31,7 @@ pub(crate) struct AuthSession {
     // PKCE
     pub code_challenge: String,
 
-    pub validated_user: Option<UserData>,
+    pub validated_user: Option<AuthCallbackDataV1>,
     pub datasharing_confirmed: bool,
     pub redirect_requires_datasharing: bool,
 }
@@ -62,13 +63,6 @@ impl AuthSession {
             }
         }
     }
-}
-#[derive(Serialize, Clone, Debug)]
-pub(crate) struct UserData {
-    /// User ID.
-    pub sub: String,
-    pub full_name: String,
-    pub email: String,
 }
 pub enum CallbackUrlVersion<'a> {
     V1 { url: &'a str },

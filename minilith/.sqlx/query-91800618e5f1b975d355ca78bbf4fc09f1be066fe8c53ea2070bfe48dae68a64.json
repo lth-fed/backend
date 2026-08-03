@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select url from groups\n            inner join images on images.id = groups.logo_id\n            where groups.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "url",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "91800618e5f1b975d355ca78bbf4fc09f1be066fe8c53ea2070bfe48dae68a64"
+}

@@ -4,7 +4,9 @@ use std::ops::{ControlFlow, Deref};
 use bin_common::{PgPool, Transaction};
 use fed_auth_verifier::User;
 use fed_auth_verifier::callbacks::TransactionState;
-use minilith_errors::{MinilithErrorOptionExt as _, MinilithErrorResultExt as _};
+use minilith_errors::{
+    AlertLevel, MinilithErrorOptionExt as _, MinilithErrorResultExt as _, alert,
+};
 use poem_openapi::Enum;
 use poem_openapi::param::Path;
 use poem_openapi::payload::{Binary, Response};
@@ -90,7 +92,7 @@ impl Router {
         .await?;
 
         let options: HashMap<Uuid, Vec<AddonOption>> = sqlx::query!(
-            "select ticket_addon_options.id, ticket_addon_id,
+            "select ticket_addon_options.id, ticket_addon_id, ticket_addon_options.idx,
             ticket_addon_options.name as \"name: DIS\", price,
             -- wait wtf this Vec<i64> syntax actually works??
             bookkeeping_prices as \"bkp: Vec<i64>\", bookkeeping_price_categories
@@ -105,6 +107,7 @@ impl Router {
                 row.ticket_addon_id,
                 AddonOption {
                     id: row.id,
+                    idx: row.idx,
                     name: row.name.0,
                     price: row.price.0,
                     bookkeeping_prices: row.bkp,
@@ -204,19 +207,6 @@ pub struct PurchaseStatusRequest {
 }
 
 #[derive(Debug, Clone, Copy, Enum)]
-pub enum DropStatus {
-    Dropped,
-    /// Transaction is in the state of being cancelled. Poll every ~5s the status of the queue to
-    /// see when it has been successfully cancelled.
-    /// The transaction may still go through if you have accepted payment.
-    TransactionCancelling,
-}
-#[derive(Debug, Clone, Copy, Object)]
-pub struct DropReservationResponse {
-    status: DropStatus,
-}
-
-#[derive(Debug, Clone, Copy, Enum)]
 pub enum PurchaseStatus {
     /// Standing in release queue (tickets have not been released yet).
     /// Request the queue endpoint to get queue status.
@@ -256,6 +246,7 @@ pub struct PurchasedAddon {
 #[derive(Object, Clone, Debug)]
 pub struct AddonOption {
     pub id: Uuid,
+    pub idx: i32,
     pub name: IS,
     pub price: i64,
     // for admins mostly
@@ -273,10 +264,10 @@ pub struct AvailableAddon {
 #[derive(Object, Debug)]
 pub struct TicketBase {
     #[allow(clippy::struct_field_names, reason = "reasonable name")]
-    ticket_kind_id: Uuid,
+    pub ticket_kind_id: Uuid,
     #[allow(clippy::struct_field_names, reason = "reasonable name")]
-    ticket_kind_name: IS,
-    activity_id: Uuid,
+    pub ticket_kind_name: IS,
+    pub activity_id: Uuid,
 }
 #[derive(Object, Debug)]
 struct PurchasedTicket {
@@ -295,20 +286,20 @@ struct PurchasedTicket {
 #[derive(Object, Debug)]
 pub struct Kind {
     #[oai(flatten)]
-    inner: TicketBase,
-    price: i64,
-    purchasing_available_start: OffsetDateTime,
-    purchasing_available_stop: OffsetDateTime,
-    max_tickets: i32,
-    min_tickets: i32,
-    reserved_or_purchased_tickets: i32,
-    allow_transfer_ticket_start: OffsetDateTime,
-    allow_transfer_ticket_stop: OffsetDateTime,
-    allow_transfer_ticket_bypass_allowed_groups: bool,
-    has_been_purchased: bool,
-    has_been_released: bool,
-    allowed_group_ids: Vec<Uuid>,
-    available_addons: Vec<AvailableAddon>,
+    pub inner: TicketBase,
+    pub price: i64,
+    pub purchasing_available_start: OffsetDateTime,
+    pub purchasing_available_stop: OffsetDateTime,
+    pub max_tickets: i32,
+    pub min_tickets: i32,
+    pub reserved_or_purchased_tickets: i32,
+    pub allow_transfer_ticket_start: OffsetDateTime,
+    pub allow_transfer_ticket_stop: OffsetDateTime,
+    pub allow_transfer_ticket_bypass_allowed_groups: bool,
+    pub has_been_purchased: bool,
+    pub has_been_released: bool,
+    pub allowed_group_ids: Vec<Uuid>,
+    pub available_addons: Vec<AvailableAddon>,
 }
 
 impl Kind {
@@ -357,6 +348,12 @@ impl Kind {
                         })
             })
     }
+}
+
+#[derive(Object)]
+struct TransferRequest {
+    purchased_ticket_id: Uuid,
+    to_user: String,
 }
 
 /// The frontend has to encode / decode the QR with both these datapoints, maybe through
@@ -572,6 +569,7 @@ impl Router {
         user: User,
         req: Json<QueueRequest>,
     ) -> MinilithResult<Json<PurchaseStatus>> {
+        ensure_user_may_purchase_ticket(&self.db, user.get_id(), req.ticket_kind).await?;
         let has_reservation = sqlx::query_scalar!(
             "select exists (
                 select 1 from ticket_reservations where user_id = $1
@@ -586,14 +584,21 @@ impl Router {
                 "",
             ));
         }
-        let has_been_released = sqlx::query_scalar!(
-            "select has_been_released from ticket_kinds where id = $1",
+        let row = sqlx::query!(
+            "select has_been_released, purchasing_available_stop from ticket_kinds where id = $1",
             req.ticket_kind
         )
         .fetch_one(&self.db)
         .await?;
 
-        if has_been_released {
+        if row.purchasing_available_stop < OffsetDateTime::now_utc() {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "ticket not available for purchase anymore",
+                "",
+            ));
+        }
+
+        if row.has_been_released {
             // we can only be in 1 type of queue
             let _: Result<_, _> = self.unqueue(user.clone()).await;
             let row = sqlx::query!(
@@ -750,11 +755,13 @@ impl Router {
     /// Cancel the reservation if the user is no longer interested in buying it (e.g. realize they
     /// are broke).
     ///
+    /// Cancelled if this returns 200.
+    ///
     /// # Errors
     ///
     /// - 404 not found when the user doesn't have a reservation
     #[oai(path = "/reservation", method = "delete")]
-    async fn drop_reservation(&self, user: User) -> MinilithResult<Json<DropReservationResponse>> {
+    async fn drop_reservation(&self, user: User) -> MinilithResult<()> {
         let mut txn = self.db.begin().await?;
         let Some(row) = sqlx::query!(
             "delete from ticket_reservations where user_id = $1
@@ -770,33 +777,18 @@ impl Router {
         };
         // try to cancel transaction instead
         if let Some(id) = row.transaction_id {
-            let resp = match self
+            let resp = self
                 .transactions_post(format!("/v0/{id}/cancel"))
                 .send()
                 .await
-            {
-                Ok(resp) => resp,
-                Err(err) => {
-                    // ALERT LEVEL 2
-                    error!(
-                        ?err,
-                        "failed to cancel transaction due to connection issues"
-                    );
-                    return Ok(Json(DropReservationResponse {
-                        status: DropStatus::TransactionCancelling,
-                    }));
-                }
-            };
+                .wrap_err_internal("failed to cancel transaction due to connection issues")?;
             if !resp.status().is_success() {
-                // ALERT LEVEL 1
-                error!(
-                    status_code=%resp.status(),
-                    "transaction cancel failed!"
-                );
+                return Err(MinilithEndpointError::internal_error(
+                    "l1: transaction cancel failed!",
+                    resp.status(),
+                ));
             }
-            return Ok(Json(DropReservationResponse {
-                status: DropStatus::TransactionCancelling,
-            }));
+            // transaction is cancelled
         }
         sqlx::query!(
             "update ticket_kinds
@@ -806,11 +798,17 @@ impl Router {
         )
         .execute(&mut txn.executor())
         .await?;
+        sqlx::query!(
+            "update ticket_reservations
+            set transaction_id = null
+            where user_id = $1",
+            user.get_id(),
+        )
+        .execute(&mut txn.executor())
+        .await?;
         give_reservations(row.ticket_kind_id, 1, &mut txn).await?;
         txn.commit().await?;
-        Ok(Json(DropReservationResponse {
-            status: DropStatus::Dropped,
-        }))
+        Ok(())
     }
     /// Try to lock in this reservation by purchasing the ticket.
     /// If a transaction is already underway, it's cancelled.
@@ -870,9 +868,8 @@ impl Router {
                 .await
                 .wrap_err_internal("failed to cancel transaction")?;
             if let Err(error) = resp.error_for_status_ref() {
-                // ALERT LEVEL 1
                 return Err(MinilithEndpointError::internal_error(
-                    "failed to cancel transaction due to status code",
+                    "l1: failed to cancel transaction due to status code",
                     error,
                 ));
             }
@@ -886,7 +883,7 @@ impl Router {
 
         // addons for a ticket_kind are immutable so we don't do it through a transaction
         let chosen_options = validate_addons(&self.db, &mut body.addons, body.ticket_kind).await?;
-        ensure_user_may_purchase_ticket(&self.db, &user, body.ticket_kind).await?;
+        ensure_user_may_purchase_ticket(&self.db, user.get_id(), body.ticket_kind).await?;
 
         // set addons in DB
         let mut txn = self.db.begin().await?;
@@ -1128,6 +1125,38 @@ impl Router {
         Ok(Json(response))
     }
 
+    #[oai(path = "/transfer", method = "post")]
+    async fn transfer(&self, auth: User, body: Json<TransferRequest>) -> MinilithResult<()> {
+        let mut txn = self.db.begin().await?;
+        let row = sqlx::query!(
+            "select allow_transfer_ticket_bypass_allowed_groups, ticket_kind_id
+            from purchased_tickets
+            inner join ticket_kinds kind on kind.id = purchased_tickets.ticket_kind_id
+            where purchased_tickets.id = $1 and owner_id = $2
+            for update of purchased_tickets",
+            body.purchased_ticket_id,
+            auth.get_id()
+        )
+        .fetch_optional(&mut txn.executor())
+        .await?
+        .wrap_err_bad_frontend("you don't own this ticket")?;
+        if !row.allow_transfer_ticket_bypass_allowed_groups {
+            ensure_user_may_purchase_ticket(&mut txn.executor(), &body.to_user, row.ticket_kind_id)
+                .await?;
+        }
+        sqlx::query!(
+            "update purchased_tickets set owner_id = $2 where id = $1",
+            body.purchased_ticket_id,
+            body.to_user
+        )
+        .execute(&mut txn.executor())
+        .await?;
+
+        txn.commit().await?;
+
+        Ok(())
+    }
+
     #[oai(path = "/validate", method = "post")]
     async fn validate(
         &self,
@@ -1206,10 +1235,10 @@ impl Router {
                     .execute(&self.db)
                     .await?;
                     if affected.rows_affected() != 1 {
+                        alert(AlertLevel::L1, "1 row not affected when purchase refunded!");
                         error!(transaction_id=%data.transaction_id,
                             "1 row not affected when purchase refunded!"
                         );
-                        // ALERT LEVEL 1
                     }
                 }
                 TransactionState::Cancelled => {
@@ -1231,7 +1260,10 @@ impl Router {
                             transaction_id = %data.transaction_id,
                             "transaction which we do not track is cancelled"
                         );
-                        // ALERT LEVEL 2
+                        alert(
+                            AlertLevel::L2,
+                            "transaction which we do not track is cancelled",
+                        );
                         continue;
                     };
                     if row.has_timed_out {
@@ -1735,7 +1767,7 @@ async fn pay_for_reservation(
             error!(%transaction_id,
                 "tried to pay for an unaccounted-for ticket"
             );
-            // ALERT LEVEL 1
+            alert(AlertLevel::L1, "tried to pay for an unknown ticket");
         }
         // otherwise, we're golden, this is just a second "person has paid" callback.
         return Ok(None);
@@ -1780,7 +1812,7 @@ async fn pay_for_reservation(
         error!(%transaction_id,
             "1 row not affected when purchase complete!"
         );
-        // ALERT LEVEL 1
+        alert(AlertLevel::L1, "1 row not affected when purchase complete!");
         return Ok(None);
     }
     Ok(Some(id))
@@ -1894,7 +1926,7 @@ async fn validate_addons(
 /// Ensure that the user may purchase a ticket of the specified `ticket_kind`
 /// with regard to their group memberships.
 ///
-/// If no allowed groups are configured for the ticket kind, anyone may
+/// If no allowed groups are configured for the ticket kind, no one may
 /// purchase. Otherwise the user must be a (transitive) member of at least one
 /// allowed group — membership in a parent group covers all descendant groups.
 ///
@@ -1904,21 +1936,11 @@ async fn validate_addons(
 /// the database query fails.
 async fn ensure_user_may_purchase_ticket(
     db: impl PgExecutor<'_>,
-    user: &User,
+    user_id: &str,
     ticket_kind: Uuid,
 ) -> MinilithResult<()> {
     let may_purchase = sqlx::query_scalar!(
         r#"select (
-            not exists (
-                select 1
-                from purchased_tickets
-                inner join ticket_kinds kind on kind.id = $1
-                inner join ticket_kinds kinds on kinds.activity_id = kind.activity_id
-                where
-                    purchased_tickets.owner_id = $2
-                    and ticket_kind_id = kinds.id
-            )
-            and
             exists (
                 select 1
                 from group_memberships
@@ -1933,17 +1955,16 @@ async fn ensure_user_may_purchase_ticket(
                     or tk_ag.group_id = group_memberships.group_id
                 )
             )
-            -- todo(release): check activivty max
         ) as "may_purchase!""#,
         ticket_kind,
-        user.get_id()
+        user_id,
     )
     .fetch_one(db)
     .await?;
 
     if !may_purchase {
         return Err(MinilithEndpointError::bad_user_input(
-            "doublette purchase",
+            "purchase",
             "",
             "not allowed to purchase this ticket kind OR \
             you have already purchased one ticket for this activity",

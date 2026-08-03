@@ -50,43 +50,41 @@ impl From<Location> for PoemLocation {
         }
     }
 }
-#[derive(Object)]
-struct Responsible {
-    id: String,
+#[derive(Object, Debug)]
+pub struct Responsible {
     name: String,
     /// Should be tel: or mailto:
     contact: String,
 }
-#[derive(Object)]
-struct Host {
-    name: InternationalizedString,
-    id: Uuid,
-    path: String,
-    logo_url: String,
+#[derive(Object, Debug)]
+pub struct Host {
+    pub name: InternationalizedString,
+    pub id: Uuid,
+    pub path: String,
+    pub logo_url: String,
 }
 
-#[derive(Object)]
-struct Activity {
-    id: Uuid,
-    responsible: Responsible,
+#[derive(Object, Debug)]
+pub struct Activity {
+    pub id: Uuid,
+    pub responsible: Responsible,
     /// The creator is the first in the `hosts` too.
     /// Used to find out which guild holds the event.
-    creator_id: Uuid,
-    creator_path: String,
-    title: InternationalizedString,
-    description: InternationalizedString,
-    location: PoemLocation,
-    time_start: OffsetDateTime,
-    time_end: OffsetDateTime,
-    image_url: String,
-    image_id: Uuid,
+    pub creator_id: Uuid,
+    pub title: InternationalizedString,
+    pub description: InternationalizedString,
+    pub location: PoemLocation,
+    pub time_start: OffsetDateTime,
+    pub time_end: OffsetDateTime,
+    pub image_url: String,
+    pub image_id: Uuid,
     /// Will always be true for users, but may vary for admins.
-    is_hidden: bool,
-    is_hidden_for_other_admins: bool,
-    max_tickets: i32,
-    hosts: Vec<Host>,
+    pub is_hidden: bool,
+    pub is_hidden_for_other_admins: bool,
+    pub max_tickets: i32,
+    pub hosts: Vec<Host>,
     /// If there are any tickets for this event.
-    tickets_exist: bool,
+    pub tickets_exist: bool,
 }
 #[derive(Object)]
 struct BriefActivity {
@@ -193,7 +191,7 @@ impl Router {
     /// - activity not found
     #[oai(path = "/:id", method = "get")]
     #[allow(clippy::too_many_lines, reason = "it's very easy to read")]
-    async fn details(&self, user: User, id: Path<Uuid>) -> MinilithResult<Json<Activity>> {
+    pub async fn details(&self, user: User, id: Path<Uuid>) -> MinilithResult<Json<Activity>> {
         let owns_ticket = sqlx::query_scalar!(
             r#"select exists (
                 select 1
@@ -217,20 +215,15 @@ impl Router {
                 activities.description as "description!: DIS",
                 location as "location!: Location", time_start, time_end,
                 max_tickets,
-                users.id as "responsible_id",
+                responsible_name,
                 responsible_contact,
-                users.name as "responsible_name",
-                users.nonce as "responsible_nonce",
                 images.url as "image_url",
                 activities.image_id,
-                creator.id as creator_id,
-                creator.path as creator_path,
+                creator_id,
                 is_hidden,
                 is_hidden_for_other_admins
             from activities
-            inner join users on users.id = responsible_id
             inner join images on images.id = image_id
-            inner join groups creator on creator.id = creator_id
             where activities.id = $1;
             "#,
             *id
@@ -277,12 +270,8 @@ impl Router {
         let activity = Activity {
             id: activity.id,
             creator_id: activity.creator_id,
-            creator_path: activity.creator_path.to_string(),
             responsible: Responsible {
-                id: activity.responsible_id,
-                name: self
-                    .decrypt_string(activity.responsible_name, &activity.responsible_nonce)
-                    .wrap_err_encryption("responsible_name")?,
+                name: activity.responsible_name,
                 contact: activity.responsible_contact,
             },
             title: activity.title.0,

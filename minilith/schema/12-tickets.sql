@@ -11,7 +11,7 @@ create table ticket_kinds (
     price money not null check (price >= 0::money),
     purchasing_available_start timestamptz not null,
     purchasing_available_stop timestamptz not null,
-    max_tickets integer not null check (max_tickets >= 0), -- default MAX_INT
+    max_tickets integer not null default 2147483647 check (max_tickets >= 0),
     min_tickets integer not null check (min_tickets >= 0), -- default MAX_INT
     check (
         (min_tickets = 0 and max_tickets = 0)

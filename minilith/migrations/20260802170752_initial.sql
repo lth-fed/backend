@@ -9,7 +9,7 @@ create type "public"."location" as (
 
 create table "public"."activities" (
     "id" uuid not null default uuidv4(),
-    "responsible_id" text not null,
+    "responsible_name" text not null,
     "responsible_contact" text not null,
     "creator_id" uuid not null,
     "title" jsonb not null,
@@ -20,7 +20,7 @@ create table "public"."activities" (
     "image_id" uuid not null,
     "is_hidden" boolean not null default true,
     "is_hidden_for_other_admins" boolean not null default false,
-    "max_tickets" integer not null
+    "max_tickets" integer not null default 2147483647
 );
 
 
@@ -179,7 +179,7 @@ create table "public"."ticket_kinds" (
     "price" money not null,
     "purchasing_available_start" timestamp with time zone not null,
     "purchasing_available_stop" timestamp with time zone not null,
-    "max_tickets" integer not null,
+    "max_tickets" integer not null default 2147483647,
     "min_tickets" integer not null,
     "reserved_or_purchased_tickets" integer not null,
     "allow_transfer_ticket_start" timestamp with time zone not null,
@@ -408,6 +408,10 @@ alter table "public"."user_group_settings" add constraint "user_group_settings_p
 
 alter table "public"."users" add constraint "users_pkey" PRIMARY KEY using index "users_pkey";
 
+alter table "public"."activities" add constraint "activities_check" CHECK ((time_end > time_start)) not valid;
+
+alter table "public"."activities" validate constraint "activities_check";
+
 alter table "public"."activities" add constraint "activities_creator_id_fkey" FOREIGN KEY ("creator_id") REFERENCES "public"."groups"("id") NOT VALID;
 
 alter table "public"."activities" validate constraint "activities_creator_id_fkey";
@@ -419,10 +423,6 @@ alter table "public"."activities" validate constraint "activities_image_id_fkey"
 alter table "public"."activities" add constraint "activities_max_tickets_check" CHECK ((max_tickets >= 0)) not valid;
 
 alter table "public"."activities" validate constraint "activities_max_tickets_check";
-
-alter table "public"."activities" add constraint "activities_responsible_id_fkey" FOREIGN KEY ("responsible_id") REFERENCES "public"."users"("id") NOT VALID;
-
-alter table "public"."activities" validate constraint "activities_responsible_id_fkey";
 
 alter table "public"."activity_host_invites" add constraint "activity_host_invites_activity_id_fkey" FOREIGN KEY ("activity_id") REFERENCES "public"."activities"("id") ON DELETE CASCADE NOT VALID;
 
@@ -463,10 +463,6 @@ alter table "public"."group_adminships" validate constraint "group_adminships_em
 alter table "public"."group_adminships" add constraint "group_adminships_group_id_fkey" FOREIGN KEY ("group_id") REFERENCES "public"."groups"("id") NOT VALID;
 
 alter table "public"."group_adminships" validate constraint "group_adminships_group_id_fkey";
-
-alter table "public"."group_adminships" add constraint "group_adminships_group_membership_fk" FOREIGN KEY ("user_id", "group_id") REFERENCES "public"."group_memberships"("user_id", "group_id") ON DELETE CASCADE NOT VALID;
-
-alter table "public"."group_adminships" validate constraint "group_adminships_group_membership_fk";
 
 alter table "public"."group_adminships" add constraint "group_adminships_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") NOT VALID;
 

@@ -63,3 +63,18 @@ pub struct ReceiptRequest {
     pub language: Language,
     pub customer_name: String,
 }
+
+#[derive(Debug, Serialize, Clone)]
+pub struct InfoRequest {
+    pub transaction_ids: Vec<Uuid>,
+}
+#[derive(Debug, Deserialize, Clone)]
+pub struct SingleInfoResponse {
+    // id: Uuid,
+    // status: TransactionState,
+    // customer_id: Option<String>,
+    pub total_fees: i64,
+    // provider: Provider,
+    // payment_reference: Option<String>,
+    // refund_reference: Option<String>,
+}

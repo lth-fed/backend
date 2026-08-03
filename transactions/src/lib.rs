@@ -8,7 +8,7 @@ use poem::http::Method;
 use poem::middleware::{Cors, OpenTelemetryMetrics, OpenTelemetryTracing};
 use poem::{Endpoint, EndpointExt as _, Route};
 use poem_openapi::auth::Bearer;
-use poem_openapi::{Object, OpenApiService, SecurityScheme};
+use poem_openapi::{Enum, Object, OpenApiService, SecurityScheme};
 use serde::{Deserialize, Serialize};
 
 pub use fed_auth_verifier::callbacks::{
@@ -24,8 +24,9 @@ pub mod receipt;
 pub mod runtime;
 pub mod swish;
 
-#[derive(sqlx::Type, Debug, Clone, Copy, Serialize)]
+#[derive(sqlx::Type, Debug, Clone, Copy, Serialize, Enum)]
 #[sqlx(rename_all = "lowercase")]
+#[oai(rename_all = "lowercase")]
 pub enum Provider {
     Swish,
     Stripe,

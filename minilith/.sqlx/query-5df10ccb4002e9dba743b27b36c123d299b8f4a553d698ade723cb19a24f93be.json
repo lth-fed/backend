@@ -1,0 +1,75 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select distinct\n                target.id,\n                target.path as \"path!: Path\",\n                target.limit_membership_visibility,\n                target.name as \"name!: DIS\",\n                target.description as \"description!: DIS\",\n                target.deleted,\n                (request.member_id is not null) as \"requested!\",\n                logo.id as logo_id,\n                logo.url as logo_url\n            from groups_ask_to_join allowed\n            inner join group_memberships membership\n                on membership.group_id = allowed.joiner_id\n                and membership.user_id = $1\n            inner join groups target on target.id = allowed.target_id\n            inner join images logo on logo.id = target.logo_id\n            left join group_member_requests request\n                on request.group_id = target.id and request.member_id = $1\n            where target.deleted = false\n            order by target.path",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "path!: Path",
+        "type_info": {
+          "Custom": {
+            "name": "ltree",
+            "kind": "Simple"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "limit_membership_visibility",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 3,
+        "name": "name!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "description!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 5,
+        "name": "deleted",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
+        "name": "requested!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 7,
+        "name": "logo_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 8,
+        "name": "logo_url",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      false,
+      false
+    ]
+  },
+  "hash": "5df10ccb4002e9dba743b27b36c123d299b8f4a553d698ade723cb19a24f93be"
+}

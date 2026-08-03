@@ -8,26 +8,28 @@ use std::sync::Arc;
 
 use fed_auth_verifier::User;
 use minilith_errors::{MinilithEndpointError, MinilithErrorResultExt as _, escape_email_html};
-use poem_openapi::payload::PlainText;
-use poem_openapi::{Object, OpenApi, param::Path, payload::Json};
+use poem_openapi::payload::{Binary, Json, PlainText, Response};
+use poem_openapi::{Object, OpenApi, param::Path};
 use s3::post_policy::PostPolicyExpiration;
 use sqlx::PgExecutor;
 use sqlx::postgres::types::PgMoney;
 use sqlx::types::Uuid;
 use sqlx::types::time::OffsetDateTime;
+use tracing::error;
 
 use crate::activities::PoemLocation;
+use crate::activities::Router as ActivityRouter;
 use crate::context::ContextWrapper;
 use crate::group::admin::{
-    Adminship, check_direct_adminship, check_direct_or_parent_adminship, create_adminship_change,
-    group_admins, remove_adminship_change,
+    Adminship, check_activity_adminship, check_direct_adminship, check_direct_or_parent_adminship,
+    check_ticket_kind_adminship, create_adminship_change, group_admins, remove_adminship_change,
 };
 use crate::group::member::group_members;
 use crate::group::{self, Group};
 use crate::ticket::{AvailableAddon, Router as TicketRouter};
 use crate::{
     DbInternationalizedString as DIS, InternationalizedString, MinilithErrorOptionExt as _,
-    MinilithResult,
+    MinilithResult, report, transactions,
 };
 
 #[derive(Clone, Debug)]
@@ -40,6 +42,23 @@ impl Deref for Router {
         &self.context
     }
 }
+
+#[derive(Object, Debug)]
+pub struct ExternalSaleCategory {
+    /// Use `"null"` for if it's not alcohol.
+    ///
+    /// Prefill dropdown with categories from the ticket kinds from this activity.
+    /// User should be able to create new categories too.
+    pub alcohol_category: String,
+    /// In ören.
+    pub total: i64,
+}
+#[derive(Object, Debug)]
+pub struct ReportRequest {
+    external_sales: Vec<ExternalSaleCategory>,
+    external_sale_fees: i64,
+}
+
 #[derive(Object)]
 struct ObjectUploadAllowanceRequest {
     /// Must not contain the `.`. I.e. `jpg`, `JPEG`, `png` is ok.
@@ -61,7 +80,7 @@ struct ObjectUploadAllowanceResponse {
 
 #[derive(Debug, Object)]
 struct PutActivity {
-    responsible_id: String,
+    responsible_name: String,
     /// Must use a `mailto:` or `tel:` URI.
     responsible_contact: String,
     creator_id: Uuid,
@@ -307,13 +326,78 @@ impl Router {
             ))
         }
     }
+
+    async fn ensure_image_registered(
+        &self,
+        txn: &mut sqlx_tracing::Transaction<'_, sqlx::Postgres>,
+        image_id: Uuid,
+    ) -> MinilithResult<()> {
+        let registered = sqlx::query_scalar!(
+            r#"select exists (select 1 from images where id = $1) as "exists!""#,
+            image_id,
+        )
+        .fetch_one(&mut txn.executor())
+        .await?;
+        if registered {
+            return Ok(());
+        }
+
+        let prefix = format!("{image_id}.");
+        let pages = self
+            .image_bucket()
+            .list(prefix.clone(), None)
+            .await
+            .wrap_err_internal("s3: failed to find uploaded image")?;
+        let mut objects = pages
+            .into_iter()
+            .flat_map(|page| page.contents)
+            .filter(|object| {
+                object
+                    .key
+                    .strip_prefix(&prefix)
+                    .is_some_and(is_allowed_image_extension)
+            });
+        let object = objects.next().ok_or_else(|| {
+            MinilithEndpointError::bad_frontend_code(
+                "IMG_NOT_UPLOADED",
+                "image_id does not refer to an uploaded image",
+            )
+        })?;
+        if objects.next().is_some() {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "IMG_AMBIGUOUS",
+                "multiple uploaded images have the same image_id",
+            ));
+        }
+
+        let size = i64::try_from(object.size)
+            .wrap_err_internal("uploaded image size does not fit in the database")?;
+        let url = format!("{}/{}", self.image_public_url(), object.key);
+        sqlx::query!(
+            r#"insert into images (id, size, url) values ($1, $2, $3)
+            on conflict (id) do nothing"#,
+            image_id,
+            size,
+            url,
+        )
+        .execute(&mut txn.executor())
+        .await?;
+        Ok(())
+    }
+}
+
+fn is_allowed_image_extension(extension: &str) -> bool {
+    matches!(extension, "jpg" | "jpeg" | "webp" | "png" | "avif")
 }
 
 #[OpenApi(prefix_path = "/admin")]
 impl Router {
     /// Creates or fully replaces an activity. Existing activities require a
     /// direct adminship in any current host; new activities require one in any
-    /// submitted host.
+    /// submitted host. The responsible name must not be blank, the contact must
+    /// be a `mailto:` or `tel:` URI, the end must follow the start, and the
+    /// overall ticket cap cannot be below existing reservations or purchases.
+    /// `image_id` must refer to an image uploaded through `/admin/upload-image`.
     #[oai(path = "/activities/:id", method = "put")]
     #[allow(
         clippy::too_many_lines,
@@ -325,11 +409,23 @@ impl Router {
         Path(id): Path<Uuid>,
         Json(body): Json<PutActivity>,
     ) -> MinilithResult<()> {
+        if body.responsible_name.trim().is_empty() {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "responsible_name must not be empty",
+                "",
+            ));
+        }
         if !(body.responsible_contact.starts_with("mailto:")
             || body.responsible_contact.starts_with("tel:"))
         {
             return Err(MinilithEndpointError::bad_frontend_code(
                 "responsible_contact must start with `mailto:` or `tel:`",
+                "",
+            ));
+        }
+        if body.time_end <= body.time_start {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "time_end must be after time_start",
                 "",
             ));
         }
@@ -346,12 +442,11 @@ impl Router {
         .fetch_one(&self.db)
         .await?;
         if exists {
-            group::admin::check_activity_adminship(&self.db, user.get_id(), id).await?;
+            check_activity_adminship(&self.db, user.get_id(), id).await?;
         } else {
             self.check_any_direct_adminship(user.get_id(), &host_ids)
                 .await?;
         }
-
         let mut txn = self.db.begin().await?;
         if exists {
             sqlx::query_scalar!("select id from activities where id = $1 for update", id,)
@@ -372,6 +467,8 @@ impl Router {
                 "",
             ));
         }
+        self.ensure_image_registered(&mut txn, body.image_id)
+            .await?;
 
         let name = body
             .location
@@ -390,7 +487,7 @@ impl Router {
 
         sqlx::query!(
             r#"insert into activities (
-                id, responsible_id, responsible_contact, creator_id,
+                id, responsible_name, responsible_contact, creator_id,
                 title, description, location, time_start, time_end, image_id,
                 is_hidden, is_hidden_for_other_admins, max_tickets
             )
@@ -406,7 +503,7 @@ impl Router {
                 $12, $13, $14, $15, $16, $17
             )
             on conflict (id) do update set
-                responsible_id = excluded.responsible_id,
+                responsible_name = excluded.responsible_name,
                 responsible_contact = excluded.responsible_contact,
                 creator_id = excluded.creator_id,
                 title = excluded.title,
@@ -419,7 +516,7 @@ impl Router {
                 is_hidden_for_other_admins = excluded.is_hidden_for_other_admins,
                 max_tickets = excluded.max_tickets"#,
             id,
-            body.responsible_id,
+            body.responsible_name,
             body.responsible_contact,
             body.creator_id,
             body.title.to_json_value(),
@@ -454,6 +551,204 @@ impl Router {
         Ok(())
     }
 
+    /// Builds the activity's bookkeeping report as a PDF. Monetary request
+    /// values and all report calculations use integer öre.
+    #[oai(path = "/activities/:id/report", method = "post")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "there's just a lot of shit to do and it's very isolated"
+    )]
+    async fn report(
+        &self,
+        user: User,
+        Path(id): Path<Uuid>,
+        Json(body): Json<ReportRequest>,
+    ) -> MinilithResult<Response<Binary<Vec<u8>>>> {
+        check_activity_adminship(&self.db, user.get_id(), id).await?;
+        let ticket_kinds =
+            sqlx::query_scalar!("select id from ticket_kinds where activity_id = $1", id)
+                .fetch_all(&self.db)
+                .await?;
+        let mut tickets = Vec::new();
+        let mut kinds = HashMap::with_capacity(ticket_kinds.len());
+        let router = TicketRouter {
+            context: Arc::clone(&self.context),
+        };
+        for kind in &ticket_kinds {
+            tickets.extend(self.purchased_tickets(user.clone(), Path(*kind)).await?.0);
+            kinds.insert(*kind, router.load_ticket_kind_unchecked(*kind).await?);
+        }
+        // todo: get ticket kinds for prices and such
+        let router = ActivityRouter {
+            context: Arc::clone(&self.context),
+        };
+        let activity = router.details(user.clone(), Path(id)).await?.0;
+
+        let user_row = sqlx::query!("select * from users where id = $1", user.get_id())
+            .fetch_one(&self.db)
+            .await?;
+
+        let lang = self
+            .decrypt_string(user_row.language, &user_row.nonce)
+            .wrap_err_encryption("admin language")?;
+
+        let language = match lang.split('-').next().unwrap_or(&lang) {
+            "sv" => report::Language::Swedish,
+            _ => report::Language::English,
+        };
+
+        let creator_logo_url = sqlx::query_scalar!(
+            "select url from groups
+            inner join images on images.id = groups.logo_id
+            where groups.id = $1",
+            activity.creator_id
+        )
+        .fetch_one(&self.db)
+        .await?;
+        let extension = creator_logo_url
+            .rsplit('.')
+            .next()
+            .map(str::to_ascii_lowercase);
+        let mut format = match extension.as_deref() {
+            Some("jpg" | "jpeg") => Some(report::ImageKind::Jpg),
+            Some("png") => Some(report::ImageKind::Png),
+            Some("svg") => Some(report::ImageKind::Svg),
+            Some("webp") => Some(report::ImageKind::Webp),
+            _ => None,
+        };
+        let image_data = if format.is_some() {
+            let path = creator_logo_url
+                .rsplit('/')
+                .next()
+                .unwrap_or(&creator_logo_url);
+            match self.image_bucket().get_object(path).await {
+                Err(err) => {
+                    error!(error = ?err, "s3: Failed to get creator icon");
+                    format = None;
+                    None
+                }
+                Ok(resp) => Some(resp.into_bytes()),
+            }
+        } else {
+            None
+        };
+
+        let transaction_ids = tickets
+            .iter()
+            .map(|ticket| ticket.transaction_id)
+            .collect::<Vec<_>>();
+
+        let fees = self
+            .transactions_post("/v0/info")
+            .json(&transactions::InfoRequest { transaction_ids })
+            .send()
+            .await
+            .wrap_err_internal("report: failed to get transaction info")?
+            .error_for_status()
+            .wrap_err_internal("report: transaction non 2xx")?
+            .json::<Vec<transactions::SingleInfoResponse>>()
+            .await
+            .wrap_err_internal("report: failed to get/parse JSON body")?
+            .into_iter()
+            .map(|info| info.total_fees)
+            .sum();
+
+        let mut per_object = BTreeMap::new();
+        let mut per_alcohol_category = BTreeMap::new();
+        for ticket in &tickets {
+            let kind = kinds.get(&ticket.ticket_kind_id).wrap_err_internal(
+                "report: no ticket kind in this activity for the purchased tickets!!",
+            )?;
+            let kind_name = kind.inner.ticket_kind_name.resolve_intl(&lang, "");
+
+            per_object
+                .entry((report::Kind::Ticket, kind_name.to_owned()))
+                .or_insert((kind.price, 0))
+                .1 += 1;
+            *per_alcohol_category.entry("null".to_owned()).or_insert(0) += kind.price;
+
+            for addon in &ticket.addons {
+                let addon_data = kind
+                    .available_addons
+                    .iter()
+                    .find(|a_a| a_a.inner.id == addon.addon_id)
+                    .wrap_err_internal("report: no addon for purchased ticket in kind")?;
+                for option in &addon.selected_options {
+                    let option_data = addon_data
+                        .options
+                        .iter()
+                        .find(|opt| opt.idx == *option)
+                        .wrap_err_internal("report: no option for purchased ticket in kind")?;
+                    let name = format!(
+                        "{} - {}",
+                        addon_data.inner.name.resolve_intl(&lang, ""),
+                        option_data.name.resolve_intl(&lang, "")
+                    );
+
+                    per_object
+                        .entry((report::Kind::Option, name))
+                        .or_insert((option_data.price, 0))
+                        .1 += 1;
+
+                    for (category, price) in option_data
+                        .bookkeeping_price_categories
+                        .iter()
+                        .zip(option_data.bookkeeping_prices.iter())
+                    {
+                        *per_alcohol_category.entry(category.clone()).or_insert(0) += *price;
+                    }
+                }
+            }
+        }
+        for sale in body.external_sales {
+            per_object
+                .entry((report::Kind::External, String::new()))
+                .or_insert((0, 1))
+                .0 += sale.total;
+            *per_alcohol_category
+                .entry(sale.alcohol_category)
+                .or_insert(0) += sale.total;
+        }
+
+        let data = report::Data {
+            language,
+            activity_name: activity.title.resolve_intl(&lang, "<title>").to_owned(),
+            creator_name: activity
+                .hosts
+                .first()
+                .map_or("", |host| host.name.resolve_intl(&lang, ""))
+                .to_owned(),
+            creator_logo_format: format,
+            creator_logo_data: image_data,
+            // we also have to request the transaction api to get fees
+            fees,
+            fees_external: body.external_sale_fees,
+            per_object: per_object
+                .into_iter()
+                .map(|((kind, name), (price, number))| report::Object {
+                    name,
+                    kind,
+                    price,
+                    number,
+                })
+                .collect(),
+            per_alcohol_category: per_alcohol_category
+                .into_iter()
+                .map(|(category, amount)| report::AlcoholCategory {
+                    name: category,
+                    amount,
+                })
+                .collect(),
+        };
+
+        let pdf = report::compile(self.report_typst(), &data)?;
+
+        Ok(Response::new(Binary(pdf)).header(
+            "content-disposition",
+            format!("attachment; filename=\"activity-report-{id}.pdf\""),
+        ))
+    }
+
     /// Lists purchased tickets and addon selections for a ticket kind.
     #[oai(path = "/ticket-kinds/:id/purchased-tickets", method = "get")]
     async fn purchased_tickets(
@@ -461,7 +756,7 @@ impl Router {
         user: User,
         Path(id): Path<Uuid>,
     ) -> MinilithResult<Json<Vec<AdminPurchasedTicket>>> {
-        group::admin::check_activity_adminship(&self.db, user.get_id(), id).await?;
+        check_ticket_kind_adminship(&self.db, user.get_id(), id).await?;
         let addons = sqlx::query!(
             r#"select
                 purchased_ticket_addons.ticket_id,
@@ -541,9 +836,9 @@ impl Router {
             .await?;
         if existing_id.is_some() {
             // if this belongs to another activity by coincidence
-            group::admin::check_ticket_kind_adminship(&self.db, user.get_id(), id).await?;
+            check_ticket_kind_adminship(&self.db, user.get_id(), id).await?;
         }
-        group::admin::check_activity_adminship(&self.db, user.get_id(), body.activity_id).await?;
+        check_activity_adminship(&self.db, user.get_id(), body.activity_id).await?;
 
         body.allowed_group_ids.sort_unstable();
         body.allowed_group_ids.dedup();
@@ -813,7 +1108,7 @@ impl Router {
         Path(kind): Path<String>,
         Json(body): Json<PutTicketNotification>,
     ) -> MinilithResult<Json<TicketNotification>> {
-        group::admin::check_ticket_kind_adminship(&self.db, user.get_id(), ticket_kind_id).await?;
+        check_ticket_kind_adminship(&self.db, user.get_id(), ticket_kind_id).await?;
         let mut txn = self.db.begin().await?;
         sqlx::query_scalar!(
             "select id from ticket_kinds where id = $1 for update",
@@ -874,7 +1169,7 @@ impl Router {
         Path(ticket_kind_id): Path<Uuid>,
         Path(kind): Path<String>,
     ) -> MinilithResult<Json<TicketNotification>> {
-        group::admin::check_ticket_kind_adminship(&self.db, user.get_id(), ticket_kind_id).await?;
+        check_ticket_kind_adminship(&self.db, user.get_id(), ticket_kind_id).await?;
         let row = sqlx::query!(
             r#"select
                 notifications.title as "title!: DIS",
@@ -899,6 +1194,41 @@ impl Router {
                 send_at: row.send_at,
             },
         }))
+    }
+
+    /// Lists notifications that are still scheduled for a ticket kind, ordered
+    /// by delivery time. Successfully processed notifications are not retained.
+    #[oai(path = "/ticket-kinds/:ticket_kind_id/notifications", method = "get")]
+    async fn list_ticket_notifications(
+        &self,
+        user: User,
+        Path(ticket_kind_id): Path<Uuid>,
+    ) -> MinilithResult<Json<Vec<TicketNotification>>> {
+        check_ticket_kind_adminship(&self.db, user.get_id(), ticket_kind_id).await?;
+        let notifications = sqlx::query!(
+            r#"select
+                ticket_kind_notifications.id as kind,
+                notifications.title as "title!: DIS",
+                notifications.content as "content!: DIS",
+                notifications.send_at
+            from ticket_kind_notifications
+            inner join notifications
+                on notifications.id = ticket_kind_notifications.notification_id
+            where ticket_kind_notifications.ticket_kind_id = $1
+            order by notifications.send_at, ticket_kind_notifications.id"#,
+            ticket_kind_id,
+        )
+        .map(|row| TicketNotification {
+            kind: row.kind,
+            notification: PutTicketNotification {
+                title: row.title.0,
+                content: row.content.0,
+                send_at: row.send_at,
+            },
+        })
+        .fetch_all(&self.db)
+        .await?;
+        Ok(Json(notifications))
     }
 
     /// # Extension
@@ -928,10 +1258,7 @@ impl Router {
         group::admin::check_has_any_adminship(&self.db, user.get_id()).await?;
 
         body.extension.make_ascii_lowercase();
-        if !matches!(
-            body.extension.as_str(),
-            "jpg" | "jpeg" | "webp" | "png" | "avif"
-        ) {
+        if !is_allowed_image_extension(&body.extension) {
             return Err(MinilithEndpointError::bad_frontend_code(
                 "invalid extension",
                 "",
@@ -952,14 +1279,28 @@ impl Router {
                 s3::PostPolicyValue::Range(0, max_size_bytes),
             )
             .wrap_err_internal("s3: bad content length condition")?
+            .condition(
+                s3::PostPolicyField::ContentType,
+                s3::PostPolicyValue::StartsWith("image/".into()),
+            )
+            .wrap_err_internal("s3: bad content type condition")?
             .sign(self.image_bucket().clone().into())
             .await
             .wrap_err_internal("s3: failed to sign")?;
 
+        let mut dynamic_fields = policy.dynamic_fields;
+        // `content-length-range` is a POST-policy condition, not a form field:
+        // https://docs.aws.amazon.com/AmazonS3/latest/developerguide/sigv4-HTTPPOSTConstructPolicy.html
+        // rust-s3 0.37.2 nevertheless includes Range conditions in `dynamic_fields`:
+        // https://github.com/durch/rust-s3/blob/v0.37.2/src/post_policy.rs#L135-L148
+        dynamic_fields.remove("content-length-range");
+
         Ok(Json(ObjectUploadAllowanceResponse {
-            url: policy.url,
+            // The signed policy covers the form fields. The browser sends them
+            // through the public proxy rather than the internal S3 hostname.
+            url: self.image_public_url().to_owned(),
             fields: policy.fields,
-            dynamic_fields: policy.dynamic_fields,
+            dynamic_fields,
             key,
             max_size_bytes,
         }))
@@ -970,8 +1311,10 @@ impl Router {
     // ==========
 
     /// Creates or fully replaces a group. Existing groups require a direct
-    /// adminship; new groups require a direct adminship in their parent. Moving
-    /// an existing group also requires a direct adminship in the new parent.
+    /// adminship; new groups require a direct adminship in their parent and
+    /// grant the creator a direct adminship. Moving an existing group also
+    /// requires a direct adminship in the new parent.
+    /// `logo_id` must refer to an image uploaded through `/admin/upload-image`.
     #[oai(path = "/groups/:id", method = "put")]
     #[allow(
         clippy::too_many_lines,
@@ -990,6 +1333,7 @@ impl Router {
         )
         .fetch_optional(&mut txn.executor())
         .await?;
+        let is_new = old_path.is_none();
         let new_parent = body
             .path
             .parent()
@@ -1012,6 +1356,7 @@ impl Router {
                 .wrap_err_bad_frontend("parent group does not exist")?;
             check_direct_adminship(&mut txn.executor(), user.get_id(), parent_id).await?;
         }
+        self.ensure_image_registered(&mut txn, body.logo_id).await?;
 
         let result = if let Some(old_path) = old_path {
             if old_path == body.path {
@@ -1086,6 +1431,10 @@ impl Router {
             },
             other_error => MinilithEndpointError::db(other_error),
         })?;
+
+        if is_new {
+            create_adminship_change(&mut txn.executor(), user.get_id(), id).await?;
+        }
 
         txn.commit().await?;
         Ok(())
@@ -1190,8 +1539,8 @@ impl Router {
         Ok(())
     }
 
-    /// Removes a direct member and, through the schema's cascade, any direct
-    /// adminship they held in the same group.
+    /// Removes a direct member. Any adminship in the same group is independent
+    /// and remains in place.
     #[oai(path = "/groups/:group_id/members/:member_id", method = "delete")]
     async fn remove_member(
         &self,
@@ -1331,9 +1680,12 @@ impl Router {
                 groups.limit_membership_visibility,
                 groups.name as "name!: DIS",
                 groups.description as "description!: DIS",
-                groups.deleted
+                groups.deleted,
+                logo.id as logo_id,
+                logo.url as logo_url
             from groups_ask_to_join
             inner join groups on groups.id = groups_ask_to_join.joiner_id
+            inner join images logo on logo.id = groups.logo_id
             where groups_ask_to_join.target_id = $1
             order by groups.path"#,
             group_id,
@@ -1398,9 +1750,12 @@ impl Router {
                 groups.limit_membership_visibility,
                 groups.name as "name!: DIS",
                 groups.description as "description!: DIS",
-                groups.deleted
+                groups.deleted,
+                logo.id as logo_id,
+                logo.url as logo_url
             from allow_admins_from_group_view_activities allowed
             inner join groups on groups.id = allowed.access_group_id
+            inner join images logo on logo.id = groups.logo_id
             where allowed.host_group_id = $1
             order by groups.path"#,
             group_id,

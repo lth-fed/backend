@@ -22,6 +22,7 @@ use crate::api::{DOMAIN, STRIPE_WEBHOOK_PATH};
 use crate::receipt::OurWonderfulTypstWorldBase;
 use crate::{Provider, swish};
 
+#[derive(Debug)]
 pub(crate) struct CancelTransactionData {
     pub id: Uuid,
     pub client_id: String,

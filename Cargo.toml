@@ -4,14 +4,17 @@ members = ["bin-common","fed-auth", "fed-auth-verifier", "minilith", "minilith-e
 
 [workspace.dependencies]
 base64 = "0.22.1"
+bytes = "1.12.1"
 color-eyre = "0.6.5"
 dotenvy = "0.15.7"
+# this fucked the compat with jsonwebtoken 10
 # ed25519-dalek = { version = "3.0.0", features = ["pkcs8"] }
 ed25519-dalek = "2.2.0"
+# v11 fixes our hack
 jsonwebtoken = { version = "10.3.0", default-features = false, features = ["rust_crypto", "use_pem"] }
 lettre = { version = "0.11.22", default-features = false, features = ["builder", "pool", "ring", "smtp-transport", "tokio1-rustls", "webpki-roots"] }
+# same version as poem
 opentelemetry =  "0.30.0"
-# same as poem
 opentelemetry-appender-tracing = "0.30.1"
 opentelemetry-otlp = { version = "0.30.0", default-features = false, features = ["logs", "metrics", "trace", "grpc-tonic", "internal-logs"] }
 opentelemetry_sdk = { version = "0.30.0", features = ["testing", "rt-tokio", "experimental_trace_batch_span_processor_with_async_runtime", "experimental_metrics_periodicreader_with_async_runtime", "experimental_logs_batch_log_processor_with_async_runtime"] }
@@ -24,14 +27,19 @@ rand = "0.10.1"
 reqwest = { version = "0.13.3", features = ["json"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
+# blocks on sqlx-tracing
 sqlx = { version = "0.8.6", features = ["postgres", "runtime-tokio", "migrate", "time", "uuid"] }
 sqlx-tracing = { version = "0.2.1", features = ["postgres"] }
 time = { version = "0.3", features = ["parsing", "formatting", "serde"] }
 tokio = { version = "1.52.1" }
 tracing = "0.1.44"
-# this is one version higher than opentelemetry which is super odd
+# this is one version higher than opentelemetry which is super odd (as defined in poem)
 tracing-opentelemetry = "0.31.0"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "tracing-log"] }
+typst = "0.15.1"
+typst-kit = { version = "0.15.1", features = ["datetime", "embedded-fonts"] }
+typst-layout = "0.15.1"
+typst-pdf = "0.15.1"
 uuid = { version = "1.23.1", features = ["fast-rng", "serde", "v4"] }
 
 [workspace.lints.rust]

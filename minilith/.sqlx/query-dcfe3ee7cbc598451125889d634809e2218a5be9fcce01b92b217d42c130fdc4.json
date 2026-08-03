@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update purchased_tickets set owner_id = $2 where id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "dcfe3ee7cbc598451125889d634809e2218a5be9fcce01b92b217d42c130fdc4"
+}

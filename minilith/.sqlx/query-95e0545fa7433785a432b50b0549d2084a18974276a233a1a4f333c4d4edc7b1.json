@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select group_id from group_adminships where user_id = $1 order by group_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "group_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "95e0545fa7433785a432b50b0549d2084a18974276a233a1a4f333c4d4edc7b1"
+}

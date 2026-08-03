@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select ticket_addon_options.id, ticket_addon_id,\n            ticket_addon_options.name as \"name: DIS\", price,\n            -- wait wtf this Vec<i64> syntax actually works??\n            bookkeeping_prices as \"bkp: Vec<i64>\", bookkeeping_price_categories\n            from ticket_addon_options\n            inner join ticket_addons on (ticket_addons.id = ticket_addon_options.ticket_addon_id)\n            where ticket_kind_id = $1\n            order by ticket_addon_options.idx",
+  "query": "select ticket_addon_options.id, ticket_addon_id, ticket_addon_options.idx,\n            ticket_addon_options.name as \"name: DIS\", price,\n            -- wait wtf this Vec<i64> syntax actually works??\n            bookkeeping_prices as \"bkp: Vec<i64>\", bookkeeping_price_categories\n            from ticket_addon_options\n            inner join ticket_addons on (ticket_addons.id = ticket_addon_options.ticket_addon_id)\n            where ticket_kind_id = $1\n            order by ticket_addon_options.idx",
   "describe": {
     "columns": [
       {
@@ -15,21 +15,26 @@
       },
       {
         "ordinal": 2,
+        "name": "idx",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
         "name": "name: DIS",
         "type_info": "Jsonb"
       },
       {
-        "ordinal": 3,
+        "ordinal": 4,
         "name": "price",
         "type_info": "Money"
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "bkp: Vec<i64>",
         "type_info": "MoneyArray"
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "bookkeeping_price_categories",
         "type_info": "TextArray"
       }
@@ -45,8 +50,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "24f764c3258ef0f49e1708f6856f8b8ff66efbd896e67e8c5aa6373cdf88e4d3"
+  "hash": "906965ae3c974ce4b3f1a2d01c3b185578be2ea70c7673add284f28edadc00f3"
 }
