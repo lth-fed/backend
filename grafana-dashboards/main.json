@@ -4,19 +4,19 @@
   "metadata": {
     "name": "adrtdhg",
     "namespace": "default",
-    "uid": "429b86d8-2e51-494c-b38d-3b15d0d2e1a3",
-    "resourceVersion": "1783108581022001",
-    "generation": 9,
-    "creationTimestamp": "2026-07-02T22:54:10Z",
+    "uid": "333ac565-63a1-41e7-9d50-6bc8c7464be5",
+    "resourceVersion": "1785862238300988",
+    "generation": 7,
+    "creationTimestamp": "2026-07-28T21:07:58Z",
     "labels": {
-      "grafana.app/deprecatedInternalID": "1160297521197056"
+      "grafana.app/deprecatedInternalID": "1548458260774912"
     },
     "annotations": {
-      "grafana.app/createdBy": "user:dfqxp38fzf3swe",
+      "grafana.app/createdBy": "user:afti9v3mbmjnkf",
       "grafana.app/folder": "",
       "grafana.app/saved-from-ui": "Grafana v13.0.3 (3ca0684c7c)",
-      "grafana.app/updatedBy": "user:dfqxp38fzf3swe",
-      "grafana.app/updatedTimestamp": "2026-07-03T19:56:21Z"
+      "grafana.app/updatedBy": "user:afti9v3mbmjnkf",
+      "grafana.app/updatedTimestamp": "2026-08-04T16:50:38Z"
     }
   },
   "spec": {
@@ -348,32 +348,17 @@
                   "spec": {
                     "query": {
                       "kind": "DataQuery",
-                      "group": "tempo",
+                      "group": "prometheus",
                       "version": "v0",
                       "datasource": {
-                        "name": "P8D6546721A1D106C"
+                        "name": "P1809F7CD0C75ACF3"
                       },
                       "spec": {
-                        "filters": [
-                          {
-                            "id": "7ed2ffab",
-                            "isCustomValue": false,
-                            "operator": "!=",
-                            "scope": "span",
-                            "tag": "http.request.method",
-                            "value": [
-                              "GET"
-                            ],
-                            "valueType": "string"
-                          }
-                        ],
-                        "limit": 100,
-                        "metricsQueryType": "range",
-                        "query": "{span.http.request.method!=nil}",
-                        "queryType": "traceql",
-                        "serviceMapUseNativeHistograms": false,
-                        "spss": 100,
-                        "tableType": "traces"
+                        "editorMode": "code",
+                        "expr": "quantile(0.5, rate(default_poem_request_duration_ms_milliseconds_sum[1h]) / clamp(rate(default_poem_request_duration_ms_milliseconds_count[1h]), 1 / 3600, 100000000000000))",
+                        "instant": false,
+                        "legendFormat": "__auto",
+                        "range": true
                       }
                     },
                     "refId": "A",
@@ -398,9 +383,9 @@
                 "percentChangeColorMode": "standard",
                 "reduceOptions": {
                   "calcs": [
-                    "mean"
+                    "lastNotNull"
                   ],
-                  "fields": "/^Duration$/",
+                  "fields": "",
                   "values": false
                 },
                 "showPercentChange": false,
@@ -409,6 +394,7 @@
               },
               "fieldConfig": {
                 "defaults": {
+                  "unit": "ms",
                   "thresholds": {
                     "mode": "absolute",
                     "steps": [
@@ -445,32 +431,17 @@
                   "spec": {
                     "query": {
                       "kind": "DataQuery",
-                      "group": "tempo",
+                      "group": "prometheus",
                       "version": "v0",
                       "datasource": {
-                        "name": "P8D6546721A1D106C"
+                        "name": "P1809F7CD0C75ACF3"
                       },
                       "spec": {
-                        "filters": [
-                          {
-                            "id": "7ed2ffab",
-                            "isCustomValue": false,
-                            "operator": "!=",
-                            "scope": "span",
-                            "tag": "http.request.method",
-                            "value": [
-                              "GET"
-                            ],
-                            "valueType": "string"
-                          }
-                        ],
-                        "limit": 100,
-                        "metricsQueryType": "range",
-                        "query": "{span.http.request.method!=nil}",
-                        "queryType": "traceql",
-                        "serviceMapUseNativeHistograms": false,
-                        "spss": 100,
-                        "tableType": "traces"
+                        "editorMode": "code",
+                        "expr": "quantile(0.9, rate(default_poem_request_duration_ms_milliseconds_sum[1h]) / clamp(rate(default_poem_request_duration_ms_milliseconds_count[1h]), 1 / 3600, 100000000000000))",
+                        "instant": false,
+                        "legendFormat": "__auto",
+                        "range": true
                       }
                     },
                     "refId": "A",
@@ -495,9 +466,9 @@
                 "percentChangeColorMode": "standard",
                 "reduceOptions": {
                   "calcs": [
-                    "p90"
+                    "lastNotNull"
                   ],
-                  "fields": "/^Duration$/",
+                  "fields": "",
                   "values": false
                 },
                 "showPercentChange": false,
@@ -506,6 +477,7 @@
               },
               "fieldConfig": {
                 "defaults": {
+                  "unit": "ms",
                   "thresholds": {
                     "mode": "absolute",
                     "steps": [
@@ -542,32 +514,17 @@
                   "spec": {
                     "query": {
                       "kind": "DataQuery",
-                      "group": "tempo",
+                      "group": "prometheus",
                       "version": "v0",
                       "datasource": {
-                        "name": "P8D6546721A1D106C"
+                        "name": "P1809F7CD0C75ACF3"
                       },
                       "spec": {
-                        "filters": [
-                          {
-                            "id": "7ed2ffab",
-                            "isCustomValue": false,
-                            "operator": "!=",
-                            "scope": "span",
-                            "tag": "http.request.method",
-                            "value": [
-                              "GET"
-                            ],
-                            "valueType": "string"
-                          }
-                        ],
-                        "limit": 100,
-                        "metricsQueryType": "range",
-                        "query": "{span.http.request.method!=nil}",
-                        "queryType": "traceql",
-                        "serviceMapUseNativeHistograms": false,
-                        "spss": 100,
-                        "tableType": "traces"
+                        "editorMode": "code",
+                        "expr": "quantile(0.99, rate(default_poem_request_duration_ms_milliseconds_sum[1h]) / clamp(rate(default_poem_request_duration_ms_milliseconds_count[1h]), 1 / 3600, 100000000000000))",
+                        "instant": false,
+                        "legendFormat": "__auto",
+                        "range": true
                       }
                     },
                     "refId": "A",
@@ -592,9 +549,9 @@
                 "percentChangeColorMode": "standard",
                 "reduceOptions": {
                   "calcs": [
-                    "p99"
+                    "lastNotNull"
                   ],
-                  "fields": "/^Duration$/",
+                  "fields": "",
                   "values": false
                 },
                 "showPercentChange": false,
@@ -603,6 +560,7 @@
               },
               "fieldConfig": {
                 "defaults": {
+                  "unit": "ms",
                   "thresholds": {
                     "mode": "absolute",
                     "steps": [

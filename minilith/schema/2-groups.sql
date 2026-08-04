@@ -54,7 +54,10 @@ create table group_adminships (
     user_id text not null references users(id),
     group_id uuid not null references groups(id),
     primary key (user_id, group_id),
-    constraint group_adminships_email_account check (user_id like 'email:%')
+    constraint group_adminships_email_account check (user_id like 'email:%'),
+    -- ensure there exists a group membership with the same user_id and group_id
+    constraint group_adminships_group_membership_fk foreign key (user_id, group_id)
+        references group_memberships (user_id, group_id)
 );
 
 create type notification_level as enum ('none', 'personalized', 'all');

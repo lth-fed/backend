@@ -74,7 +74,11 @@ pub async fn group_members(db: impl PgExecutor<'_>, group_id: Uuid) -> MinilithR
     sqlx::query_scalar!(
         r#"select gm.user_id
         from group_memberships gm
+        left outer join group_adminships ga
+            on ga.group_id = gm.group_id and ga.user_id = gm.user_id
         where gm.group_id = $1
+        -- if there's a group adminship, we don't list it
+        and ga.user_id is null
         order by gm.user_id"#,
         group_id
     )

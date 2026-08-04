@@ -102,7 +102,7 @@ impl Context {
                     );
                 }
                 warn!(
-                    "push-notification runtime disabled because provider credentials are not set"
+                    "push-notification sending disabled because provider credentials are not set"
                 );
 
                 None
@@ -113,7 +113,7 @@ impl Context {
                 alert(AlertLevel::L2, "push-notifications setup failed. See logs");
                 error!(
                     ?error,
-                    "push-notification runtime disabled because setup failed"
+                    "push-notification sending disabled because setup failed"
                 );
                 None
             }

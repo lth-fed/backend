@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use fed_auth_verifier::User;
 use minilith_errors::{MinilithEndpointError, MinilithErrorResultExt as _, escape_email_html};
-use poem_openapi::payload::{Binary, Json, PlainText, Response};
+use poem_openapi::payload::{Binary, Json, Response};
 use poem_openapi::{Object, OpenApi, param::Path};
 use s3::post_policy::PostPolicyExpiration;
 use sqlx::PgExecutor;
@@ -22,7 +22,7 @@ use crate::activities::Router as ActivityRouter;
 use crate::context::ContextWrapper;
 use crate::group::admin::{
     Adminship, check_activity_adminship, check_direct_adminship, check_direct_or_parent_adminship,
-    check_ticket_kind_adminship, create_adminship_change, group_admins, remove_adminship_change,
+    check_ticket_kind_adminship, create_adminship_change, group_admins,
 };
 use crate::group::member::group_members;
 use crate::group::{self, Group};
@@ -1549,6 +1549,15 @@ impl Router {
         Path(member_id): Path<String>,
     ) -> MinilithResult<()> {
         check_direct_adminship(&self.db, user.get_id(), group_id).await?;
+        if check_direct_adminship(&self.db, &member_id, group_id)
+            .await
+            .is_ok()
+        {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "tried to remove the membership of an admin",
+                "",
+            ));
+        }
         sqlx::query!(
             "delete from group_memberships where user_id = $1 and group_id = $2",
             member_id,
@@ -1585,7 +1594,6 @@ impl Router {
     ///
     /// # Errors
     ///
-    /// - root must have no admins
     /// - the user must be admin of the parent of this group
     #[oai(path = "/groups/:group_id/admins", method = "post")]
     async fn create_adminship(
@@ -1623,7 +1631,7 @@ impl Router {
         Ok(Json(adminship))
     }
 
-    /// Removes an adminship for a user in a group.
+    /// Removes an adminship & membership for a user in a group.
     ///
     /// The user performing this action must be a literal super-admin, meaning
     /// they must at least be an administrator of the parent group.
@@ -1638,7 +1646,7 @@ impl Router {
         user: User,
         Path(group_id): Path<Uuid>,
         Path(user_id): Path<String>,
-    ) -> MinilithResult<PlainText<String>> {
+    ) -> MinilithResult<()> {
         let mut txn = self.db.begin().await?;
 
         check_direct_or_parent_adminship(&mut txn.executor(), user.get_id(), group_id).await?;
@@ -1649,8 +1657,21 @@ impl Router {
         } else {
             Vec::new()
         };
-        let removed = remove_adminship_change(&mut txn.executor(), &user_id, group_id).await?;
-        if removed {
+        let deleted = sqlx::query!(
+            "delete from group_adminships where user_id = $1 and group_id = $2",
+            user_id,
+            group_id
+        )
+        .execute(&mut txn.executor())
+        .await?;
+        sqlx::query!(
+            "delete from group_memberships where user_id = $1 and group_id = $2",
+            &user_id,
+            group_id
+        )
+        .execute(&mut txn.executor())
+        .await?;
+        if deleted.rows_affected() == 1 {
             send_adminship_emails(
                 &self.context,
                 recipients,
@@ -1662,7 +1683,7 @@ impl Router {
         }
         txn.commit().await?;
 
-        Ok(PlainText("adminship removed".to_owned()))
+        Ok(())
     }
 
     /// Lists groups whose direct members may request membership in this group.

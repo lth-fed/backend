@@ -298,6 +298,9 @@ pub async fn create_adminship(
 
 /// Creates an adminship and reports whether a row was actually inserted.
 ///
+/// If the user is not already a member of the group, a membership is created
+/// first.
+///
 /// # Errors
 ///
 /// DB.
@@ -313,7 +316,12 @@ pub async fn create_adminship_change(
         ));
     }
     let row = sqlx::query!(
-        r#"with inserted_adminship as (
+        r#"with ensure_membership as (
+            insert into group_memberships (user_id, group_id)
+            values ($1, $2)
+            on conflict do nothing
+        ),
+        inserted_adminship as (
             insert into group_adminships (user_id, group_id)
             values ($1, $2)
             on conflict do nothing
@@ -345,42 +353,6 @@ pub async fn create_adminship_change(
         },
         row.created,
     ))
-}
-
-/// Removes the adminship for the given user in the given group.
-///
-/// # Errors
-///
-/// DB.
-pub async fn remove_adminship(
-    db: impl PgExecutor<'_>,
-    user_id: &str,
-    group_id: Uuid,
-) -> MinilithResult<()> {
-    remove_adminship_change(db, user_id, group_id)
-        .await
-        .map(|_| ())
-}
-
-/// Removes an adminship and reports whether a row was actually deleted.
-///
-/// # Errors
-///
-/// DB.
-pub async fn remove_adminship_change(
-    db: impl PgExecutor<'_>,
-    user_id: &str,
-    group_id: Uuid,
-) -> MinilithResult<bool> {
-    let deleted = sqlx::query!(
-        "delete from group_adminships where user_id = $1 and group_id = $2",
-        user_id,
-        group_id
-    )
-    .execute(db)
-    .await?
-    .rows_affected();
-    Ok(deleted != 0)
 }
 
 /// Returns the list of admins for the given group.
@@ -435,7 +407,7 @@ mod tests {
     }
 
     #[sqlx::test(fixtures("adminship"))]
-    async fn create_adminship_does_not_create_membership(db: PgPool) {
+    async fn create_adminship_for_non_member(db: PgPool) {
         let e_id = id_of(&db, "tlth.e").await;
 
         let adminship = create_adminship(&db, "email:user_a", e_id).await.unwrap();
@@ -454,18 +426,6 @@ mod tests {
                 .map(|path| path.to_string()),
             Some("tlth.e".to_owned()),
         );
-        let is_member = sqlx::query_scalar!(
-            r#"select exists (
-                select 1 from group_memberships
-                where user_id = $1 and group_id = $2
-            ) as "exists!""#,
-            "email:user_a",
-            e_id,
-        )
-        .fetch_one(&db)
-        .await
-        .unwrap();
-        assert!(!is_member, "adminship must not imply normal membership");
     }
 
     #[sqlx::test(fixtures("adminship"))]

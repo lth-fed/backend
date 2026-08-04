@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use fed_auth_verifier::callbacks::{TransactionCallbackInfo, TransactionInfo};
 use minilith_errors::{AlertLevel, MinilithResult, alert};
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 use crate::push_notifications::PushSendResult;
 use crate::{
