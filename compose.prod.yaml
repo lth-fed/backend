@@ -152,14 +152,19 @@ services:
         condition: service_started
       transactions:
         condition: service_started
+      fed-s3:
+        condition: service_started
 
   fed-s3:
     restart: unless-stopped
     environment:
       RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?set RUSTFS_ACCESS_KEY in the shell or a Compose env file}
       RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?set RUSTFS_SECRET_KEY in the shell or a Compose env file}
+    expose:
+      - "9000"
+      - "9001"
     volumes:
-      - ${RUSTFS_MOUNTPOINT:-/fed-rustfs-data}:/data
+      - ${RUSTFS_MOUNTPOINT:-/fed-s3}:/data
     networks:
       - default
       - traefik
@@ -170,10 +175,12 @@ services:
       traefik.http.routers.fed-s3.entrypoints: ${TRAEFIK_ENTRYPOINT:-websecure}
       traefik.http.routers.fed-s3.tls: "true"
       traefik.http.routers.fed-s3.tls.certresolver: ${TRAEFIK_CERT_RESOLVER:-letsencrypt}
+      traefik.http.routers.fed-s3.service: "fed-s3"
       traefik.http.services.fed-s3.loadbalancer.server.port: "9000"
       #
-      traefik.http.routers.fed-s3-console.rule: Host(`${S3_DOMAIN_DOMAIN:-s3-console.teknologappen.se}`)
+      traefik.http.routers.fed-s3-console.rule: Host(`${S3_ADMIN_DOMAIN:-s3-console.teknologappen.se}`)
       traefik.http.routers.fed-s3-console.entrypoints: ${TRAEFIK_ENTRYPOINT:-websecure}
       traefik.http.routers.fed-s3-console.tls: "true"
       traefik.http.routers.fed-s3-console.tls.certresolver: ${TRAEFIK_CERT_RESOLVER:-letsencrypt}
+      traefik.http.routers.fed-s3-console.service: "fed-s3-console"
       traefik.http.services.fed-s3-console.loadbalancer.server.port: "9001"

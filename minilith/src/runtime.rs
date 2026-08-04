@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use fed_auth_verifier::callbacks::{TransactionCallbackInfo, TransactionInfo};
 use minilith_errors::{AlertLevel, MinilithResult, alert};
-use tracing::{error, info};
+use tracing::{error, warn};
 
 use crate::push_notifications::PushSendResult;
 use crate::{
@@ -121,6 +121,19 @@ async fn check_next_notification(ctx: &ContextWrapper) -> MinilithResult<bool> {
         return Ok(false);
     };
 
+    if !ctx.has_notification_support() {
+        warn!(
+            notification_id = ?notification.id,
+            title = notification.title.resolve_intl("en", ""),
+            "push-notification not sent because setup failed"
+        );
+        sqlx::query!("delete from notifications where id = $1", notification.id)
+            .execute(&mut transaction.executor())
+            .await?;
+        transaction.commit().await?;
+        return Ok(false);
+    }
+
     // Ticket-kind allowed groups determine who can receive the notification. The closest setting
     // on each allowed group or one of its ancestors applies, and no matching setting means no
     // notification. Until personalized behavior is defined, both `all` and `personalized`
@@ -226,10 +239,6 @@ pub fn spawn(ctx: &ContextWrapper) {
 
     let notification_ctx = Arc::clone(ctx);
     tokio::spawn(async move {
-        if !notification_ctx.has_notification_support() {
-            return;
-        }
-
         loop {
             loop {
                 match check_next_notification(&notification_ctx).await {

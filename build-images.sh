@@ -7,5 +7,6 @@ set -euo pipefail
 git_version="${GIT_VERSION:-$(git describe --always --dirty=-modified)}"
 
 POSTGRES_PASSWORD=unused GRAFANA_ADMIN_PASSWORD=unused \
+  RUSTFS_ACCESS_KEY=unused RUSTFS_SECRET_KEY=unused \
   podman compose -f compose.prod.yaml build \
     --build-arg "GIT_VERSION=$git_version" "$@"

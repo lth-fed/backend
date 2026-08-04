@@ -225,6 +225,12 @@ async fn seed_users(ctx: &ContextWrapper) -> color_eyre::Result<()> {
         ),
         ("email:e@example.org", "E administrator", "tlth.e", true),
         ("email:tlth@example.org", "TLTH administrator", "tlth", true),
+        (
+            "email:informationschef@esek.se",
+            "Informationschef E-sektionen",
+            "tlth",
+            true,
+        ),
     ];
     for (id, name, guild_path, is_admin) in users {
         let nonce: [u8; 12] = rand::random();

@@ -57,27 +57,7 @@ HTTPS API in production.
 
 ## Build and push production images
 
-Production secrets are runtime configuration and are never needed to build the
-images. The backend `.dockerignore` excludes every `.env` file.
-
-Choose a registry and an immutable tag, then build and push:
-
-```sh
-export CONTAINER_REGISTRY=registry.esek.se/esek
-export CONTAINER_TAG=0.0.1-alpha.1
-
-podman login registry.esek.se
-./build-images.sh
-POSTGRES_PASSWORD=unused GRAFANA_ADMIN_PASSWORD=unused podman compose -f compose.prod.yaml push fed-auth transactions minilith
-```
-
-`build-images.sh` supplies placeholder values for the two secrets which Compose
-validates while reading the file. They are not build arguments and are not
-stored in an image. It requires `CONTAINER_REGISTRY` and `CONTAINER_TAG` so a
-build cannot silently create differently named local images. The Dockerfile uses
-`cargo-chef`, so dependency compilation is reused after source-only changes. The
-script also embeds Git's compact `<revision>[-modified]` description without
-sending the `.git` directory into the container build.
+Run `./build-push.sh 0.0.1-alpha.2`.
 
 ## Deploy pushed images
 
@@ -99,6 +79,10 @@ POSTGRES_PASSWORD=replace-with-a-long-random-password
 GRAFANA_ADMIN_USER=admin
 GRAFANA_ADMIN_PASSWORD=replace-with-a-long-random-password
 
+RUSTFS_ACCESS_KEY=rustfsadmin
+RUSTFS_SECRET_KEY=rustfsadmin
+RUSTFS_MOUNTPOINT=/fed-s3
+
 TRAEFIK_NETWORK=traefik
 TRAEFIK_ENTRYPOINT=websecure
 TRAEFIK_CERT_RESOLVER=letsencrypt
@@ -113,6 +97,8 @@ S3_CONSOLE_DOMAIN=s3-console.teknologappen.se
 Copy each `.env.example` to `.env` in `minilith`, `fed-auth`, and
 `transactions`, then replace the example values. Compose supplies
 `DATABASE_URL`, so it may be omitted from these service files.
+
+Seed the database with the seeder in the minilith container.
 
 The host must also have:
 

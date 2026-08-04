@@ -41,20 +41,32 @@ RUN apt-get update \
 WORKDIR /app
 USER 10001:10001
 
+# MINILITH
 FROM runtime AS minilith
+RUN rm -rf /var/lib/apt/lists/*
 COPY --from=builder /app/backend/target/release/minilith /app/minilith
+COPY --from=builder /app/backend/target/release/seed-dev /app/seed-dev
 EXPOSE 8000
 ENTRYPOINT ["/app/minilith"]
 
+# FED-AUTH
 FROM runtime AS fed-auth
-RUN apt-get install -y --no-install-recommends \
-        ca-certificates
+
+USER 0:0
+
+RUN apt-get install -y --no-install-recommends libxmlsec1t64-openssl
+RUN rm -rf /var/lib/apt/lists/*
+
+USER 10001:10001
 
 COPY --from=builder /app/backend/target/release/fed-auth /app/fed-auth
 EXPOSE 8001
 ENTRYPOINT ["/app/fed-auth"]
 
+# TRANSACTIONS
 FROM runtime AS transactions
+RUN rm -rf /var/lib/apt/lists/*
+
 COPY --from=builder /app/backend/target/release/transactions /app/transactions
 EXPOSE 8002
 ENTRYPOINT ["/app/transactions"]
