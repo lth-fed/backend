@@ -1,4 +1,4 @@
-use std::ops::{Deref, Not as _};
+use std::ops::Deref;
 use std::path::PathBuf;
 
 use base64::Engine as _;
@@ -131,34 +131,38 @@ impl ClientStore<stripe::Client> {
             .send(&client)
             .await
             .wrap_err_internal("stripe: list webhooks")?;
-        let should_add_webhook = webhooks
+        // we need to recreate it to get the secret
+        for endpoint in webhooks
             .data
             .iter()
-            .any(|webhook| webhook.url == webhook_url)
-            .not();
-        if should_add_webhook {
-            stripe_misc::webhook_endpoint::CreateWebhookEndpoint::new(
-                vec![
-                    CreateWebhookEndpointEnabledEvents::CheckoutSessionCompleted,
-                    CreateWebhookEndpointEnabledEvents::CheckoutSessionExpired,
-                ],
-                webhook_url,
-            )
-            // for getting the fee
-            .expand(
-                [
-                    "payment_intent",
-                    "payment_intent.latest_charge",
-                    "payment_intent.latest_charge.balance_transaction",
-                    "latest_charge",
-                    "balance_transaction",
-                ]
-                .map(str::to_owned),
-            )
-            .send(&client)
-            .await
-            .wrap_err_internal("stripe: add webhook")?;
+            .filter(|webhook| webhook.url == webhook_url)
+        {
+            if let Err(error) =
+                stripe_misc::webhook_endpoint::DeleteWebhookEndpoint::new(&endpoint.id)
+                    .send(&client)
+                    .await
+            {
+                error!(?error, "stripe: Deleting endpoint failed");
+            }
         }
+        let endpoint = stripe_misc::webhook_endpoint::CreateWebhookEndpoint::new(
+            vec![
+                CreateWebhookEndpointEnabledEvents::CheckoutSessionCompleted,
+                CreateWebhookEndpointEnabledEvents::CheckoutSessionExpired,
+            ],
+            webhook_url,
+        )
+        .send(&client)
+        .await
+        .wrap_err_internal("stripe: add webhook")?;
+
+        sqlx::query!(
+            "update client_ids set stripe_endpoint_secret = $1 where client_id = $2",
+            endpoint.secret,
+            client_id
+        )
+        .execute(db)
+        .await?;
 
         Ok(self
             .0

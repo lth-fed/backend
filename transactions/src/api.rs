@@ -83,6 +83,8 @@ struct SingleInfoResponse {
 #[derive(Debug, Object, Clone)]
 // ALSO UPDATE `minilith/transactions.rs`
 struct CreatePaymentRequest {
+    /// From `/init`.
+    id: Uuid,
     /// When this payment request will be cancelled.
     /// Will try to cancel within 30s.
     timeout: OffsetDateTime,
@@ -102,16 +104,9 @@ impl CreatePaymentRequest {
 }
 #[derive(Debug, Object, Clone)]
 // ALSO UPDATE `minilith/transactions.rs`
-struct CreatePaymentResponseFree {
-    transaction_id: Uuid,
-    // ALSO UPDATE `minilith/transactions.rs`
-}
-#[derive(Debug, Object, Clone)]
-// ALSO UPDATE `minilith/transactions.rs`
 struct CreatePaymentResponseSwish {
     /// See <https://developer.swish.nu/api/payment-request/v2#create-payment-request>.
     payment_request_token: String,
-    transaction_id: Uuid,
     // ALSO UPDATE `minilith/transactions.rs`
 }
 #[derive(Debug, Object, Clone)]
@@ -119,7 +114,6 @@ struct CreatePaymentResponseSwish {
 struct CreatePaymentResponseStripe {
     /// See <https://docs.stripe.com/api/checkout/sessions/object#checkout_session_object-url>.
     redirect_url: String,
-    transaction_id: Uuid,
     // ALSO UPDATE `minilith/transactions.rs`
 }
 
@@ -255,6 +249,46 @@ impl Route {
         .await?;
         Ok(())
     }
+    /// Needs to be called before `/free`, `/swish` or `/stripe` to get a uuid to use for those
+    /// providers.
+    ///
+    /// # Errors
+    ///
+    /// None, only DB
+    #[oai(path = "/init", method = "post")]
+    async fn get_uuid(&self, _auth: ApiAuth) -> MinilithResult<Json<Uuid>> {
+        let uuid = Uuid::new_v4();
+        sqlx::query!(
+            "insert into transaction_reserved_ids (id)
+            values ($1)",
+            uuid
+        )
+        .execute(&self.db)
+        .await?;
+        Ok(Json(uuid))
+    }
+    async fn validate_init_id(&self, id: Uuid) -> MinilithResult<Uuid> {
+        sqlx::query!(
+            "delete from transaction_reserved_ids
+            where created < now() - '1 hour'::interval"
+        )
+        .execute(&self.db)
+        .await?;
+        let row = sqlx::query!(
+            "delete from transaction_reserved_ids
+            where id = $1",
+            id
+        )
+        .execute(&self.db)
+        .await?;
+        if row.rows_affected() != 1 {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "get an ID from /init first.",
+                "",
+            ));
+        }
+        Ok(id)
+    }
     /// You WILL NOT get info on the callback, the transaction will be marked paid instantly.
     ///
     /// Keep in mind to complete your transaction before calling this, else we might call your
@@ -268,7 +302,7 @@ impl Route {
         &self,
         auth: ApiAuth,
         body: Json<CreatePaymentRequest>,
-    ) -> MinilithResult<Json<CreatePaymentResponseFree>> {
+    ) -> MinilithResult<()> {
         let amount = body.total_amount();
         if amount != 0 {
             return Err(MinilithEndpointError::bad_user_input(
@@ -280,7 +314,7 @@ impl Route {
         }
 
         let mut txn = self.db.begin().await?;
-        let transaction_id = Uuid::new_v4();
+        let transaction_id = self.validate_init_id(body.id).await?;
         sqlx::query!(
             "insert into transactions (id, customer_id, client_id, callback_url_v1,
                 timeout, provider, total_transaction_fee, callback_identifier, payment_reference)
@@ -316,7 +350,7 @@ impl Route {
         )
         .await;
 
-        Ok(Json(CreatePaymentResponseFree { transaction_id }))
+        Ok(())
     }
     /// You WILL get info on the callback (unless your endpoint is unreachable) about either it
     /// getting cancelled or paid. We will do our best within our control.
@@ -336,7 +370,7 @@ impl Route {
             ));
         }
 
-        let uuid = Uuid::new_v4();
+        let uuid = self.validate_init_id(body.id).await?;
         let cb_ident = Uuid::new_v4();
         let mut amount = amount.to_string();
         amount.insert(amount.len() - 2, '.');
@@ -397,7 +431,6 @@ impl Route {
         txn.commit().await?;
 
         Ok(Json(CreatePaymentResponseSwish {
-            transaction_id: uuid,
             payment_request_token: prt.to_owned(),
         }))
     }
@@ -553,7 +586,7 @@ impl Route {
 
         let url = session.url.clone().wrap_err_internal("stripe: no url")?;
 
-        let uuid = Uuid::new_v4();
+        let uuid = self.validate_init_id(body.id).await?;
 
         let mut txn = self.db.begin().await?;
 
@@ -584,7 +617,6 @@ impl Route {
         txn.commit().await?;
 
         Ok(Json(CreatePaymentResponseStripe {
-            transaction_id: uuid,
             redirect_url: url,
         }))
     }
@@ -611,7 +643,7 @@ impl Route {
             EventObject::CheckoutSessionCompleted(event)
             | EventObject::CheckoutSessionExpired(event) => {
                 let row = sqlx::query!(
-                    "select transaction_id, stripe_secret
+                    "select transaction_id, transactions.client_id, stripe_endpoint_secret
                     from stripe_checkouts 
                     inner join transactions on (transactions.id = transaction_id)
                     inner join client_ids on (client_ids.client_id = transactions.client_id)
@@ -621,10 +653,10 @@ impl Route {
                 .fetch_one(&self.db)
                 .await?;
 
-                let stripe_secret = row
-                    .stripe_secret
+                let stripe_endpoint_secret = row
+                    .stripe_endpoint_secret
                     .wrap_err_bad_frontend("your client_id isn't set up for stripe")?;
-                stripe_webhook::Webhook::construct_event(&body, signature, &stripe_secret)
+                stripe_webhook::Webhook::construct_event(&body, signature, &stripe_endpoint_secret)
                     .wrap_err_bad_frontend("stripe: invalid event")?;
 
                 let status = match event.status {
@@ -634,8 +666,27 @@ impl Route {
                 };
 
                 if status == Some(swish::Status::Paid) {
+                    let client = self.get_stripe_client(&row.client_id).await?;
+                    let data =
+                        stripe_checkout::checkout_session::RetrieveCheckoutSession::new(&event.id)
+                            // for getting the fee
+                            .expand(
+                                [
+                                    "payment_intent",
+                                    "payment_intent.latest_charge",
+                                    "payment_intent.latest_charge.balance_transaction",
+                                    "latest_charge",
+                                    "balance_transaction",
+                                ]
+                                .map(str::to_owned),
+                            )
+                            .send(&*client)
+                            .await
+                            .wrap_err_internal("l1: stripe: fetch session data failed when paid")?;
+                    drop(client);
+
                     // broooo
-                    let intent = event
+                    let intent = data
                         .payment_intent
                         .as_ref()
                         .wrap_err_bad_frontend("payment_intent should exist when paid")?;
@@ -684,6 +735,7 @@ impl Route {
         Ok(())
     }
     /// Must be made from the same `client_id` as the transaction.
+    /// **NOT IMPLEMENTED YET**
     #[oai(path = "/:id/refund", method = "post")]
     async fn refund(&self, auth: ApiAuth, Path(id): Path<Uuid>) -> MinilithResult<Json<String>> {
         let transaction = sqlx::query!(

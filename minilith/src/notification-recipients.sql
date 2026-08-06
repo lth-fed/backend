@@ -57,8 +57,7 @@ select
     push_devices.device_id as "device_id!",
     push_devices.push_token,
     push_devices.platform::push_platform as "platform!: crate::push_notifications::PushPlatform",
-    users.language,
-    users.nonce
+    users.language
 from recipient_users
 inner join push_devices
     on push_devices.user_id = recipient_users.user_id

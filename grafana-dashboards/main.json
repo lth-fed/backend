@@ -5,8 +5,8 @@
     "name": "adrtdhg",
     "namespace": "default",
     "uid": "333ac565-63a1-41e7-9d50-6bc8c7464be5",
-    "resourceVersion": "1785862238300988",
-    "generation": 7,
+    "resourceVersion": "1785866228090009",
+    "generation": 8,
     "creationTimestamp": "2026-07-28T21:07:58Z",
     "labels": {
       "grafana.app/deprecatedInternalID": "1548458260774912"
@@ -16,7 +16,7 @@
       "grafana.app/folder": "",
       "grafana.app/saved-from-ui": "Grafana v13.0.3 (3ca0684c7c)",
       "grafana.app/updatedBy": "user:afti9v3mbmjnkf",
-      "grafana.app/updatedTimestamp": "2026-08-04T16:50:38Z"
+      "grafana.app/updatedTimestamp": "2026-08-04T17:57:08Z"
     }
   },
   "spec": {
@@ -1003,12 +1003,12 @@
                         "name": "P8D6546721A1D106C"
                       },
                       "spec": {
-                        "limit": 100,
+                        "limit": 20,
                         "metricsQueryType": "range",
-                        "query": "{ span.http.response.status_code >= 400 && span.http.response.status_code < 500 } | select(span.http.path_pattern)",
+                        "query": "{ span.http.response.status_code >= 400 && span.http.response.status_code < 500 && span.http.response.status_code != 404 } | select(span.http.path_pattern)",
                         "queryType": "traceql",
                         "serviceMapUseNativeHistograms": false,
-                        "spss": 100,
+                        "spss": 3,
                         "tableType": "traces"
                       }
                     },

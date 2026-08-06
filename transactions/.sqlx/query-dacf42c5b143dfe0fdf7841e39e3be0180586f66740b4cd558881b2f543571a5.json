@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into transaction_reserved_ids (id)\n            values ($1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "dacf42c5b143dfe0fdf7841e39e3be0180586f66740b4cd558881b2f543571a5"
+}

@@ -1,19 +1,21 @@
 use std::ops::Deref;
 
-use fed_auth_verifier::callbacks::AuthCallbackDataV1;
-use minilith_errors::{MinilithEndpointError, MinilithErrorResultExt as _, MinilithResult};
+use fed_auth_verifier::callbacks::Guild;
+use minilith_errors::{
+    MinilithEndpointError, MinilithErrorOptionExt as _, MinilithErrorResultExt as _, MinilithResult,
+};
 use poem_openapi::payload::{Json, PlainText};
 use poem_openapi::{Enum, Object, OpenApi};
 use sqlx::query;
 use uuid::Uuid;
 
+use crate::context::{ValidatedAuthSession, ValidatedUser};
 use crate::oidc::ACCESS_TOKEN_VALID_FOR;
-use crate::{Context, WEBSITE_DOMAIN, jwt, random_id};
+use crate::{Context, ContextWrapper, WEBSITE_DOMAIN, jwt};
 
 #[derive(Object, Clone)]
 pub(crate) struct EmailLoginRequest {
     email: String,
-    name: String,
     code: String,
     language: EmailLanguage,
 }
@@ -25,13 +27,20 @@ enum EmailLanguage {
 }
 #[derive(Object)]
 struct EmailApproveResponse {
-    token: String,
+    token: Uuid,
 }
 #[derive(Object, Clone)]
 struct TestLoginRequest {
     stil_id: String,
-    name: String,
     code: String,
+}
+
+#[derive(Object, Clone)]
+pub(crate) struct InfoCompletion {
+    code: String,
+    name: String,
+    /// MUST be provided if the sub starts with `lund-university:`.
+    personal_number: Option<String>,
 }
 
 #[derive(Object)]
@@ -46,7 +55,7 @@ struct ApiKeyResponse {
 
 #[derive(Clone)]
 pub(crate) struct MainRouter {
-    pub context: Context,
+    pub context: ContextWrapper,
 }
 impl Deref for MainRouter {
     type Target = Context;
@@ -56,6 +65,114 @@ impl Deref for MainRouter {
 }
 #[OpenApi]
 impl MainRouter {
+    async fn get_guild(&self, pn: &str) -> MinilithResult<Option<Guild>> {
+        let resp = self
+            .reqwest_client
+            .post("https://medcheck.tlth.se")
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(format!("id={pn}"))
+            .send()
+            .await
+            .wrap_err_internal("medcheck: transport error")?
+            .error_for_status()
+            .wrap_err_internal("medcheck: status error")?;
+        let body = resp
+            .text()
+            .await
+            .wrap_err_internal("medcheck: transport body error")?;
+        let Some((g1, g2)) = (|| {
+            let needle = "<div class=\"guilds\">";
+            let idx = body.find(needle)?;
+            let guild = body.get((idx + needle.len())..)?;
+            let g1 = guild.get(..1)?;
+            let g2 = guild.get(..2)?;
+            Some((g1, g2))
+        })() else {
+            return Ok(None);
+        };
+        match g2 {
+            "do" => return Ok(Some(Guild::Doct)),
+            "in" => return Ok(Some(Guild::Ing)),
+            _ => {}
+        }
+        let guild = match g1 {
+            "f" => Guild::F,
+            "e" => Guild::E,
+            "m" => Guild::M,
+            "v" => Guild::V,
+            "a" => Guild::A,
+            "k" => Guild::K,
+            "d" => Guild::D,
+            "w" => Guild::W,
+            "i" => Guild::I,
+            _ => return Ok(None),
+        };
+        Ok(Some(guild))
+    }
+    /// # Errors
+    ///
+    /// - `personal_number`: `xxxxxxxxxx` where x: /[0-9]/
+    #[oai(path = "/personal-information", method = "post")]
+    async fn info_completion(
+        &self,
+        body: Json<InfoCompletion>,
+        headers: &poem::http::HeaderMap,
+    ) -> MinilithResult<PlainText<String>> {
+        if headers
+            .get("origin")
+            .is_some_and(|origin| origin != WEBSITE_DOMAIN)
+        {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "origin has to be from our domain",
+                "",
+            ));
+        }
+        if !body.name.contains(' ') || body.name.len() < 5 {
+            return Err(MinilithEndpointError::bad_user_input(
+                "name invalid",
+                "",
+                "name has to contain both first- and surname and be at least 5 characters long",
+                "name",
+            ));
+        }
+        let guild = if let Some(pn) = &body.personal_number {
+            if pn.len() != 10 || !pn.chars().all(|char| "0123456789".contains(char)) {
+                return Err(MinilithEndpointError::bad_user_input(
+                    "personal_number invalid",
+                    "",
+                    "personal number has to be in the format of 10 numbers without any characters between",
+                    "personal_number",
+                ));
+            }
+
+            self.get_guild(pn).await.ok().flatten()
+        } else {
+            None
+        };
+
+        sqlx::query!(
+            "update session_validated_users set
+                full_name = $1,
+                lth_guild = $2
+            where session_id = $3",
+            body.name,
+            guild.as_ref().map(Guild::to_str),
+            body.code
+        )
+        .execute(&self.db)
+        .await?;
+
+        let validated_user = self
+            .get_validated_session(&body.code)
+            .await?
+            .wrap_err_internal("we've just inserted it")?;
+
+        let url = self
+            .provider_callback_next_url(&body.code, &validated_user)
+            .await
+            .wrap_err_internal("noalert provider")?;
+        Ok(PlainText(url))
+    }
     /// Corresponds to the login happening at the `IdP` in `SAML2`.
     #[oai(path = "/providers/email/login", method = "post")]
     async fn email_login(
@@ -72,18 +189,10 @@ impl MainRouter {
                 "",
             ));
         }
-        if !self.auth_sessions.contains_key(&body.code) {
+        if !self.check_has_session(&body.code).await {
             return Err(MinilithEndpointError::unauthorized("code not valid", ""));
         }
-        if !body.name.contains(' ') || body.name.len() < 5 {
-            return Err(MinilithEndpointError::bad_user_input(
-                "name invalid",
-                "",
-                "name has to contain both first- and surname and be at least 5 characters long",
-                "name",
-            ));
-        }
-        let token = random_id();
+        let token = Uuid::new_v4();
         let link = format!("{WEBSITE_DOMAIN}/providers/email/approve/?token={token}");
         if let Some(email_client) = &self.email_client {
             let (from_name, subject, description) = match body.language {
@@ -113,7 +222,15 @@ impl MainRouter {
             println!("{link}");
         }
 
-        self.email_token_holding.insert(token, (*body).clone());
+        sqlx::query!(
+            "insert into email_token_holding (id, email, code)
+            values ($1, $2, $3)",
+            token,
+            body.email,
+            body.code
+        )
+        .execute(&self.db)
+        .await?;
 
         Ok(())
     }
@@ -133,23 +250,33 @@ impl MainRouter {
                 "",
             ));
         }
-        let Some(login_data) = self.email_token_holding.get(&body.token) else {
+        let Some(login_data) = sqlx::query!(
+            "select * from email_token_holding where id = $1",
+            body.token,
+        )
+        .fetch_optional(&self.db)
+        .await?
+        else {
             return Err(MinilithEndpointError::unauthorized("token not valid", ""));
         };
-        let Some(mut session) = self.auth_sessions.get(&login_data.code) else {
+        let Some(session) = self.get_session(&login_data.code).await? else {
             return Err(MinilithEndpointError::unauthorized("session not valid", ""));
         };
-        session.validated_user = Some(AuthCallbackDataV1 {
+        let user = ValidatedUser {
             sub: format!("email:{}", login_data.email),
-            full_name: login_data.name,
-            email: login_data.email,
+            full_name: None,
+            email: Some(login_data.email),
             lth_guild: None,
-        });
-        self.auth_sessions
-            .insert(login_data.code.clone(), session.clone());
+        };
+        self.validate_session(&login_data.code, &user).await?;
 
         Ok(PlainText(
-            session.provider_callback_next_url(&login_data.code),
+            self.provider_callback_next_url(
+                &login_data.code,
+                &ValidatedAuthSession { session, user },
+            )
+            .await
+            .wrap_err_internal("noalert provider")?,
         ))
     }
     /// Corresponds to acs in saml
@@ -168,19 +295,23 @@ impl MainRouter {
                 "",
             ));
         }
-        let Some(mut session) = self.auth_sessions.get(&body.code) else {
+        let Some(session) = self.get_session(&body.code).await? else {
             return Err(MinilithEndpointError::unauthorized("code not valid", ""));
         };
-        session.validated_user = Some(AuthCallbackDataV1 {
-            sub: format!("test:{}", body.stil_id),
-            full_name: body.name.clone(),
-            email: format!("{}@student.lu.se", body.stil_id),
+        let sub = format!("test:{}", body.stil_id);
+        let user = ValidatedUser {
+            sub,
+            full_name: None,
+            email: None,
             lth_guild: None,
-        });
-        self.auth_sessions
-            .insert(body.code.clone(), session.clone());
+        };
+        self.validate_session(&body.code, &user).await?;
 
-        Ok(PlainText(session.provider_callback_next_url(&body.code)))
+        Ok(PlainText(
+            self.provider_callback_next_url(&body.code, &ValidatedAuthSession { session, user })
+                .await
+                .wrap_err_internal("noalert provider")?,
+        ))
     }
     #[oai(path = "/api-key-get-access-token", method = "post")]
     async fn get_at(&self, body: Json<ApiKeyRequest>) -> MinilithResult<Json<ApiKeyResponse>> {

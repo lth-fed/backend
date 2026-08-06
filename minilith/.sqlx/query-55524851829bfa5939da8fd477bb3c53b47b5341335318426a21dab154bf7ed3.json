@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select allow_transfer_ticket_bypass_allowed_groups, ticket_kind_id,\n            allow_transfer_ticket_start, allow_transfer_ticket_stop\n            from purchased_tickets\n            inner join ticket_kinds kind on kind.id = purchased_tickets.ticket_kind_id\n            where purchased_tickets.id = $1 and owner_id = $2\n            for update of purchased_tickets",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "allow_transfer_ticket_bypass_allowed_groups",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 1,
+        "name": "ticket_kind_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "allow_transfer_ticket_start",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "allow_transfer_ticket_stop",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "55524851829bfa5939da8fd477bb3c53b47b5341335318426a21dab154bf7ed3"
+}

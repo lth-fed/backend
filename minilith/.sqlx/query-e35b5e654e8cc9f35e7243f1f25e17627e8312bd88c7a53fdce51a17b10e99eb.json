@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select group_adminships.group_id\n        from activity_hosts\n        inner join group_adminships\n            on group_adminships.group_id = activity_hosts.group_id\n        where activity_hosts.activity_id = $2 and group_adminships.user_id = $1\n        order by group_adminships.group_id\n        limit 1\n        for key share of group_adminships",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "group_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e35b5e654e8cc9f35e7243f1f25e17627e8312bd88c7a53fdce51a17b10e99eb"
+}

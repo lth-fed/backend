@@ -3,6 +3,8 @@
     missing_debug_implementations,
     reason = "we can't add debug to e.g. Context"
 )]
+use std::sync::Arc;
+
 use bin_common::get_otel;
 use fed_auth_verifier::{AuthUrl, JwkContext};
 use opentelemetry::trace::TracerProvider as _;
@@ -20,10 +22,11 @@ mod api;
 mod context;
 mod jwt;
 mod oidc;
+mod runtime;
 mod saml2;
 
 pub use bin_common::PgPool;
-pub(crate) use context::Context;
+pub(crate) use context::{Context, ContextWrapper};
 
 #[cfg(debug_assertions)]
 pub(crate) const API_DOMAIN: &str = "http://localhost:8001";
@@ -34,23 +37,23 @@ pub(crate) const WEBSITE_DOMAIN: &str = "http://localhost:5174";
 #[cfg(not(debug_assertions))]
 pub(crate) const WEBSITE_DOMAIN: &str = "https://auth.teknologappen.se";
 
-fn random_id() -> String {
-    // hex-formatted random string
-    format!("{:X}", rand::random::<u128>())
-}
-
 /// # Errors
 ///
 /// If the endpoint fails to set up, often because env variables / database is missing.
 pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl poem::Endpoint> {
     let tracer = get_otel(env!("CARGO_PKG_NAME"), test_db.is_some())?;
 
-    let context = Context::new(test_db).await?;
+    let context = Arc::new(Context::new(test_db).await?);
+
+    if cfg!(not(test)) {
+        runtime::spawn(&context).await;
+    }
+
     let auth_ctx = JwkContext::<AuthUrl>::from_jwks("", context.jwks.clone());
     let server_url = API_DOMAIN;
     let api_service = OpenApiService::new(
         api::MainRouter {
-            context: context.clone(),
+            context: Arc::clone(&context),
         },
         env!("CARGO_PKG_NAME"),
         env!("CARGO_PKG_VERSION"),
@@ -61,7 +64,7 @@ pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl po
     let spec = api_service.spec_endpoint();
     let oidc_service = OpenApiService::new(
         oidc::MainRouter {
-            context: context.clone(),
+            context: Arc::clone(&context),
         },
         env!("CARGO_PKG_NAME"),
         env!("CARGO_PKG_VERSION"),
@@ -71,7 +74,9 @@ pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl po
     let oidc_ui = oidc_service.swagger_ui();
     let oidc_spec = oidc_service.spec_endpoint();
     let saml_service = OpenApiService::new(
-        saml2::SamlRouter { context },
+        saml2::SamlRouter {
+            context: Arc::clone(&context),
+        },
         env!("CARGO_PKG_NAME"),
         env!("CARGO_PKG_VERSION"),
     )
@@ -135,6 +140,8 @@ struct WellKnownOidc {
     token_endpoint_auth_methods_supported: Vec<String>,
     code_challenge_methods_supported: Vec<String>,
     grant_types_supported: Vec<String>,
+    revocation_endpoint: String,
+    revocation_endpoint_auth_methods_supported: Vec<String>,
 }
 impl WellKnownOidc {
     fn new() -> Self {
@@ -153,6 +160,8 @@ impl WellKnownOidc {
                 "authorization_code".to_owned(),
                 "refresh_token".to_owned(),
             ],
+            revocation_endpoint: format!("{API_DOMAIN}/oidc/v1/revoke"),
+            revocation_endpoint_auth_methods_supported: vec![String::from("none")],
         }
     }
 }

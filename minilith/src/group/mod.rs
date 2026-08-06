@@ -160,6 +160,39 @@ impl Router {
         .await?;
         Ok(())
     }
+    /// # Errors
+    ///
+    /// - errors if the user is an admin of this group
+    #[oai(path = "/:group_id", method = "delete")]
+    async fn leave_group(
+        &self,
+        user: User,
+        param::Path(group_id): param::Path<Uuid>,
+    ) -> MinilithResult<()> {
+        match sqlx::query!(
+            "delete from group_memberships where user_id = $1 and group_id = $2",
+            user.get_id(),
+            group_id
+        )
+        .execute(&self.db)
+        .await
+        {
+            Ok(res) if res.rows_affected() == 1 => return Ok(()),
+            Ok(_) => return Err(MinilithEndpointError::not_found()),
+            Err(err)
+                if err
+                    .as_database_error()
+                    .is_some_and(sqlx::error::DatabaseError::is_foreign_key_violation) =>
+            {
+                return Err(MinilithEndpointError::bad_frontend_code(
+                    "cannot remove membership of admin",
+                    "",
+                ));
+            }
+            res => res.map(|_| ())?,
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -170,10 +203,10 @@ mod tests {
     #[sqlx::test(fixtures("adminship"))]
     async fn adminship_email_reaches_target_and_parent_admins(db: PgPool) {
         sqlx::query!(
-            r#"insert into users (id, name, language, nonce) values
-                ('email:board@example.com', ''::bytea, ''::bytea, ''::bytea),
-                ('email:peer@example.com', ''::bytea, ''::bytea, ''::bytea),
-                ('email:new@example.com', ''::bytea, ''::bytea, ''::bytea)"#,
+            r#"insert into users (id, name, language) values
+                ('email:board@example.com', ''::bytea, ''::bytea),
+                ('email:peer@example.com', ''::bytea, ''::bytea),
+                ('email:new@example.com', ''::bytea, ''::bytea)"#,
         )
         .execute(&db)
         .await

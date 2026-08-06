@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into activity_hosts (activity_id, group_id) values ($1, $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "37d7a8b66aa6e580519a48c21b284b62eb6cd7f44e7b72076ebfb051164c985d"
+}

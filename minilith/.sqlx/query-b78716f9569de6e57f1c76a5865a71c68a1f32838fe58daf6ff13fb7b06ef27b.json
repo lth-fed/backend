@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select gm.user_id\n        from group_memberships gm\n        left outer join group_adminships ga\n            on ga.group_id = gm.group_id and ga.user_id = gm.user_id\n        where gm.group_id = $1\n        -- if there's a group adminship, we don't list it\n        and ga.user_id is null\n        order by gm.user_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "b78716f9569de6e57f1c76a5865a71c68a1f32838fe58daf6ff13fb7b06ef27b"
+}

@@ -6,6 +6,8 @@ create table client_ids (
     swish_number text not null,
 
     stripe_secret text,
+    -- all stripe callbacks should go to the same URL, so keeping one per client_id is reasonable
+    stripe_endpoint_secret text,
 
     -- for receipts
     name text not null,
@@ -21,7 +23,8 @@ create table api_tokens (
 );
 create type provider as enum (
     'swish',
-    'stripe'
+    'stripe',
+    'free'
 );
 -- for swish all these uuids are to be formatted as uppercase "simple"
 -- this datamodel is Swish-first. Stripe will not be used nearly as often and also Swish has a way
@@ -60,7 +63,7 @@ create table transactions (
 create index transactions_timeout on transactions using btree (timeout);
 create table transaction_wares (
     idx integer not null,
-    transaction_id uuid not null references transactions(id),
+    transaction_id uuid not null references transactions(id) on delete cascade,
 
     name text not null,
     -- incl. tax
@@ -75,6 +78,11 @@ create table transaction_wares (
     primary key (idx, transaction_id)
 );
 create index transaction_wares_transaction_id on transaction_wares using hash (transaction_id);
+
+create table transaction_reserved_ids (
+    id uuid primary key,
+    created timestamptz not null default now()
+);
 
 create table stripe_customers (
     customer_id text primary key,

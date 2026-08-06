@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select title as \"title!: DIS\", description as \"description!: DIS\",\n            a.id, url, time_start, time_end\n            from activity_verifiers\n            inner join activities a on a.id = activity_verifiers.activity_id\n            inner join images on images.id = a.image_id\n            where user_id = $1\n            and a.time_end > now() - '24 hours'::interval\n            and a.time_start < now() + '7 days'::interval",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "title!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 1,
+        "name": "description!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 2,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "url",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "time_start",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "time_end",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "859dab03cd829ff5ab0bbf2abd75b22952006bb6577a386ed87bdd58c79621c1"
+}

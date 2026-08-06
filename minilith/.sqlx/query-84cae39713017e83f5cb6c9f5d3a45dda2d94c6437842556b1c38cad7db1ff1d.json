@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into ticket_release_queuers (user_id, ticket_kind_id, started_queueing) select $1, $2, now()\n                where not exists (\n                    select 1 from purchased_tickets where ticket_kind_id = $2 and owner_id = $1\n                )\n                on conflict (user_id) do update\n                set ticket_kind_id = excluded.ticket_kind_id,\n                    started_queueing = excluded.started_queueing",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "84cae39713017e83f5cb6c9f5d3a45dda2d94c6437842556b1c38cad7db1ff1d"
+}

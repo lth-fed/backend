@@ -1,0 +1,63 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n                activity_host_invites.activity_id,\n                activity_host_invites.group_id,\n                activities.title as \"activity_title!: DIS\",\n                activities.time_start as activity_time_start,\n                creator.name as \"creator_name!: DIS\",\n                invited.name as \"group_name!: DIS\",\n                invited.path as \"group_path!: group::Path\"\n            from activity_host_invites\n            inner join activities\n                on activities.id = activity_host_invites.activity_id\n            inner join groups creator on creator.id = activities.creator_id\n            inner join groups invited on invited.id = activity_host_invites.group_id\n            inner join group_adminships\n                on group_adminships.group_id = activity_host_invites.group_id\n                and group_adminships.user_id = $1\n            where not invited.deleted\n            order by activities.time_start, invited.path, activities.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "activity_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "group_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "activity_title!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 3,
+        "name": "activity_time_start",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "creator_name!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 5,
+        "name": "group_name!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 6,
+        "name": "group_path!: group::Path",
+        "type_info": {
+          "Custom": {
+            "name": "ltree",
+            "kind": "Simple"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "e8f3327977d0de7dbef0065028429b86048e41f4c1857820bde017d3b23e35a1"
+}

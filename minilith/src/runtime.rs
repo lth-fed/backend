@@ -147,7 +147,7 @@ async fn check_next_notification(ctx: &ContextWrapper) -> MinilithResult<bool> {
     let mut removed_devices = 0_u64;
     for device in devices {
         let language = ctx
-            .decrypt_string(device.language, &device.nonce)
+            .decrypt_string(device.language)
             .wrap_err_encryption("notification recipient language")?;
 
         let title = notification.title.resolve_intl(&language, "");

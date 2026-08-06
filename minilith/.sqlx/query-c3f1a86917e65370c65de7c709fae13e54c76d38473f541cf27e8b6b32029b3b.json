@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select (\n                exists (\n                    select 1\n                    from group_memberships\n                    inner join groups member_group\n                        on member_group.id = group_memberships.group_id\n                    inner join groups allowed_group\n                        on allowed_group.path @> member_group.path\n                    inner join ticket_kind_allowed_groups tk_ag\n                        on tk_ag.group_id = allowed_group.id\n                    inner join ticket_kinds kind on kind.id = tk_ag.ticket_kind_id\n                    where group_memberships.user_id = $1\n                    and kind.activity_id = $2\n                    and (\n                        member_group.limit_membership_visibility = false\n                        or tk_ag.group_id = group_memberships.group_id\n                    )\n                )\n                or exists (\n                    select 1\n                    from activity_hosts\n                    inner join allow_admins_from_group_view_activities allowed\n                        on allowed.host_group_id = activity_hosts.group_id\n                    inner join groups allowed_g on allowed_g.id = allowed.access_group_id\n                    inner join groups admin_group on admin_group.path <@ allowed_g.path\n                    inner join group_adminships\n                        on group_adminships.group_id = admin_group.id\n                    inner join activities on activities.id = activity_hosts.activity_id\n                    where activity_hosts.activity_id = $2\n                    and group_adminships.user_id = $1\n                    and (activities.is_hidden_for_other_admins = false\n                        or activity_hosts.group_id = admin_group.id)\n                )\n                or exists (\n                    select 1\n                    from activity_hosts\n                    inner join groups host_group on host_group.id = activity_hosts.group_id\n                    inner join groups admin_group on admin_group.path <@ host_group.path\n                        or admin_group.path @> host_group.path\n                    inner join group_adminships\n                        on group_adminships.group_id = admin_group.id\n                    where activity_hosts.activity_id = $2\n                    and group_adminships.user_id = $1\n                )\n            ) as \"exists!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "c3f1a86917e65370c65de7c709fae13e54c76d38473f541cf27e8b6b32029b3b"
+}

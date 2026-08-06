@@ -1,4 +1,5 @@
 use std::ops::Deref;
+use std::str::FromStr;
 
 use minilith_errors::{MinilithErrorOptionExt as _, MinilithErrorResultExt as _};
 use poem_openapi::{ApiExtractor, Enum, Object};
@@ -87,6 +88,7 @@ macro_rules! impl_api_extractor {
 /// ```
 #[derive(Debug, Enum, Deserialize, Serialize, Clone, Copy)]
 #[allow(clippy::min_ident_chars, reason = "duh")]
+#[serde(rename_all = "lowercase")]
 pub enum Guild {
     F,
     E,
@@ -100,11 +102,54 @@ pub enum Guild {
     W,
     I,
 }
+impl Guild {
+    #[must_use]
+    pub fn to_str(&self) -> &str {
+        match self {
+            Guild::F => "f",
+            Guild::E => "e",
+            Guild::M => "m",
+            Guild::V => "v",
+            Guild::A => "a",
+            Guild::K => "k",
+            Guild::D => "d",
+            Guild::Doct => "doct",
+            Guild::Ing => "ing",
+            Guild::W => "w",
+            Guild::I => "i",
+        }
+    }
+}
+impl FromStr for Guild {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "f" => Guild::F,
+            "e" => Guild::E,
+            "m" => Guild::M,
+            "v" => Guild::V,
+            "a" => Guild::A,
+            "k" => Guild::K,
+            "d" => Guild::D,
+            "doct" => Guild::Doct,
+            "ing" => Guild::Ing,
+            "w" => Guild::W,
+            "i" => Guild::I,
+            _ => return Err(()),
+        })
+    }
+}
+/// If you have registered this user before, return 200. Otherwise, return 201 to get more data
+/// (such as guild & name). When returning 201, you don't actually have to create it. You will
+/// guaranteed be called once more with more data, if the user accepts.
 #[derive(Debug, Object, Deserialize, Serialize, Clone)]
 pub struct AuthCallbackDataV1 {
     pub sub: String,
-    pub email: String,
-    pub full_name: String,
+    /// Only for email provider.
+    pub email: Option<String>,
+    /// Will be Some the request after you returned 201, if you do.
+    pub full_name: Option<String>,
+    /// Only for lu provider.
     pub lth_guild: Option<Guild>,
 }
 impl_api_extractor!(AuthCallbackDataV1, JwkContext<AuthUrl>);

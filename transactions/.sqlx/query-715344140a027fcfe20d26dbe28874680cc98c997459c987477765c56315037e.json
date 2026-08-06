@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from transaction_reserved_ids\n            where created < now() - '1 hour'::interval",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "715344140a027fcfe20d26dbe28874680cc98c997459c987477765c56315037e"
+}

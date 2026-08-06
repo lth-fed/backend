@@ -1,88 +1,43 @@
+name: fed-dev
+
+include:
+  - compose.base.yaml
+
 volumes:
-  prometheus-data:
-  tempo-data:
-  grafana-storage:
-  loki-storage:
+  postgres-storage:
   rustfs-storage:
 
 services:
   fed-postgres:
-    image: "postgres:18"
+    volumes:
+      - postgres-storage:/var/lib/postgres
     ports:
       - 5432:5432
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: fed
 
   fed-collector:
-    image: "otel/opentelemetry-collector:0.154.0"
-    command: "--config=/etc/otel-collector.yaml"
     ports:
       - 4317:4317
       - 55679:55679
-    volumes:
-      - ./otel-collector.yaml:/etc/otel-collector.yaml:ro
 
   fed-loki-init:
-    image: "busybox:1.37.0"
-    user: "0:0"
-    command: ["chown", "-R", "10001:10001", "/var/loki"]
-    volumes:
-      - loki-storage:/var/loki
 
   fed-loki:
-    image: "grafana/loki:3.7.0"
-    user: "10001:10001"
-    command: "-config.file=/etc/loki/config.yaml -target=all"
     ports:
       - 3100:3100
-    volumes:
-      - ./loki-config.yaml:/etc/loki/config.yaml:ro
-      - loki-storage:/var/loki
-    depends_on:
-      fed-collector:
-        condition: service_started
-      fed-loki-init:
-        condition: service_completed_successfully
+
   fed-grafana:
-    image: grafana/grafana-enterprise:13.0.3
-    container_name: fed-grafana
-    restart: unless-stopped
     ports:
       - "3000:3000"
-    environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=grafana
-    volumes:
-      - ./grafana.yml:/etc/grafana/provisioning/datasources/all.yml
-      - grafana-storage:/var/lib/grafana
-    depends_on:
-      - fed-prometheus
-      - fed-tempo
-      - fed-loki
+
   fed-prometheus:
-    image: prom/prometheus:v3.13.0
     ports:
       - 9090:9090
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus-data:/var/prometheus
-    depends_on:
-      - fed-collector
+
   fed-tempo:
-    image: "grafana/tempo:3.0.2"
-    command: "-target=all -config.file=/etc/tempo.yaml"
-    volumes:
-      - ./tempo.yaml:/etc/tempo.yaml
-      - tempo-data:/var/tempo
     ports:
       - "3200:3200"
-    depends_on:
-      - fed-collector
 
   fed-s3:
-    image: rustfs/rustfs:latest
     # default password: rustfsadmin
     ports:
       - "9000:9000"

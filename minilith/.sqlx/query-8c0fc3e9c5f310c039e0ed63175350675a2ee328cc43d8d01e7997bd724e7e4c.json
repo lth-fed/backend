@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into group_memberships (user_id, group_id)\n                    select $1 as user_id, id as group_id \n                    from groups where path = $2\n                    on conflict do nothing\n                    returning group_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "group_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        {
+          "Custom": {
+            "name": "ltree",
+            "kind": "Simple"
+          }
+        }
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "8c0fc3e9c5f310c039e0ed63175350675a2ee328cc43d8d01e7997bd724e7e4c"
+}

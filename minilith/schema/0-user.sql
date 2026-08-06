@@ -1,12 +1,10 @@
 create table users (
     -- `lund-university:<stil-id>` or `email:<email>`
     id text primary key,
-    -- needs to be pseudoanonymised according to GDPR, therefore we have to store the encrypted bytes
+    -- needs to be pseudoanonymised according to GDPR, therefore we have to store the encrypted bytes. Remember to pad.
     name bytea not null,
-    -- same as for name, also remember to salt so the encrypted data isn't the same for all users with the same language
+    -- same as for name
     language bytea not null,
-    -- used by encryption
-    nonce bytea not null,
     -- GDPR remove all accounts older than 2 years after this: this is a GDPR requirement
     latest_refresh timestamptz not null default now(),
     creation timestamptz not null default now(),

@@ -53,19 +53,20 @@ with visible_activities as (
         group_adminships.user_id = $1
         and (
             a.is_hidden_for_other_admins = false
-            or host.group_id = supergroup.id
+            or host.group_id = admin_group.id
         )
 
     union all
 
     -- admin
-    -- one's own events
+    -- one's own and one's parents' events
     select distinct on (host.activity_id)
         host.activity_id,
         true as admin_access
     from group_adminships
     inner join groups admin_group on admin_group.id = group_adminships.group_id
-    inner join groups subgroup on admin_group.path @> subgroup.path
+    inner join groups subgroup on (admin_group.path @> subgroup.path 
+        or admin_group.path <@ subgroup.path)
     inner join activity_hosts host on (host.group_id = subgroup.id)
     where
         group_adminships.user_id = $1

@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select has_text_field, required, multiple_alternatives,\n        name as \"name!: DIS\"\n        from unnest($1::uuid[]) as t(id) \n        inner join ticket_addons on ticket_addons.id = t.id\n            and ticket_kind_id = $2\n        order by t.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "has_text_field",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 1,
+        "name": "required",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 2,
+        "name": "multiple_alternatives",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 3,
+        "name": "name!: DIS",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "UuidArray",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "61c42b9ec7b51072852ce722d82efa3f4fc1f2c90b8eff1c388d8111a16d5006"
+}

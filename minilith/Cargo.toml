@@ -9,7 +9,7 @@ base64.workspace = true
 bin-common = { version = "0.1.0", path = "../bin-common" }
 bytes.workspace = true
 # NOTE: this doesn't verify authenticity: i.e. that the encrypted data comes from someone with the key (us)
-# this is not needed for user data encryption because we don't need to validate the integrity of the data,
+# this is not needed for user data encryption because we don't need to validate the integrity of the data;
 # the only purpose is to anonymise it.
 chacha20 = "0.10.0"
 color-eyre.workspace = true

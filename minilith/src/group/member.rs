@@ -56,6 +56,7 @@ pub async fn user_groups_tree(
             join groups mg on mg.id = gm.group_id
             join images logo on logo.id = g.logo_id
             where subpath(g.path, 0, 1) = subpath(mg.path, 0, 1)
+            and g.deleted = false
             order by g.path
         "#,
         user_id

@@ -92,30 +92,34 @@ impl Context {
         #[cfg(not(debug_assertions))]
         let transactions_api = "https://transactions.teknologappen.se";
 
-        let push_clients = match PushClients::from_env().await {
-            Ok(None) => {
-                #[cfg(not(debug_assertions))]
-                {
-                    alert(
-                        AlertLevel::L2,
-                        "push-notifications credentials not available",
+        let push_clients = if is_test {
+            None
+        } else {
+            match PushClients::from_env().await {
+                Ok(None) => {
+                    #[cfg(not(debug_assertions))]
+                    {
+                        alert(
+                            AlertLevel::L2,
+                            "push-notifications credentials not available",
+                        );
+                    }
+                    warn!(
+                        "push-notification sending disabled because provider credentials are not set"
                     );
-                }
-                warn!(
-                    "push-notification sending disabled because provider credentials are not set"
-                );
 
-                None
-            }
-            Ok(Some(push_clients)) => Some(push_clients),
-            Err(error) => {
-                #[cfg(not(debug_assertions))]
-                alert(AlertLevel::L2, "push-notifications setup failed. See logs");
-                error!(
-                    ?error,
-                    "push-notification sending disabled because setup failed"
-                );
-                None
+                    None
+                }
+                Ok(Some(push_clients)) => Some(push_clients),
+                Err(error) => {
+                    #[cfg(not(debug_assertions))]
+                    alert(AlertLevel::L2, "push-notifications setup failed. See logs");
+                    error!(
+                        ?error,
+                        "push-notification sending disabled because setup failed"
+                    );
+                    None
+                }
             }
         };
 
@@ -146,22 +150,24 @@ impl Context {
             .trim_end_matches('/')
             .to_owned();
 
-        match s3_image_bucket.exists().await {
-            Ok(false) => {
-                alert(AlertLevel::L2, "s3: no image bucket!");
-                warn!("No s3 image bucket exists! Please create one.");
-            }
-            #[cfg(debug_assertions)]
-            Err(error) => {
-                warn!(
-                    ?error,
-                    "Could not connect to s3 bucket. Continuing without suppoort. \
+        if !is_test {
+            match s3_image_bucket.exists().await {
+                Ok(false) => {
+                    alert(AlertLevel::L2, "s3: no image bucket!");
+                    warn!("No s3 image bucket exists! Please create one.");
+                }
+                #[cfg(debug_assertions)]
+                Err(error) => {
+                    warn!(
+                        ?error,
+                        "Could not connect to s3 bucket. Continuing without suppoort. \
                     Add account at console: http://localhost:9001 \
                     password&user is rustfsadmin. Save as env vars."
-                );
-            }
-            res => {
-                res?;
+                    );
+                }
+                res => {
+                    res?;
+                }
             }
         }
 
@@ -183,7 +189,7 @@ impl Context {
         Ok(context)
     }
 
-    /// Encrypts and decrypts any data using chacha20 given a 12 byte nonce.
+    /// Pads and encrypts any data using chacha20.
     ///
     /// # Example
     ///
@@ -191,39 +197,29 @@ impl Context {
     /// # use minilith::Context;
     /// # async {
     /// # let context = Context::new(None, false).await.unwrap();
-    /// let nonce: [u8; 12] = rand::random();
-    /// let data = b"secret data";
-    /// let encrypted = context.endecrypt(data, &nonce);
-    /// let decrypted = context.endecrypt(&encrypted, &nonce);
-    /// assert_eq!(decrypted, b"secret data");
+    /// let data = "secret data";
+    /// let encrypted = context.encrypt(data);
+    /// let decrypted = context.decrypt_string(encrypted).unwrap();
+    /// assert_eq!(decrypted, "secret data");
     /// # };
     /// ```
     #[must_use]
-    pub fn endecrypt(&self, data: &[u8], nonce: &[u8; 12]) -> Vec<u8> {
-        let mut cipher = ChaCha20::new(&self.encryption_key.into(), nonce.into());
-        let mut buffer = Vec::with_capacity(data.len() + 32);
-        buffer.extend_from_slice(data);
-        cipher.apply_keystream(&mut buffer);
+    pub fn encrypt(&self, value: &str) -> Vec<u8> {
+        let nonce: [u8; 12] = rand::random();
+        let mut cipher = ChaCha20::new(&self.encryption_key.into(), &nonce.into());
+        let unpadded_len = value.len() + 12 + 8;
+        let padded_len = (((unpadded_len - 1) / 64 + 1) * 64).max(unpadded_len);
+        let mut buffer = Vec::with_capacity(padded_len);
+        buffer.extend_from_slice(&nonce);
+        buffer.extend_from_slice(&(value.len() as u64).to_le_bytes());
+        buffer.extend_from_slice(value.as_bytes());
+        buffer.extend(std::iter::repeat_n(0, padded_len - unpadded_len));
+        #[allow(
+            clippy::indexing_slicing,
+            reason = "we have at least 20 bytes in this vec"
+        )]
+        cipher.apply_keystream(&mut buffer[12..]);
         buffer
-    }
-    /// Encrypts and decrypts a mutable byte slice using chacha20 given a 12 byte nonce.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// # use minilith::Context;
-    /// # async {
-    /// # let context = Context::new(None, false).await.unwrap();
-    /// let nonce: [u8; 12] = rand::random();
-    /// let mut data = Vec::from(b"secret data");
-    /// context.endecrypt_mut_slice(&mut data, &nonce);
-    /// context.endecrypt_mut_slice(&mut data, &nonce);
-    /// assert_eq!(data, b"secret data");
-    /// # };
-    /// ```
-    pub fn endecrypt_mut_slice(&self, data: &mut [u8], nonce: &[u8; 12]) {
-        let mut cipher = ChaCha20::new(&self.encryption_key.into(), nonce.into());
-        cipher.apply_keystream(data);
     }
     /// Decrypts to a [`&str`] using chacha20 given a nonce (which has to be 12 bytes).
     ///
@@ -237,17 +233,24 @@ impl Context {
     /// # use minilith::Context;
     /// # async {
     /// # let context = Context::new(None, false).await.unwrap();
-    /// let nonce: [u8; 12] = rand::random();
-    /// let data = b"secret data";
-    /// let mut encrypted = context.endecrypt(data, &nonce);
-    /// let decrypted = context.decrypt_str(&mut encrypted, &nonce).unwrap();
+    /// let data = "secret data";
+    /// let mut encrypted = context.encrypt(data);
+    /// let decrypted = context.decrypt_str(&mut encrypted).unwrap();
     /// assert_eq!(decrypted, "secret data");
     /// # };
     /// ```
     #[must_use]
-    pub fn decrypt_str<'a>(&self, encrypted_data: &'a mut [u8], nonce: &[u8]) -> Option<&'a str> {
-        self.endecrypt_mut_slice(encrypted_data, nonce.try_into().ok()?);
-        std::str::from_utf8(encrypted_data).ok()
+    pub fn decrypt_str<'a>(&self, encrypted_data: &'a mut [u8]) -> Option<&'a str> {
+        let nonce = encrypted_data.get(..12)?;
+        let nonce: [u8; 12] = nonce.try_into().ok()?;
+        let mut cipher = ChaCha20::new(&self.encryption_key.into(), &nonce.into());
+        cipher.apply_keystream(encrypted_data.get_mut(12..)?);
+        let decrypted_data = encrypted_data;
+        let len = decrypted_data.get(12..20)?.try_into().ok()?;
+        #[allow(clippy::cast_possible_truncation, reason = "we only run on 64-bit")]
+        let len = u64::from_le_bytes(len) as usize;
+        let value = decrypted_data.get(20..(20 + len))?;
+        str::from_utf8(value).ok()
     }
     /// Decrypts to a [`String`] using chacha20 given a 12 byte nonce.
     ///
@@ -261,17 +264,27 @@ impl Context {
     /// # use minilith::Context;
     /// # async {
     /// # let context = Context::new(None, false).await.unwrap();
-    /// let nonce: [u8; 12] = rand::random();
-    /// let data = b"secret data";
-    /// let mut encrypted = context.endecrypt(data, &nonce);
-    /// let decrypted = context.decrypt_string(encrypted, &nonce).unwrap();
+    /// let data = "secret data";
+    /// let mut encrypted = context.encrypt(data);
+    /// let decrypted = context.decrypt_string(encrypted).unwrap();
     /// assert_eq!(decrypted, "secret data");
     /// # };
     /// ```
     #[must_use]
-    pub fn decrypt_string(&self, mut encrypted_data: Vec<u8>, nonce: &[u8]) -> Option<String> {
-        self.endecrypt_mut_slice(&mut encrypted_data, nonce.try_into().ok()?);
-        String::from_utf8(encrypted_data).ok()
+    pub fn decrypt_string(&self, mut encrypted_data: Vec<u8>) -> Option<String> {
+        let nonce = encrypted_data.get(..12)?;
+        let nonce: [u8; 12] = nonce.try_into().ok()?;
+        let mut cipher = ChaCha20::new(&self.encryption_key.into(), &nonce.into());
+        cipher.apply_keystream(encrypted_data.get_mut(12..)?);
+        let mut decrypted_data = encrypted_data;
+        let len = decrypted_data.get(12..20)?.try_into().ok()?;
+        #[allow(clippy::cast_possible_truncation, reason = "we only run on 64-bit")]
+        let len = u64::from_le_bytes(len) as usize;
+        let value_range = 20..(20 + len);
+        decrypted_data.get(value_range.clone())?;
+        decrypted_data.copy_within(value_range, 0);
+        decrypted_data.truncate(len);
+        String::from_utf8(decrypted_data).ok()
     }
 
     pub fn transactions_get(&self, endpoint: impl AsRef<str>) -> reqwest::RequestBuilder {
@@ -365,16 +378,6 @@ impl Context {
                 or exists (
                     select 1
                     from activity_hosts
-                    inner join groups host_group on host_group.id = activity_hosts.group_id
-                    inner join groups admin_group on admin_group.path @> host_group.path
-                    inner join group_adminships
-                        on group_adminships.group_id = admin_group.id
-                    where activity_hosts.activity_id = $2
-                    and group_adminships.user_id = $1
-                )
-                or exists (
-                    select 1
-                    from activity_hosts
                     inner join allow_admins_from_group_view_activities allowed
                         on allowed.host_group_id = activity_hosts.group_id
                     inner join groups allowed_g on allowed_g.id = allowed.access_group_id
@@ -384,7 +387,19 @@ impl Context {
                     inner join activities on activities.id = activity_hosts.activity_id
                     where activity_hosts.activity_id = $2
                     and group_adminships.user_id = $1
-                    and activities.is_hidden_for_other_admins = false
+                    and (activities.is_hidden_for_other_admins = false
+                        or activity_hosts.group_id = admin_group.id)
+                )
+                or exists (
+                    select 1
+                    from activity_hosts
+                    inner join groups host_group on host_group.id = activity_hosts.group_id
+                    inner join groups admin_group on admin_group.path <@ host_group.path
+                        or admin_group.path @> host_group.path
+                    inner join group_adminships
+                        on group_adminships.group_id = admin_group.id
+                    where activity_hosts.activity_id = $2
+                    and group_adminships.user_id = $1
                 )
             ) as "exists!""#,
             user,

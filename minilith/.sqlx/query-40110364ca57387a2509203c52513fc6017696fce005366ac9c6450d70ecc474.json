@@ -1,0 +1,69 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n                groups.id, groups.path,\n                groups.limit_membership_visibility,\n                groups.name as \"name!: DIS\",\n                groups.description as \"description!: DIS\",\n                groups.deleted,\n                logo.id as logo_id,\n                logo.url as logo_url\n            from activity_host_invites\n            inner join groups on groups.id = activity_host_invites.group_id\n            inner join images logo on logo.id = groups.logo_id\n            where activity_host_invites.activity_id = $1\n            order by groups.path",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "path",
+        "type_info": {
+          "Custom": {
+            "name": "ltree",
+            "kind": "Simple"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "limit_membership_visibility",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 3,
+        "name": "name!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "description!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 5,
+        "name": "deleted",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
+        "name": "logo_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 7,
+        "name": "logo_url",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "40110364ca57387a2509203c52513fc6017696fce005366ac9c6450d70ecc474"
+}

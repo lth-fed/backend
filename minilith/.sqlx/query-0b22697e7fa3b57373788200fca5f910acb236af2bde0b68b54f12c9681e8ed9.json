@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select transaction_id\n            from purchased_tickets\n            where id = $1\n            and purchaser_id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "transaction_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0b22697e7fa3b57373788200fca5f910acb236af2bde0b68b54f12c9681e8ed9"
+}

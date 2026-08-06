@@ -171,8 +171,6 @@ pub struct BuyTicketRequest {
 }
 #[derive(Debug, Clone, Object)]
 pub struct BuyTicketResponse {
-    /// Not null when using [`PurchaseProvider::Free`].
-    ticket_id: Option<Uuid>,
     /// Not null when using [`PurchaseProvider::Swish`].
     payment_request_token: Option<String>,
     /// Not null when using [`PurchaseProvider::Stripe`].
@@ -282,6 +280,8 @@ struct PurchasedTicket {
     time_start: OffsetDateTime,
     time_end: OffsetDateTime,
     purchased_addons: Vec<PurchasedAddon>,
+    /// False if we have transferred it.
+    owned_by_me: bool,
 }
 #[derive(Object, Debug)]
 pub struct Kind {
@@ -356,6 +356,16 @@ struct TransferRequest {
     to_user: String,
 }
 
+#[derive(Object)]
+struct ValidateActivity {
+    id: Uuid,
+    title: IS,
+    description: IS,
+    time_start: OffsetDateTime,
+    time_end: OffsetDateTime,
+    image_url: String,
+}
+
 /// The frontend has to encode / decode the QR with both these datapoints, maybe through
 /// `<id>.<time>` or JSON.
 #[derive(Object)]
@@ -370,14 +380,16 @@ struct Validation {
 #[derive(Object)]
 struct ValidateResponse {
     verified: bool,
-    user_id: Option<String>,
+    owner_id: Option<String>,
+    owner_name: Option<String>,
     previous_verifications: Vec<Validation>,
 }
 impl ValidateResponse {
     pub fn not_valid() -> Self {
         Self {
             verified: false,
-            user_id: None,
+            owner_id: None,
+            owner_name: None,
             previous_verifications: vec![],
         }
     }
@@ -407,7 +419,7 @@ impl Router {
                 purchased_ticket_addons.ticket_id = purchased_tickets.id
             inner join ticket_addons on
                 ticket_addons.id = purchased_ticket_addons.addon_id
-            where purchased_tickets.owner_id = $1
+            where purchased_tickets.owner_id = $1 or purchased_tickets.purchaser_id = $1
             order by ticket_addons.idx
             "#,
             id
@@ -448,12 +460,13 @@ impl Router {
                 creator.name as "creator_name!: DIS",
                 activities.location as "location!: Location",
                 activities.time_start as "time_start",
-                activities.time_end as "time_end"
+                activities.time_end as "time_end",
+                (owner_id = purchaser_id) as "owned_by_me!"
             from purchased_tickets
             inner join ticket_kinds on ticket_kinds.id = purchased_tickets.ticket_kind_id
             inner join activities on activities.id = ticket_kinds.activity_id
             inner join groups creator on creator.id = activities.creator_id
-            where purchased_tickets.owner_id = $1
+            where purchased_tickets.owner_id = $1 or purchased_tickets.purchaser_id = $1
             "#,
             id
         )
@@ -472,6 +485,7 @@ impl Router {
             time_start: ticket.time_start,
             time_end: ticket.time_end,
             purchased_addons: addons.remove(&ticket.id).unwrap_or_default(),
+            owned_by_me: ticket.owned_by_me,
         })
         .fetch_all(&self.context.db)
         .await?;
@@ -485,25 +499,22 @@ impl Router {
         auth: User,
         Path(id): Path<Uuid>,
     ) -> MinilithResult<Response<Binary<poem::Body>>> {
-        let owns = sqlx::query_scalar!(
-            "select exists (
-                select 1
-                from purchased_tickets
-                where id = $1
-                and purchaser_id = $2
-            ) as \"exists!\"",
+        let Some(transaction_id) = sqlx::query_scalar!(
+            "select transaction_id
+            from purchased_tickets
+            where id = $1
+            and purchaser_id = $2",
             id,
             auth.get_id(),
         )
-        .fetch_one(&self.db)
-        .await?;
-
-        if !owns {
+        .fetch_optional(&self.db)
+        .await?
+        else {
             return Err(MinilithEndpointError::not_found());
-        }
+        };
 
         let user = sqlx::query!(
-            "select name as \"name: DIS\", language, nonce
+            "select name as \"name: DIS\", language
             from users where id = $1",
             auth.get_id()
         )
@@ -511,7 +522,7 @@ impl Router {
         .await?;
 
         let lang = self
-            .decrypt_string(user.language, &user.nonce)
+            .decrypt_string(user.language)
             .wrap_err_encryption("user.language")?;
         let receipt_lang = match lang.get(..2) {
             Some("sv") => transactions::Language::Swedish,
@@ -524,7 +535,7 @@ impl Router {
             customer_name: name.to_owned(),
         };
         let resp = self
-            .transactions_post("/v0/receipt")
+            .transactions_post(format!("/v0/{transaction_id}/receipt"))
             .json(&data)
             .send()
             .await
@@ -636,11 +647,16 @@ impl Router {
 
             sqlx::query!(
                 "insert into ticket_reservation_queuers (user_id, ticket_kind_id, placement) \
-                values ($1, $2,
+                select $1, $2,
                     -- take last placement, add one
-                    (select placement
-                     from ticket_reservation_queuers
-                     order by placement desc limit 1) + 1
+                    coalesce(
+                        (select placement
+                        from ticket_reservation_queuers
+                        order by placement desc limit 1),
+                    0) + 1
+                
+                where not exists (
+                    select 1 from purchased_tickets where ticket_kind_id = $2 and owner_id = $1
                 )
                 on conflict (user_id) do update
                 set ticket_kind_id = excluded.ticket_kind_id, placement = excluded.placement",
@@ -659,7 +675,10 @@ impl Router {
             let _: Result<_, _> = self.drop_reservation(user.clone()).await;
             sqlx::query!(
                 "insert into ticket_release_queuers (user_id, ticket_kind_id, started_queueing) \
-                values ($1, $2, now())
+                select $1, $2, now()
+                where not exists (
+                    select 1 from purchased_tickets where ticket_kind_id = $2 and owner_id = $1
+                )
                 on conflict (user_id) do update
                 set ticket_kind_id = excluded.ticket_kind_id,
                     started_queueing = excluded.started_queueing",
@@ -813,6 +832,10 @@ impl Router {
     /// Try to lock in this reservation by purchasing the ticket.
     /// If a transaction is already underway, it's cancelled.
     ///
+    /// To see when you've gotten the ticket, poll `GET /queue`. When it's gone (404), you should
+    /// have a ticket (or the timeout expired). To check which, list the owned tickets (`GET /`), if
+    /// one from this activity is there it's purchased.
+    ///
     /// # Errors
     ///
     /// - addons invalid (they should match the valid addons you got getting the details of this
@@ -839,7 +862,7 @@ impl Router {
         }
         // this is here so nobody else tries to mess with our reservation while we are assigning it
         // a transaction_ìd
-        let mut reservation_txn = self.db.begin().await?;
+        let mut txn = self.db.begin().await?;
         let reservation = sqlx::query!(
             "select ticket_reservations.id, ticket_kind_id, timeout, transaction_id,
                 kind.name as \"ticket_kind_name!: DIS\",
@@ -852,7 +875,7 @@ impl Router {
             for update",
             user.get_id()
         )
-        .fetch_optional(&mut reservation_txn.executor())
+        .fetch_optional(&mut txn.executor())
         .await?
         .wrap_err_not_found()?;
         if reservation.ticket_kind_id != body.ticket_kind {
@@ -877,16 +900,13 @@ impl Router {
                 "update ticket_reservations set transaction_id = null where user_id = $1",
                 user.get_id()
             )
-            .execute(&mut reservation_txn.executor())
+            .execute(&mut txn.executor())
             .await?;
         }
 
         // addons for a ticket_kind are immutable so we don't do it through a transaction
         let chosen_options = validate_addons(&self.db, &mut body.addons, body.ticket_kind).await?;
         ensure_user_may_purchase_ticket(&self.db, user.get_id(), body.ticket_kind).await?;
-
-        // set addons in DB
-        let mut txn = self.db.begin().await?;
 
         // ========
         // remove old addons
@@ -907,27 +927,21 @@ impl Router {
                 values ($1, $2, $3, $4)",
                 addon.id,
                 reservation.id,
-                addon.selected_options.as_deref(),
-                addon.selected_text,
+                addon.selected_options.as_deref().unwrap_or(&[]),
+                addon.selected_text.as_deref().unwrap_or(""),
             )
             .execute(&mut txn.executor())
             .await?;
         }
-        // we commit before, so if transaction call fails we will still have saved the new chosen
-        // options
-        txn.commit().await?;
 
         // ========
         // prepare Ware:s for transaction API
         // ========
-        let lang_row = sqlx::query!(
-            "select language, nonce from users where id = $1",
-            user.get_id()
-        )
-        .fetch_one(&self.db)
-        .await?;
+        let lang = sqlx::query_scalar!("select language from users where id = $1", user.get_id())
+            .fetch_one(&self.db)
+            .await?;
         let lang = self
-            .decrypt_string(lang_row.language, &lang_row.nonce)
+            .decrypt_string(lang)
             .wrap_err_encryption("failed to decrypt user language")?;
 
         let ticket_kind_name = reservation
@@ -987,6 +1001,30 @@ impl Router {
             transaction_wares.extend(options);
         }
         // ========
+        // Get UUID
+        // ========
+        let transaction_id: Uuid = self
+            .transactions_post("/v0/init")
+            .send()
+            .await
+            .wrap_err_internal("init transport failed")?
+            .error_for_status()
+            .wrap_err_internal("init status")?
+            .json()
+            .await
+            .wrap_err_internal("l1: init bad type")?;
+        sqlx::query!(
+            "update ticket_reservations set transaction_id = $1
+            where id = $2",
+            transaction_id,
+            reservation.id
+        )
+        .execute(&mut txn.executor())
+        .await?;
+
+        txn.commit().await?;
+
+        // ========
         // Send transaction API request
         // ========
         let timeout = reservation
@@ -994,6 +1032,7 @@ impl Router {
             .format(&time::format_description::well_known::Iso8601::DEFAULT)
             .wrap_err_internal("failed to format value which we got & serialized before")?;
         let payment_req = transactions::CreatePaymentRequest {
+            id: transaction_id,
             customer_id: Some(user.get_id().to_owned()),
             timeout,
             wares: transaction_wares,
@@ -1037,44 +1076,11 @@ impl Router {
         // ========
         // Handle transaction API response
         // ========
-        let (transaction_id, response) = match provider {
-            PurchaseProvider::Free => {
-                let body = resp
-                    .json::<transactions::CreatePaymentResponseFree>()
-                    .await
-                    .wrap_err_internal(
-                        "failed to start transaction due to us being bad in parsing",
-                    )?;
-                // special case, because it's instantly bought.
-                // we have to update this to give it a transaction ID before we call
-                // `pay_for_reservation` which expects the reservation to have a `transaction_id`
-                sqlx::query!(
-                    "update ticket_reservations set transaction_id = $1
-                    where id = $2",
-                    body.transaction_id,
-                    reservation.id
-                )
-                .execute(&mut reservation_txn.executor())
-                .await?;
-                let Some(id) =
-                    pay_for_reservation(&mut reservation_txn, body.transaction_id).await?
-                else {
-                    reservation_txn.rollback().await?;
-                    return Err(MinilithEndpointError::internal_error(
-                        "pay_for_reservation failed!!",
-                        "",
-                    ));
-                };
-
-                (
-                    body.transaction_id,
-                    BuyTicketResponse {
-                        ticket_id: Some(id),
-                        payment_request_token: None,
-                        stripe_url: None,
-                    },
-                )
-            }
+        let response = match provider {
+            PurchaseProvider::Free => BuyTicketResponse {
+                payment_request_token: None,
+                stripe_url: None,
+            },
             // these have to be separate match arms because the response type is different
             PurchaseProvider::Swish => {
                 let body = resp
@@ -1083,14 +1089,10 @@ impl Router {
                     .wrap_err_internal(
                         "failed to start transaction due to us being bad in parsing",
                     )?;
-                (
-                    body.transaction_id,
-                    BuyTicketResponse {
-                        ticket_id: None,
-                        payment_request_token: Some(body.payment_request_token),
-                        stripe_url: None,
-                    },
-                )
+                BuyTicketResponse {
+                    payment_request_token: Some(body.payment_request_token),
+                    stripe_url: None,
+                }
             }
             PurchaseProvider::Stripe => {
                 let body = resp
@@ -1099,37 +1101,26 @@ impl Router {
                     .wrap_err_internal(
                         "failed to start transaction due to us being bad in parsing",
                     )?;
-                (
-                    body.transaction_id,
-                    BuyTicketResponse {
-                        ticket_id: None,
-                        payment_request_token: None,
-                        stripe_url: Some(body.redirect_url),
-                    },
-                )
+                BuyTicketResponse {
+                    payment_request_token: None,
+                    stripe_url: Some(body.redirect_url),
+                }
             }
         };
-        // if the server crashes right here, we lose track of the transaction associated with this
-        // reservation, which MAY lead to missing money. We'll get an ALERT LEVEL 1 from that
-        // someone paid for a ticket which doesn't exist though.
-        sqlx::query!(
-            "update ticket_reservations set transaction_id = $1
-            where id = $2",
-            transaction_id,
-            reservation.id
-        )
-        .execute(&mut reservation_txn.executor())
-        .await?;
-        reservation_txn.commit().await?;
 
         Ok(Json(response))
     }
 
+    /// You must own the ticket, and can if `Kind.allow_transfer_ticket_bypass_allowed_groups ==
+    /// false` only transfer it to other users who could buy this ticket. This must also be called
+    /// between `Kind.allow_transfer_ticket_start` and `Kind.allow_transfer_ticket_stop`.
+    /// Check these values by fetching the data of the Kind using `/v0/tickets/ticket-kind/<uuid>`
     #[oai(path = "/transfer", method = "post")]
     async fn transfer(&self, auth: User, body: Json<TransferRequest>) -> MinilithResult<()> {
         let mut txn = self.db.begin().await?;
         let row = sqlx::query!(
-            "select allow_transfer_ticket_bypass_allowed_groups, ticket_kind_id
+            "select allow_transfer_ticket_bypass_allowed_groups, ticket_kind_id,
+            allow_transfer_ticket_start, allow_transfer_ticket_stop
             from purchased_tickets
             inner join ticket_kinds kind on kind.id = purchased_tickets.ticket_kind_id
             where purchased_tickets.id = $1 and owner_id = $2
@@ -1140,6 +1131,36 @@ impl Router {
         .fetch_optional(&mut txn.executor())
         .await?
         .wrap_err_bad_frontend("you don't own this ticket")?;
+        let other_owns = sqlx::query_scalar!(
+            "select exists (
+                select 1 from purchased_tickets where owner_id = $1 and ticket_kind_id = $2
+            ) or exists (
+                select 1 from ticket_reservations where user_id = $1 and ticket_kind_id = $2
+            ) or exists (
+                select 1 from ticket_reservation_queuers where user_id = $1 and ticket_kind_id = $2
+            ) or exists (
+                select 1 from ticket_release_queuers where user_id = $1 and ticket_kind_id = $2
+            ) as \"owns!\"",
+            body.to_user,
+            row.ticket_kind_id
+        )
+        .fetch_one(&mut txn.executor())
+        .await?;
+        if other_owns {
+            return Err(MinilithEndpointError::bad_user_input(
+                "transfer to other user who already owns",
+                "",
+                "the receiving user already owns or is buying a ticket to this event",
+                "to_user",
+            ));
+        }
+        let now = OffsetDateTime::now_utc();
+        if row.allow_transfer_ticket_stop <= now || row.allow_transfer_ticket_start >= now {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "cannot transfer ticket at this time",
+                "",
+            ));
+        }
         if !row.allow_transfer_ticket_bypass_allowed_groups {
             ensure_user_may_purchase_ticket(&mut txn.executor(), &body.to_user, row.ticket_kind_id)
                 .await?;
@@ -1157,19 +1178,51 @@ impl Router {
         Ok(())
     }
 
+    #[oai(path = "/validate", method = "get")]
+    async fn validate_activities(&self, auth: User) -> MinilithResult<Json<Vec<ValidateActivity>>> {
+        sqlx::query!(
+            "select title as \"title!: DIS\", description as \"description!: DIS\",
+            a.id, url, time_start, time_end
+            from activity_verifiers
+            inner join activities a on a.id = activity_verifiers.activity_id
+            inner join images on images.id = a.image_id
+            where user_id = $1
+            and a.time_end > now() - '24 hours'::interval
+            and a.time_start < now() + '7 days'::interval",
+            auth.get_id()
+        )
+        .map(|row| ValidateActivity {
+            id: row.id,
+            title: row.title.0,
+            description: row.description.0,
+            time_start: row.time_start,
+            time_end: row.time_end,
+            image_url: row.url,
+        })
+        .fetch_all(&self.db)
+        .await
+        .map_err(Into::into)
+        .map(Json)
+    }
+
     #[oai(path = "/validate", method = "post")]
     async fn validate(
         &self,
         auth: User,
         body: Json<ValidateRequest>,
     ) -> MinilithResult<Json<ValidateResponse>> {
-        if body.created_at < OffsetDateTime::now_utc().saturating_sub(time::Duration::MINUTE * 5) {
+        let now = OffsetDateTime::now_utc();
+        let min5 = time::Duration::MINUTE * 5;
+        if body.created_at < now.saturating_sub(min5) || body.created_at > now.saturating_add(min5)
+        {
             return Ok(Json(ValidateResponse::not_valid()));
         }
-        let Some(user_id) = sqlx::query_scalar!(
-            "select user_id from purchased_tickets 
+        let Some(row) = sqlx::query!(
+            "select owner_id, users.name
+            from purchased_tickets 
             inner join ticket_kinds kind on kind.id = purchased_tickets.ticket_kind_id
             inner join activity_verifiers on activity_verifiers.activity_id = kind.activity_id
+            inner join users on users.id = owner_id
             where purchased_tickets.id = $1 
                 and activity_verifiers.user_id = $2",
             body.purchased_ticket_id,
@@ -1197,7 +1250,11 @@ impl Router {
         .await?;
         Ok(Json(ValidateResponse {
             verified: true,
-            user_id: Some(user_id),
+            owner_id: Some(row.owner_id),
+            owner_name: Some(
+                self.decrypt_string(row.name)
+                    .wrap_err_encryption("validate name")?,
+            ),
             previous_verifications,
         }))
     }
@@ -1338,10 +1395,16 @@ async fn reserve_ticket_capacity(
             select greatest(least(
                 $2,
                 kind.max_tickets - kind.reserved_or_purchased_tickets,
-                activities.max_tickets - coalesce((
-                    select sum(all_kinds.reserved_or_purchased_tickets)::int
+                activities.max_tickets
+                - kind.reserved_or_purchased_tickets
+                - coalesce((
+                    select sum(greatest(
+                        all_kinds.reserved_or_purchased_tickets,
+                        all_kinds.min_tickets
+                    ))::int
                     from ticket_kinds all_kinds
                     where all_kinds.activity_id = activities.id
+                        and all_kinds.id != kind.id
                 ), 0)
             ), 0)::int as granted
             from ticket_kinds kind
@@ -1826,6 +1889,10 @@ struct ReturnedAddonOption {
 
 /// Ensure that the addons aren't duplicated and that they belong to the
 /// specified `ticket_kind`.
+#[allow(
+    clippy::too_many_lines,
+    reason = "it's quite linear and does a single function"
+)]
 async fn validate_addons(
     db: &PgPool,
     addons: &mut [BoughtAddon],
@@ -1848,7 +1915,12 @@ async fn validate_addons(
 
     let addon_ids = addons.iter().map(|addon| addon.id).collect::<Vec<_>>();
     let addon_data = sqlx::query!(
-        "select * from ticket_addons where id = any($1) and ticket_kind_id = $2",
+        "select has_text_field, required, multiple_alternatives,
+        name as \"name!: DIS\"
+        from unnest($1::uuid[]) as t(id) 
+        inner join ticket_addons on ticket_addons.id = t.id
+            and ticket_kind_id = $2
+        order by t.id",
         &addon_ids,
         ticket_kind
     )
@@ -1896,15 +1968,20 @@ async fn validate_addons(
         ));
     }
 
-    for (addon, row) in addons.iter().zip(addon_data.iter()) {
+    for (addon, row) in addons.iter_mut().zip(addon_data.iter()) {
         if !row.has_text_field && addon.selected_text.is_some() {
             return Err(MinilithEndpointError::bad_frontend_code(
                 "addon has text even though this is not allowed",
                 "",
             ));
         }
-        let n_options = usize::from(row.has_text_field && addon.selected_text.is_some())
-            + addon.selected_options.as_ref().map_or(0, Vec::len);
+        let n_options = usize::from(
+            row.has_text_field
+                && addon
+                    .selected_text
+                    .as_ref()
+                    .is_some_and(|text| !text.trim().is_empty()),
+        ) + addon.selected_options.as_ref().map_or(0, Vec::len);
 
         if row.required && n_options == 0 {
             return Err(MinilithEndpointError::bad_frontend_code(
@@ -1917,6 +1994,21 @@ async fn validate_addons(
                 "too many selected options! Only 1 is permitted",
                 "",
             ));
+        }
+
+        if let Some(options) = &mut addon.selected_options {
+            let before_len = options.len();
+            options.sort_unstable();
+            options.dedup();
+            if options.len() != before_len {
+                return Err(MinilithEndpointError::bad_frontend_code(
+                    format!(
+                        "duplicate option for addon {}",
+                        row.name.resolve_intl("en", "")
+                    ),
+                    "",
+                ));
+            }
         }
     }
 

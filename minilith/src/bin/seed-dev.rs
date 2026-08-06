@@ -79,20 +79,6 @@ async fn seed_image(ctx: &ContextWrapper) -> color_eyre::Result<()> {
     Ok(())
 }
 
-/// Can be used in production!
-///
-/// `tlth` and one node per known guild code. Names are filled with both
-/// English and Swedish strings so `pickI18n` on the frontend renders
-/// real labels (the empty `'{}'::jsonb` seed the auth flow leaves behind
-/// otherwise produces blank rows).
-///
-/// # Errors
-///
-/// Return an error if the DB connection fails.
-pub async fn seed_groups(ctx: &ContextWrapper) -> color_eyre::Result<()> {
-    seed_group_namespace(ctx, MAIN_NAMESPACE).await
-}
-
 async fn seed_group_namespace(
     ctx: &ContextWrapper,
     namespace: SeedNamespace,
@@ -233,15 +219,14 @@ async fn seed_users(ctx: &ContextWrapper) -> color_eyre::Result<()> {
         ),
     ];
     for (id, name, guild_path, is_admin) in users {
-        let nonce: [u8; 12] = rand::random();
-        let mut name_bytes: Vec<u8> = (*name).as_bytes().to_vec();
-        ctx.endecrypt_mut_slice(&mut name_bytes, &nonce);
+        let name_bytes = ctx.encrypt(name);
+        let lang_bytes = ctx.encrypt("");
         sqlx::query!(
-            "insert into users (id, name, language, nonce) values ($1, $2, ''::bytea, $3)
-             on conflict (id) do nothing",
+            "insert into users (id, name, language) values ($1, $2, $3)
+             on conflict (id) do update set name = excluded.name, language = excluded.language",
             id,
             name_bytes,
-            &nonce[..]
+            lang_bytes
         )
         .execute(&ctx.db)
         .await
@@ -591,12 +576,16 @@ async fn seed_activities(ctx: &ContextWrapper, namespace: SeedNamespace) -> colo
     Ok(())
 }
 
-async fn seed(ctx: &ContextWrapper) -> color_eyre::Result<()> {
+async fn seed(ctx: &ContextWrapper, override_prod: bool) -> color_eyre::Result<()> {
     seed_image(ctx).await?;
-    seed_groups(ctx).await?;
+    if cfg!(debug_assertions) || override_prod {
+        seed_group_namespace(ctx, MAIN_NAMESPACE).await?;
+    }
     seed_group_namespace(ctx, EXTERNAL_VALIDATION_NAMESPACE).await?;
     seed_users(ctx).await?;
-    seed_activities(ctx, MAIN_NAMESPACE).await?;
+    if cfg!(debug_assertions) || override_prod {
+        seed_activities(ctx, MAIN_NAMESPACE).await?;
+    }
     seed_activities(ctx, EXTERNAL_VALIDATION_NAMESPACE).await?;
     Ok(())
 }
@@ -606,7 +595,24 @@ async fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
     tracing_subscriber::fmt().init();
     let ctx = Arc::new(Context::new(None, false).await?);
-    seed(&ctx).await?;
+    let mut override_prod = false;
+    let help = "usage: seed-dev [FLAGS]
+Flags:
+    --override-production : override groups and activities under the tlth tree";
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "--override-production" => override_prod = true,
+            "--help" => {
+                println!("{help}");
+                return Ok(());
+            }
+            _ => {
+                println!("Unknown argument.\n\n{help}");
+                return Ok(());
+            }
+        }
+    }
+    seed(&ctx, override_prod).await?;
     tracing::info!("seed-dev: done");
     Ok(())
 }

@@ -6,6 +6,8 @@ create table client_ids (
     swish_number text not null,
 
     stripe_secret text,
+    -- all stripe callbacks should go to the same URL, so keeping one per client_id is reasonable
+    stripe_endpoint_secret text,
 
     -- for receipts
     name text not null,

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select exists (\n                select 1 from purchased_tickets where owner_id = $1 and ticket_kind_id = $2\n            ) or exists (\n                select 1 from ticket_reservations where user_id = $1 and ticket_kind_id = $2\n            ) or exists (\n                select 1 from ticket_reservation_queuers where user_id = $1 and ticket_kind_id = $2\n            ) or exists (\n                select 1 from ticket_release_queuers where user_id = $1 and ticket_kind_id = $2\n            ) as \"owns!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "owns!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "4716b30db9df42f66f7c891158bbc9415e9e92b93a990572567ea3d6d3f9e78b"
+}

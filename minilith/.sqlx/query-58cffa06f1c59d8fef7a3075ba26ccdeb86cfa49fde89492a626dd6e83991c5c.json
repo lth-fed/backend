@@ -20,21 +20,16 @@
       },
       {
         "ordinal": 3,
-        "name": "nonce",
-        "type_info": "Bytea"
-      },
-      {
-        "ordinal": 4,
         "name": "latest_refresh",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 5,
+        "ordinal": 4,
         "name": "creation",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 6,
+        "ordinal": 5,
         "name": "inactive_since",
         "type_info": "Timestamptz"
       }
@@ -45,7 +40,6 @@
       ]
     },
     "nullable": [
-      false,
       false,
       false,
       false,

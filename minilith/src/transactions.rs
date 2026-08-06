@@ -24,6 +24,8 @@ pub struct Ware {
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct CreatePaymentRequest {
+    /// From `/init`.
+    pub id: Uuid,
     /// When this payment request will be cancelled.
     /// Will try to cancel within 30s.
     pub timeout: String,
@@ -35,20 +37,14 @@ pub struct CreatePaymentRequest {
     pub stripe_success_url: Option<String>,
 }
 #[derive(Debug, Clone, Deserialize)]
-pub struct CreatePaymentResponseFree {
-    pub transaction_id: Uuid,
-}
-#[derive(Debug, Clone, Deserialize)]
 pub struct CreatePaymentResponseSwish {
     /// See <https://developer.swish.nu/api/payment-request/v2#create-payment-request>.
     pub payment_request_token: String,
-    pub transaction_id: Uuid,
 }
 #[derive(Debug, Clone, Deserialize)]
 pub struct CreatePaymentResponseStripe {
     /// See <https://docs.stripe.com/api/checkout/sessions/object#checkout_session_object-url>.
     pub redirect_url: String,
-    pub transaction_id: Uuid,
 }
 
 #[derive(Serialize, Debug, Clone, Copy)]

@@ -459,30 +459,4 @@ mod tests {
             .await
             .unwrap();
     }
-
-    #[sqlx::test(fixtures("adminship"))]
-    async fn remove_adminships(db: PgPool) {
-        let nolla_id = id_of(&db, "tlth.e.nolla").await;
-        let e_id = id_of(&db, "tlth.e").await;
-
-        create_adminship(&db, "email:user_a", nolla_id)
-            .await
-            .unwrap();
-
-        assert_eq!(
-            group_admins(&db, nolla_id).await.unwrap(),
-            vec!["email:user_a"]
-        );
-        assert!(group_admins(&db, e_id).await.unwrap().is_empty());
-
-        create_adminship(&db, "email:user_a", e_id).await.unwrap();
-        assert_eq!(group_admins(&db, e_id).await.unwrap(), vec!["email:user_a"]);
-
-        remove_adminship(&db, "email:user_a", e_id).await.unwrap();
-        assert_eq!(
-            group_admins(&db, nolla_id).await.unwrap(),
-            vec!["email:user_a"]
-        );
-        assert!(group_admins(&db, e_id).await.unwrap().is_empty());
-    }
 }

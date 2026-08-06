@@ -2,7 +2,7 @@
 //!
 //! Viewing data which normal users also view is handled by their respective functions instead.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -97,6 +97,17 @@ struct PutActivity {
     host_ids: Vec<Uuid>,
 }
 
+#[derive(Debug, Object)]
+struct ActivityHostInvite {
+    activity_id: Uuid,
+    activity_title: InternationalizedString,
+    activity_time_start: OffsetDateTime,
+    creator_name: InternationalizedString,
+    group_id: Uuid,
+    group_name: InternationalizedString,
+    group_path: String,
+}
+
 #[derive(Object)]
 struct PutTicketKind {
     activity_id: Uuid,
@@ -168,7 +179,6 @@ pub struct CreateAdminship {
 pub struct EmailRecipient {
     pub user_id: String,
     pub language: Vec<u8>,
-    pub nonce: Vec<u8>,
     pub group_name: DIS,
 }
 
@@ -189,7 +199,6 @@ pub(crate) async fn change_admin_email_recipients(
         r#"select distinct
             group_adminships.user_id,
             users.language,
-            users.nonce,
             target.name as "group_name!: DIS"
         from groups target
         inner join groups admin_group
@@ -200,7 +209,7 @@ pub(crate) async fn change_admin_email_recipients(
         inner join users on users.id = group_adminships.user_id
         where target.id = $1
         and (
-            group_adminships.user_id <> $2
+            group_adminships.user_id != $2
             or group_adminships.user_id = $3
         )
         order by group_adminships.user_id"#,
@@ -243,7 +252,7 @@ async fn send_adminship_emails(
     let mut messages: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
     for recipient in recipients {
         let language = context
-            .decrypt_string(recipient.language, &recipient.nonce)
+            .decrypt_string(recipient.language)
             .wrap_err_encryption("admin email recipient language")?;
         let group_name = recipient.group_name.resolve_intl(&language, "<group>");
         #[allow(clippy::single_match_else, reason = "futureproofing")]
@@ -302,31 +311,6 @@ async fn send_adminship_emails(
 }
 
 impl Router {
-    async fn check_any_direct_adminship(
-        &self,
-        user_id: &str,
-        group_ids: &[Uuid],
-    ) -> MinilithResult<()> {
-        let allowed = sqlx::query_scalar!(
-            r#"select exists (
-                select 1 from group_adminships
-                where user_id = $1 and group_id = any($2)
-            ) as "exists!""#,
-            user_id,
-            group_ids,
-        )
-        .fetch_one(&self.db)
-        .await?;
-        if allowed {
-            Ok(())
-        } else {
-            Err(MinilithEndpointError::bad_frontend_code(
-                "must directly administer at least one activity host",
-                "",
-            ))
-        }
-    }
-
     async fn ensure_image_registered(
         &self,
         txn: &mut sqlx_tracing::Transaction<'_, sqlx::Postgres>,
@@ -386,18 +370,280 @@ impl Router {
     }
 }
 
+fn removed_activity_hosts(
+    creator_id: Uuid,
+    current_host_ids: &[Uuid],
+    requested_host_ids: &[Uuid],
+    administered_group_ids: &[Uuid],
+) -> MinilithResult<Vec<Uuid>> {
+    let current = current_host_ids.iter().copied().collect::<BTreeSet<_>>();
+    let requested = requested_host_ids.iter().copied().collect::<BTreeSet<_>>();
+    let administered = administered_group_ids
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+
+    if !requested.contains(&creator_id) {
+        return Err(MinilithEndpointError::bad_frontend_code(
+            "the activity creator cannot be removed as a host",
+            "",
+        ));
+    }
+    if let Some(group_id) = requested.difference(&current).next() {
+        return Err(MinilithEndpointError::bad_frontend_code(
+            format!("group {group_id} must be invited and accept before becoming a host"),
+            "",
+        ));
+    }
+
+    let removed = current.difference(&requested).copied().collect::<Vec<_>>();
+    if let Some(group_id) = removed
+        .iter()
+        .find(|group_id| **group_id == creator_id || !administered.contains(group_id))
+    {
+        return Err(MinilithEndpointError::bad_frontend_code(
+            format!("may only remove a non-creator host you directly administer: {group_id}"),
+            "",
+        ));
+    }
+    Ok(removed)
+}
+
+async fn lock_activity(
+    txn: &mut sqlx_tracing::Transaction<'_, sqlx::Postgres>,
+    activity_id: Uuid,
+) -> MinilithResult<Uuid> {
+    sqlx::query_scalar!(
+        "select creator_id from activities where id = $1 for update",
+        activity_id,
+    )
+    .fetch_optional(&mut txn.executor())
+    .await?
+    .wrap_err_not_found()
+}
+
+async fn lock_activity_adminship(
+    txn: &mut sqlx_tracing::Transaction<'_, sqlx::Postgres>,
+    user_id: &str,
+    activity_id: Uuid,
+) -> MinilithResult<()> {
+    let group_id = sqlx::query_scalar!(
+        r#"select group_adminships.group_id
+        from activity_hosts
+        inner join group_adminships
+            on group_adminships.group_id = activity_hosts.group_id
+        where activity_hosts.activity_id = $2 and group_adminships.user_id = $1
+        order by group_adminships.group_id
+        limit 1
+        for key share of group_adminships"#,
+        user_id,
+        activity_id,
+    )
+    .fetch_optional(&mut txn.executor())
+    .await?;
+    if group_id.is_some() {
+        Ok(())
+    } else {
+        Err(MinilithEndpointError::bad_frontend_code(
+            "must directly administer an activity host",
+            "",
+        ))
+    }
+}
+
+async fn lock_direct_adminship(
+    txn: &mut sqlx_tracing::Transaction<'_, sqlx::Postgres>,
+    user_id: &str,
+    group_id: Uuid,
+) -> MinilithResult<()> {
+    let locked_group_id = sqlx::query_scalar!(
+        r#"select group_id from group_adminships
+        where user_id = $1 and group_id = $2
+        for key share"#,
+        user_id,
+        group_id,
+    )
+    .fetch_optional(&mut txn.executor())
+    .await?;
+    if locked_group_id.is_some() {
+        Ok(())
+    } else {
+        Err(MinilithEndpointError::bad_frontend_code(
+            format!("must be a direct admin of group {group_id}"),
+            "",
+        ))
+    }
+}
+
+async fn create_activity_host_invite(
+    txn: &mut sqlx_tracing::Transaction<'_, sqlx::Postgres>,
+    user_id: &str,
+    activity_id: Uuid,
+    group_id: Uuid,
+) -> MinilithResult<()> {
+    let creator_id = lock_activity(txn, activity_id).await?;
+    lock_activity_adminship(txn, user_id, activity_id).await?;
+
+    let group_deleted = sqlx::query_scalar!("select deleted from groups where id = $1", group_id)
+        .fetch_optional(&mut txn.executor())
+        .await?
+        .wrap_err_not_found()?;
+    if group_deleted {
+        return Err(MinilithEndpointError::bad_frontend_code(
+            "cannot invite a deleted group",
+            "",
+        ));
+    }
+    let is_host = sqlx::query_scalar!(
+        r#"select exists (
+            select 1 from activity_hosts where activity_id = $1 and group_id = $2
+        ) as "exists!""#,
+        activity_id,
+        group_id,
+    )
+    .fetch_one(&mut txn.executor())
+    .await?;
+    if group_id == creator_id || is_host {
+        return Err(MinilithEndpointError::bad_frontend_code(
+            "the group is already an activity host",
+            "",
+        ));
+    }
+
+    sqlx::query!(
+        r#"insert into activity_host_invites (activity_id, group_id)
+        values ($1, $2) on conflict do nothing"#,
+        activity_id,
+        group_id,
+    )
+    .execute(&mut txn.executor())
+    .await?;
+    Ok(())
+}
+
+async fn accept_activity_host_invite(
+    txn: &mut sqlx_tracing::Transaction<'_, sqlx::Postgres>,
+    user_id: &str,
+    activity_id: Uuid,
+    group_id: Uuid,
+) -> MinilithResult<()> {
+    lock_activity(txn, activity_id).await?;
+    lock_direct_adminship(txn, user_id, group_id).await?;
+
+    let group_deleted = sqlx::query_scalar!("select deleted from groups where id = $1", group_id)
+        .fetch_optional(&mut txn.executor())
+        .await?
+        .wrap_err_not_found()?;
+    if group_deleted {
+        return Err(MinilithEndpointError::bad_frontend_code(
+            "a deleted group cannot accept a host invitation",
+            "",
+        ));
+    }
+    sqlx::query!(
+        r#"delete from activity_host_invites
+        where activity_id = $1 and group_id = $2
+        returning group_id"#,
+        activity_id,
+        group_id,
+    )
+    .fetch_optional(&mut txn.executor())
+    .await?
+    .wrap_err_not_found()?;
+    sqlx::query!(
+        r#"insert into activity_hosts (activity_id, group_id)
+        values ($1, $2) on conflict do nothing"#,
+        activity_id,
+        group_id,
+    )
+    .execute(&mut txn.executor())
+    .await?;
+    Ok(())
+}
+
+async fn decline_activity_host_invite(
+    txn: &mut sqlx_tracing::Transaction<'_, sqlx::Postgres>,
+    user_id: &str,
+    activity_id: Uuid,
+    group_id: Uuid,
+) -> MinilithResult<()> {
+    lock_activity(txn, activity_id).await?;
+    lock_direct_adminship(txn, user_id, group_id).await?;
+    sqlx::query!(
+        r#"delete from activity_host_invites
+        where activity_id = $1 and group_id = $2
+        returning group_id"#,
+        activity_id,
+        group_id,
+    )
+    .fetch_optional(&mut txn.executor())
+    .await?
+    .wrap_err_not_found()?;
+    Ok(())
+}
+
+async fn grant_activity_verifier(
+    txn: &mut sqlx_tracing::Transaction<'_, sqlx::Postgres>,
+    actor_id: &str,
+    activity_id: Uuid,
+    verifier_id: &str,
+) -> MinilithResult<()> {
+    lock_activity(txn, activity_id).await?;
+    lock_activity_adminship(txn, actor_id, activity_id).await?;
+    let user_exists = sqlx::query_scalar!(
+        r#"select exists (select 1 from users where id = $1) as "exists!""#,
+        verifier_id,
+    )
+    .fetch_one(&mut txn.executor())
+    .await?;
+    if !user_exists {
+        return Err(MinilithEndpointError::not_found());
+    }
+    sqlx::query!(
+        r#"insert into activity_verifiers (activity_id, user_id)
+        values ($1, $2) on conflict do nothing"#,
+        activity_id,
+        verifier_id,
+    )
+    .execute(&mut txn.executor())
+    .await?;
+    Ok(())
+}
+
+async fn revoke_activity_verifier(
+    txn: &mut sqlx_tracing::Transaction<'_, sqlx::Postgres>,
+    actor_id: &str,
+    activity_id: Uuid,
+    verifier_id: &str,
+) -> MinilithResult<()> {
+    lock_activity(txn, activity_id).await?;
+    lock_activity_adminship(txn, actor_id, activity_id).await?;
+    sqlx::query!(
+        "delete from activity_verifiers where activity_id = $1 and user_id = $2",
+        activity_id,
+        verifier_id,
+    )
+    .execute(&mut txn.executor())
+    .await?;
+    Ok(())
+}
+
 fn is_allowed_image_extension(extension: &str) -> bool {
     matches!(extension, "jpg" | "jpeg" | "webp" | "png" | "avif")
 }
 
 #[OpenApi(prefix_path = "/admin")]
 impl Router {
-    /// Creates or fully replaces an activity. Existing activities require a
-    /// direct adminship in any current host; new activities require one in any
-    /// submitted host. The responsible name must not be blank, the contact must
-    /// be a `mailto:` or `tel:` URI, the end must follow the start, and the
-    /// overall ticket cap cannot be below existing reservations or purchases.
-    /// `image_id` must refer to an image uploaded through `/admin/upload-image`.
+    /// Creates or fully replaces an activity. A new activity must name a group
+    /// directly administered by the caller as its creator and initially has no
+    /// additional hosts. The creator is immutable. An existing additional host
+    /// may only be removed by one of that exact group's direct admins; hosts can
+    /// only be added through the invitation endpoints.
+    ///
+    /// The responsible name must not be blank, the contact must be a `mailto:`
+    /// or `tel:` URI, the end must follow the start, and the overall ticket cap
+    /// cannot be below existing reservations or purchases. `image_id` must
+    /// refer to an image uploaded through `/admin/upload-image`.
     #[oai(path = "/activities/:id", method = "put")]
     #[allow(
         clippy::too_many_lines,
@@ -430,29 +676,59 @@ impl Router {
             ));
         }
 
-        let mut host_ids = body.host_ids;
-        host_ids.push(body.creator_id);
-        host_ids.sort_unstable();
-        host_ids.dedup();
-
-        let exists = sqlx::query_scalar!(
-            r#"select exists (select 1 from activities where id = $1) as "exists!""#,
-            id
-        )
-        .fetch_one(&self.db)
-        .await?;
-        if exists {
-            check_activity_adminship(&self.db, user.get_id(), id).await?;
-        } else {
-            self.check_any_direct_adminship(user.get_id(), &host_ids)
-                .await?;
-        }
         let mut txn = self.db.begin().await?;
-        if exists {
-            sqlx::query_scalar!("select id from activities where id = $1 for update", id,)
-                .fetch_one(&mut txn.executor())
-                .await?;
-        }
+        let existing_creator = sqlx::query_scalar!(
+            "select creator_id from activities where id = $1 for update",
+            id,
+        )
+        .fetch_optional(&mut txn.executor())
+        .await?;
+        let mut requested_host_ids = body.host_ids.clone();
+        requested_host_ids.push(body.creator_id);
+        requested_host_ids.sort_unstable();
+        requested_host_ids.dedup();
+
+        let (is_new, removed_host_ids) = if let Some(creator_id) = existing_creator {
+            if creator_id != body.creator_id {
+                return Err(MinilithEndpointError::bad_frontend_code(
+                    "the activity creator cannot be changed",
+                    "",
+                ));
+            }
+            lock_activity_adminship(&mut txn, user.get_id(), id).await?;
+            let current_host_ids = sqlx::query_scalar!(
+                "select group_id from activity_hosts where activity_id = $1",
+                id,
+            )
+            .fetch_all(&mut txn.executor())
+            .await?;
+            let administered_group_ids = sqlx::query_scalar!(
+                r#"select group_id from group_adminships where user_id = $1
+                for key share"#,
+                user.get_id(),
+            )
+            .fetch_all(&mut txn.executor())
+            .await?;
+            (
+                false,
+                removed_activity_hosts(
+                    creator_id,
+                    &current_host_ids,
+                    &requested_host_ids,
+                    &administered_group_ids,
+                )?,
+            )
+        } else {
+            lock_direct_adminship(&mut txn, user.get_id(), body.creator_id).await?;
+            removed_activity_hosts(
+                body.creator_id,
+                &[body.creator_id],
+                &requested_host_ids,
+                &[body.creator_id],
+            )?;
+            (true, Vec::new())
+        };
+
         let currently_reserved = sqlx::query_scalar!(
             r#"select coalesce(sum(reserved_or_purchased_tickets), 0)::int
             from ticket_kinds where activity_id = $1"#,
@@ -485,7 +761,7 @@ impl Router {
             .coordinate_wgs84
             .map_or((None, None), |point| (Some(point.north), Some(point.east)));
 
-        sqlx::query!(
+        let saved = sqlx::query!(
             r#"insert into activities (
                 id, responsible_name, responsible_contact, creator_id,
                 title, description, location, time_start, time_end, image_id,
@@ -505,7 +781,6 @@ impl Router {
             on conflict (id) do update set
                 responsible_name = excluded.responsible_name,
                 responsible_contact = excluded.responsible_contact,
-                creator_id = excluded.creator_id,
                 title = excluded.title,
                 description = excluded.description,
                 location = excluded.location,
@@ -514,7 +789,8 @@ impl Router {
                 image_id = excluded.image_id,
                 is_hidden = excluded.is_hidden,
                 is_hidden_for_other_admins = excluded.is_hidden_for_other_admins,
-                max_tickets = excluded.max_tickets"#,
+                max_tickets = excluded.max_tickets
+            where activities.creator_id = excluded.creator_id"#,
             id,
             body.responsible_name,
             body.responsible_contact,
@@ -535,19 +811,212 @@ impl Router {
         )
         .execute(&mut txn.executor())
         .await?;
-        sqlx::query!("delete from activity_hosts where activity_id = $1", id)
+        if saved.rows_affected() != 1 {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "the activity was concurrently created with another creator",
+                "",
+            ));
+        }
+        if is_new {
+            sqlx::query!(
+                "insert into activity_hosts (activity_id, group_id) values ($1, $2)",
+                id,
+                body.creator_id,
+            )
             .execute(&mut txn.executor())
             .await?;
-        sqlx::query!(
-            r#"insert into activity_hosts (activity_id, group_id)
-            select $1, group_id from unnest($2::uuid[]) as host(group_id)"#,
-            id,
-            &host_ids,
-        )
-        .execute(&mut txn.executor())
-        .await?;
+        } else if !removed_host_ids.is_empty() {
+            sqlx::query!(
+                "delete from activity_hosts where activity_id = $1 and group_id = any($2)",
+                id,
+                &removed_host_ids,
+            )
+            .execute(&mut txn.executor())
+            .await?;
+        }
         txn.commit().await?;
 
+        Ok(())
+    }
+
+    /// Lists pending host invitations addressed to groups the caller directly
+    /// administers. Invitations for deleted groups are omitted.
+    #[oai(path = "/activity-host-invites", method = "get")]
+    async fn activity_host_invites(
+        &self,
+        user: User,
+    ) -> MinilithResult<Json<Vec<ActivityHostInvite>>> {
+        let invites = sqlx::query!(
+            r#"select
+                activity_host_invites.activity_id,
+                activity_host_invites.group_id,
+                activities.title as "activity_title!: DIS",
+                activities.time_start as activity_time_start,
+                creator.name as "creator_name!: DIS",
+                invited.name as "group_name!: DIS",
+                invited.path as "group_path!: group::Path"
+            from activity_host_invites
+            inner join activities
+                on activities.id = activity_host_invites.activity_id
+            inner join groups creator on creator.id = activities.creator_id
+            inner join groups invited on invited.id = activity_host_invites.group_id
+            inner join group_adminships
+                on group_adminships.group_id = activity_host_invites.group_id
+                and group_adminships.user_id = $1
+            where not invited.deleted
+            order by activities.time_start, invited.path, activities.id"#,
+            user.get_id(),
+        )
+        .map(|invite| ActivityHostInvite {
+            activity_id: invite.activity_id,
+            activity_title: invite.activity_title.0,
+            activity_time_start: invite.activity_time_start,
+            creator_name: invite.creator_name.0,
+            group_id: invite.group_id,
+            group_name: invite.group_name.0,
+            group_path: invite.group_path.to_string(),
+        })
+        .fetch_all(&self.db)
+        .await?;
+        Ok(Json(invites))
+    }
+
+    /// Lists pending host invitations sent for an activity. The caller must
+    /// directly administer one of the activity's accepted hosts.
+    #[oai(path = "/activities/:activity_id/host-invites", method = "get")]
+    async fn activity_host_invites_for_activity(
+        &self,
+        user: User,
+        Path(activity_id): Path<Uuid>,
+    ) -> MinilithResult<Json<Vec<Group>>> {
+        check_activity_adminship(&self.db, user.get_id(), activity_id).await?;
+        let groups = sqlx::query_as!(
+            Group,
+            r#"select
+                groups.id, groups.path,
+                groups.limit_membership_visibility,
+                groups.name as "name!: DIS",
+                groups.description as "description!: DIS",
+                groups.deleted,
+                logo.id as logo_id,
+                logo.url as logo_url
+            from activity_host_invites
+            inner join groups on groups.id = activity_host_invites.group_id
+            inner join images logo on logo.id = groups.logo_id
+            where activity_host_invites.activity_id = $1
+            order by groups.path"#,
+            activity_id,
+        )
+        .fetch_all(&self.db)
+        .await?;
+        Ok(Json(groups))
+    }
+
+    /// Invites a group to become an additional activity host. The caller must
+    /// directly administer an accepted host. The invited group is not a host
+    /// until one of its direct administrators accepts.
+    #[oai(
+        path = "/activities/:activity_id/host-invites/:group_id",
+        method = "put"
+    )]
+    async fn invite_activity_host(
+        &self,
+        user: User,
+        Path(activity_id): Path<Uuid>,
+        Path(group_id): Path<Uuid>,
+    ) -> MinilithResult<()> {
+        let mut txn = self.db.begin().await?;
+        create_activity_host_invite(&mut txn, user.get_id(), activity_id, group_id).await?;
+        txn.commit().await?;
+        Ok(())
+    }
+
+    /// Accepts a pending host invitation on behalf of a group the caller
+    /// directly administers. Acceptance atomically promotes the group to host.
+    #[oai(
+        path = "/activity-host-invites/:activity_id/:group_id/accept",
+        method = "post"
+    )]
+    async fn accept_activity_host_invitation(
+        &self,
+        user: User,
+        Path(activity_id): Path<Uuid>,
+        Path(group_id): Path<Uuid>,
+    ) -> MinilithResult<()> {
+        let mut txn = self.db.begin().await?;
+        accept_activity_host_invite(&mut txn, user.get_id(), activity_id, group_id).await?;
+        txn.commit().await?;
+        Ok(())
+    }
+
+    /// Declines a pending host invitation on behalf of a group the caller
+    /// directly administers.
+    #[oai(
+        path = "/activity-host-invites/:activity_id/:group_id",
+        method = "delete"
+    )]
+    async fn decline_activity_host_invitation(
+        &self,
+        user: User,
+        Path(activity_id): Path<Uuid>,
+        Path(group_id): Path<Uuid>,
+    ) -> MinilithResult<()> {
+        let mut txn = self.db.begin().await?;
+        decline_activity_host_invite(&mut txn, user.get_id(), activity_id, group_id).await?;
+        txn.commit().await?;
+        Ok(())
+    }
+
+    /// Lists the users allowed to validate tickets for an activity. The caller
+    /// must directly administer one of the activity's accepted hosts.
+    #[oai(path = "/activities/:activity_id/verifiers", method = "get")]
+    async fn activity_verifiers(
+        &self,
+        user: User,
+        Path(activity_id): Path<Uuid>,
+    ) -> MinilithResult<Json<Vec<String>>> {
+        check_activity_adminship(&self.db, user.get_id(), activity_id).await?;
+        let verifiers = sqlx::query_scalar!(
+            "select user_id from activity_verifiers where activity_id = $1 order by user_id",
+            activity_id,
+        )
+        .fetch_all(&self.db)
+        .await?;
+        Ok(Json(verifiers))
+    }
+
+    /// Grants a user permission to validate tickets for an activity. The user
+    /// must already have an account.
+    #[oai(
+        path = "/activities/:activity_id/verifiers/:verifier_id",
+        method = "put"
+    )]
+    async fn add_activity_verifier(
+        &self,
+        user: User,
+        Path(activity_id): Path<Uuid>,
+        Path(verifier_id): Path<String>,
+    ) -> MinilithResult<()> {
+        let mut txn = self.db.begin().await?;
+        grant_activity_verifier(&mut txn, user.get_id(), activity_id, &verifier_id).await?;
+        txn.commit().await?;
+        Ok(())
+    }
+
+    /// Revokes a user's permission to validate tickets for an activity.
+    #[oai(
+        path = "/activities/:activity_id/verifiers/:verifier_id",
+        method = "delete"
+    )]
+    async fn remove_activity_verifier(
+        &self,
+        user: User,
+        Path(activity_id): Path<Uuid>,
+        Path(verifier_id): Path<String>,
+    ) -> MinilithResult<()> {
+        let mut txn = self.db.begin().await?;
+        revoke_activity_verifier(&mut txn, user.get_id(), activity_id, &verifier_id).await?;
+        txn.commit().await?;
         Ok(())
     }
 
@@ -578,18 +1047,18 @@ impl Router {
             tickets.extend(self.purchased_tickets(user.clone(), Path(*kind)).await?.0);
             kinds.insert(*kind, router.load_ticket_kind_unchecked(*kind).await?);
         }
-        // todo: get ticket kinds for prices and such
         let router = ActivityRouter {
             context: Arc::clone(&self.context),
         };
         let activity = router.details(user.clone(), Path(id)).await?.0;
 
-        let user_row = sqlx::query!("select * from users where id = $1", user.get_id())
-            .fetch_one(&self.db)
-            .await?;
+        let user_language =
+            sqlx::query_scalar!("select language from users where id = $1", user.get_id())
+                .fetch_one(&self.db)
+                .await?;
 
         let lang = self
-            .decrypt_string(user_row.language, &user_row.nonce)
+            .decrypt_string(user_language)
             .wrap_err_encryption("admin language")?;
 
         let language = match lang.split('-').next().unwrap_or(&lang) {
@@ -869,6 +1338,16 @@ impl Router {
         {
             return Err(MinilithEndpointError::bad_frontend_code(
                 "cannot change activity_id",
+                "",
+            ));
+        }
+
+        if let Some(existing) = &existing
+            && existing.has_been_released
+            && body.purchasing_available_start != existing.purchasing_available_start
+        {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "cannot change release date after release",
                 "",
             ));
         }
@@ -1444,9 +1923,16 @@ impl Router {
     #[oai(path = "/groups/:group_id", method = "delete")]
     async fn hide_group(&self, user: User, Path(group_id): Path<Uuid>) -> MinilithResult<()> {
         check_direct_adminship(&self.db, user.get_id(), group_id).await?;
-        sqlx::query!("update groups set deleted = true where id = $1", group_id)
-            .execute(&self.db)
+        let path = sqlx::query_scalar!("select path from groups where id = $1", group_id)
+            .fetch_one(&self.db)
             .await?;
+        sqlx::query!(
+            "update groups set deleted = true where path <@ $1 or id = $2",
+            path,
+            group_id
+        )
+        .execute(&self.db)
+        .await?;
         Ok(())
     }
 
@@ -1828,5 +2314,267 @@ impl Router {
         .execute(&self.db)
         .await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::PgPool;
+
+    fn id(suffix: u128) -> Uuid {
+        Uuid::from_u128(0x1000_0000_0000_0000_0000_0000_0000_0000 + suffix)
+    }
+
+    #[test]
+    fn host_changes_only_remove_a_callers_non_creator_host() {
+        let creator = id(2);
+        let caller_host = id(3);
+        let other_host = id(4);
+
+        assert_eq!(
+            removed_activity_hosts(
+                creator,
+                &[creator, caller_host, other_host],
+                &[creator, other_host],
+                &[caller_host],
+            )
+            .unwrap(),
+            [caller_host],
+        );
+        assert!(
+            removed_activity_hosts(
+                creator,
+                &[creator, caller_host, other_host],
+                &[creator, caller_host],
+                &[caller_host],
+            )
+            .is_err(),
+            "a caller must not remove another group's host",
+        );
+        assert!(
+            removed_activity_hosts(
+                creator,
+                &[creator, caller_host],
+                &[caller_host],
+                &[creator, caller_host],
+            )
+            .is_err(),
+            "the creator must remain a host",
+        );
+        assert!(
+            removed_activity_hosts(
+                creator,
+                &[creator, caller_host],
+                &[creator, caller_host, other_host],
+                &[creator, caller_host],
+            )
+            .is_err(),
+            "hosts must only be added by accepting an invitation",
+        );
+    }
+
+    #[sqlx::test(fixtures("activity_host_invites"))]
+    async fn invitation_can_only_be_sent_by_a_host_and_accepted_by_the_invitee(db: PgPool) {
+        let activity_id = id(6);
+        let invited_group_id = id(4);
+        let traced_db = sqlx_tracing::Pool::from(db.clone());
+
+        let mut unauthorized = traced_db.begin().await.unwrap();
+        assert!(
+            create_activity_host_invite(
+                &mut unauthorized,
+                "email:other@example.com",
+                activity_id,
+                invited_group_id,
+            )
+            .await
+            .is_err(),
+        );
+        unauthorized.rollback().await.unwrap();
+
+        let mut invited = traced_db.begin().await.unwrap();
+        create_activity_host_invite(
+            &mut invited,
+            "email:creator@example.com",
+            activity_id,
+            invited_group_id,
+        )
+        .await
+        .unwrap();
+        invited.commit().await.unwrap();
+
+        let mut unauthorized = traced_db.begin().await.unwrap();
+        assert!(
+            accept_activity_host_invite(
+                &mut unauthorized,
+                "email:other@example.com",
+                activity_id,
+                invited_group_id,
+            )
+            .await
+            .is_err(),
+        );
+        unauthorized.rollback().await.unwrap();
+
+        let mut accepted = traced_db.begin().await.unwrap();
+        accept_activity_host_invite(
+            &mut accepted,
+            "email:invited@example.com",
+            activity_id,
+            invited_group_id,
+        )
+        .await
+        .unwrap();
+        accepted.commit().await.unwrap();
+
+        let is_host = sqlx::query_scalar!(
+            r#"select exists (
+                select 1 from activity_hosts where activity_id = $1 and group_id = $2
+            ) as "exists!""#,
+            activity_id,
+            invited_group_id,
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert!(is_host);
+        let invite_count = sqlx::query_scalar!(
+            "select count(*) from activity_host_invites where activity_id = $1 and group_id = $2",
+            activity_id,
+            invited_group_id,
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert_eq!(invite_count, Some(0));
+    }
+
+    #[sqlx::test(fixtures("activity_host_invites"))]
+    async fn invitation_can_only_be_declined_by_the_invitee(db: PgPool) {
+        let activity_id = id(6);
+        let invited_group_id = id(4);
+        let traced_db = sqlx_tracing::Pool::from(db.clone());
+        let mut invited = traced_db.begin().await.unwrap();
+        create_activity_host_invite(
+            &mut invited,
+            "email:cohost@example.com",
+            activity_id,
+            invited_group_id,
+        )
+        .await
+        .unwrap();
+        invited.commit().await.unwrap();
+
+        let mut unauthorized = traced_db.begin().await.unwrap();
+        assert!(
+            decline_activity_host_invite(
+                &mut unauthorized,
+                "email:other@example.com",
+                activity_id,
+                invited_group_id,
+            )
+            .await
+            .is_err(),
+        );
+        unauthorized.rollback().await.unwrap();
+
+        let mut declined = traced_db.begin().await.unwrap();
+        decline_activity_host_invite(
+            &mut declined,
+            "email:invited@example.com",
+            activity_id,
+            invited_group_id,
+        )
+        .await
+        .unwrap();
+        declined.commit().await.unwrap();
+
+        let invite_count = sqlx::query_scalar!(
+            "select count(*) from activity_host_invites where activity_id = $1 and group_id = $2",
+            activity_id,
+            invited_group_id,
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert_eq!(invite_count, Some(0));
+        let is_host = sqlx::query_scalar!(
+            r#"select exists (
+                select 1 from activity_hosts where activity_id = $1 and group_id = $2
+            ) as "exists!""#,
+            activity_id,
+            invited_group_id,
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert!(!is_host);
+    }
+
+    #[sqlx::test(fixtures("activity_host_invites"))]
+    async fn only_host_admins_can_grant_and_revoke_activity_verifiers(db: PgPool) {
+        let activity_id = id(6);
+        let verifier_id = "lund-university:worker";
+        let traced_db = sqlx_tracing::Pool::from(db.clone());
+
+        let mut unauthorized = traced_db.begin().await.unwrap();
+        assert!(
+            grant_activity_verifier(
+                &mut unauthorized,
+                "email:other@example.com",
+                activity_id,
+                verifier_id,
+            )
+            .await
+            .is_err(),
+        );
+        unauthorized.rollback().await.unwrap();
+
+        let mut granted = traced_db.begin().await.unwrap();
+        grant_activity_verifier(
+            &mut granted,
+            "email:creator@example.com",
+            activity_id,
+            verifier_id,
+        )
+        .await
+        .unwrap();
+        granted.commit().await.unwrap();
+
+        let is_verifier = sqlx::query_scalar!(
+            r#"select exists (
+                select 1 from activity_verifiers where activity_id = $1 and user_id = $2
+            ) as "exists!""#,
+            activity_id,
+            verifier_id,
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert!(is_verifier);
+
+        let mut revoked = traced_db.begin().await.unwrap();
+        revoke_activity_verifier(
+            &mut revoked,
+            "email:cohost@example.com",
+            activity_id,
+            verifier_id,
+        )
+        .await
+        .unwrap();
+        revoked.commit().await.unwrap();
+
+        let is_verifier = sqlx::query_scalar!(
+            r#"select exists (
+                select 1 from activity_verifiers where activity_id = $1 and user_id = $2
+            ) as "exists!""#,
+            activity_id,
+            verifier_id,
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert!(!is_verifier);
     }
 }

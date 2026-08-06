@@ -30,26 +30,31 @@
       },
       {
         "ordinal": 5,
-        "name": "name",
+        "name": "stripe_endpoint_secret",
         "type_info": "Text"
       },
       {
         "ordinal": 6,
-        "name": "email",
+        "name": "name",
         "type_info": "Text"
       },
       {
         "ordinal": 7,
-        "name": "address",
+        "name": "email",
         "type_info": "Text"
       },
       {
         "ordinal": 8,
-        "name": "organization_number",
+        "name": "address",
         "type_info": "Text"
       },
       {
         "ordinal": 9,
+        "name": "organization_number",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
         "name": "svg_icon",
         "type_info": "Text"
       }
@@ -64,6 +69,7 @@
       false,
       false,
       false,
+      true,
       true,
       false,
       false,

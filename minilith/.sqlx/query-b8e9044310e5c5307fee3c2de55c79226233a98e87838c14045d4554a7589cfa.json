@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select group_id from group_adminships\n        where user_id = $1 and group_id = $2\n        for key share",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "group_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "b8e9044310e5c5307fee3c2de55c79226233a98e87838c14045d4554a7589cfa"
+}

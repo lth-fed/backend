@@ -56,6 +56,11 @@ create table transaction_wares (
 );
 create index transaction_wares_transaction_id on transaction_wares using hash (transaction_id);
 
+create table transaction_reserved_ids (
+    id uuid primary key,
+    created timestamptz not null default now()
+);
+
 create table stripe_customers (
     customer_id text primary key,
     stripe_id text not null

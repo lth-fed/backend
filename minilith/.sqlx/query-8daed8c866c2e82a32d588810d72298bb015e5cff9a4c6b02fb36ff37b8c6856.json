@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into users (id, name, language) values ($1, $2, $3)\n             on conflict (id) do update set name = excluded.name, language = excluded.language",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Bytea",
+        "Bytea"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8daed8c866c2e82a32d588810d72298bb015e5cff9a4c6b02fb36ff37b8c6856"
+}

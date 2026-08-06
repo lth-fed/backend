@@ -134,7 +134,7 @@ impl MinilithEndpointError {
     #[track_caller]
     pub fn internal_error(error_message: impl AsRef<str>, error: impl Debug) -> Self {
         // so it doesn't just loop
-        if !error_message.as_ref().starts_with("email:") {
+        if !error_message.as_ref().starts_with("email:") && !error_message.as_ref().starts_with("noalert") {
             let level = match error_message
                 .as_ref()
                 .get(..2)

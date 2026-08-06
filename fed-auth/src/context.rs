@@ -1,27 +1,27 @@
+use std::ops::Deref;
 use std::path::PathBuf;
+use std::sync::Arc;
 
-use bin_common::setup_db;
+use bin_common::{Transaction, setup_db};
 use ed25519_dalek::pkcs8::DecodePrivateKey as _;
-use fed_auth_verifier::callbacks::AuthCallbackDataV1;
 use jsonwebtoken::jwk::JwkSet;
-use mini_moka::sync::Cache;
 use poem_openapi::Object;
 use samael::service_provider::ServiceProvider;
 
 use base64::Engine as _;
-#[cfg(not(debug_assertions))]
-use color_eyre::eyre::ContextCompat as _;
 use color_eyre::{Section as _, eyre::Context as _};
 use jsonwebtoken::EncodingKey;
 use minilith_errors::{EmailClient, configure_alert_email};
 use serde::{Deserialize, Serialize};
 use sqlx::migrate;
+use tracing::{error, warn};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::LevelFilter;
 
-use crate::{PgPool, api, saml2};
+use crate::oidc::CALLBACK_TOKEN_VALID_FOR;
+use crate::{PgPool, jwt, saml2};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, sqlx::Type)]
 pub(crate) struct AuthSession {
     pub redirect_uri: String,
     pub client_id: String,
@@ -31,37 +31,28 @@ pub(crate) struct AuthSession {
     // PKCE
     pub code_challenge: String,
 
-    pub validated_user: Option<AuthCallbackDataV1>,
     pub datasharing_confirmed: bool,
     pub redirect_requires_datasharing: bool,
 }
-impl AuthSession {
-    pub(crate) fn provider_callback_next_url(&self, code: &str) -> String {
-        if self.redirect_requires_datasharing && !self.datasharing_confirmed {
-            format!(
-                "/confirm-datasharing/?code={code}&provider={}",
-                self.redirect_uri
-                    .split('/')
-                    .nth(2)
-                    .unwrap_or(&self.redirect_uri)
-            )
-        } else {
-            let query_start = if self.redirect_uri.contains('?') {
-                '&'
-            } else {
-                '?'
-            };
-            if let Some(state) = &self.state {
-                let encoded = serde_urlencoded::to_string(state);
-                format!(
-                    "{}{query_start}code={code}&state={}",
-                    self.redirect_uri,
-                    encoded.as_deref().unwrap_or(state)
-                )
-            } else {
-                format!("{}{query_start}code={code}", self.redirect_uri)
-            }
-        }
+#[derive(sqlx::Type, Serialize)]
+pub struct ValidatedUser {
+    // ALSO UPDATE `fed_auth_verifier`
+    pub sub: String,
+    pub email: Option<String>,
+    pub full_name: Option<String>,
+    pub lth_guild: Option<String>,
+    // ALSO UPDATE `fed_auth_verifier`
+}
+#[derive(sqlx::Type)]
+pub(crate) struct ValidatedAuthSession {
+    #[sqlx(flatten)]
+    pub session: AuthSession,
+    pub user: ValidatedUser,
+}
+impl Deref for ValidatedAuthSession {
+    type Target = AuthSession;
+    fn deref(&self) -> &Self::Target {
+        &self.session
     }
 }
 pub enum CallbackUrlVersion<'a> {
@@ -74,9 +65,9 @@ impl CallbackUrlVersion<'_> {
         }
     }
 }
-#[derive(Clone, Debug, Object, Deserialize, Serialize)]
+#[derive(Clone, Debug, Object, Deserialize, Serialize, sqlx::Type)]
 pub struct CallbackUrl {
-    callback_url_v1: String,
+    pub callback_url_v1: String,
 }
 impl CallbackUrl {
     pub fn as_latest(&self) -> CallbackUrlVersion<'_> {
@@ -85,6 +76,8 @@ impl CallbackUrl {
         }
     }
 }
+
+pub(crate) type ContextWrapper = Arc<Context>;
 
 #[derive(Clone)]
 pub(crate) struct Context {
@@ -99,12 +92,6 @@ pub(crate) struct Context {
     pub saml_private_key: openssl::pkey::PKey<openssl::pkey::Private>,
 
     pub service_provider: ServiceProvider,
-
-    pub auth_sessions: Cache<String, AuthSession>,
-
-    // provider auth data
-    pub saml2_request_id_cache: Cache<String, ()>,
-    pub email_token_holding: Cache<String, api::EmailLoginRequest>,
 
     pub request_counter: opentelemetry::metrics::Counter<u64>,
     pub error_counter: opentelemetry::metrics::Counter<u64>,
@@ -126,10 +113,10 @@ impl Context {
     ///
     /// Any errors from setting up the context, including any connections errors to any of the
     /// services.
-    pub async fn new(db: Option<PgPool>) -> color_eyre::Result<Self> {
+    pub async fn new(test_db: Option<PgPool>) -> color_eyre::Result<Self> {
         let _: Result<PathBuf, dotenvy::Error> = dotenvy::dotenv();
 
-        let email_client = if db.is_some() {
+        let email_client = if test_db.is_some() {
             None
         } else {
             configure_alert_email(EmailClient::new("ALERT")?)?;
@@ -151,7 +138,7 @@ impl Context {
 
         let (private_key, jwks) = Self::get_jwt_keys()?;
 
-        let db = if let Some(db) = db {
+        let db = if let Some(db) = test_db {
             db
         } else {
             setup_db(
@@ -176,16 +163,6 @@ impl Context {
             jwks,
             service_provider: sp,
             saml_private_key: saml_pk,
-            // keep them for 30 minutes
-            saml2_request_id_cache: Cache::builder()
-                .time_to_live(std::time::Duration::from_mins(30))
-                .build(),
-            auth_sessions: Cache::builder()
-                .time_to_live(std::time::Duration::from_mins(30))
-                .build(),
-            email_token_holding: Cache::builder()
-                .time_to_live(std::time::Duration::from_mins(30))
-                .build(),
 
             request_counter: meter
                 .u64_counter("poem_requests_count")
@@ -197,5 +174,211 @@ impl Context {
                 .build(),
         };
         Ok(context)
+    }
+
+    pub(crate) async fn check_has_session(&self, session: &str) -> bool {
+        sqlx::query_scalar!(
+            "select exists (
+                select 1 from sessions where id = $1
+        ) as \"exists!\"",
+            session
+        )
+        .fetch_one(&self.db)
+        .await
+        .unwrap_or(false)
+    }
+    pub(crate) async fn get_session(
+        &self,
+        session: &str,
+    ) -> Result<Option<AuthSession>, sqlx::Error> {
+        sqlx::query!("select * from sessions where id = $1", session)
+            .map(|row| AuthSession {
+                redirect_uri: row.redirect_uri,
+                client_id: row.client_id,
+                state: row.state,
+                nonce: row.nonce,
+                callback: row.callback_url_v1.map(|cb| CallbackUrl {
+                    callback_url_v1: cb,
+                }),
+                code_challenge: row.code_challenge,
+                datasharing_confirmed: row.datasharing_confirmed,
+                redirect_requires_datasharing: row.redirect_requires_datasharing,
+            })
+            .fetch_optional(&self.db)
+            .await
+    }
+    pub(crate) async fn get_validated_session(
+        &self,
+        session: &str,
+    ) -> Result<Option<ValidatedAuthSession>, sqlx::Error> {
+        sqlx::query!(
+            "select * from sessions
+            inner join session_validated_users on session_id = id
+            where id = $1
+            for update",
+            session
+        )
+        .map(|row| ValidatedAuthSession {
+            session: AuthSession {
+                redirect_uri: row.redirect_uri,
+                client_id: row.client_id,
+                state: row.state,
+                nonce: row.nonce,
+                callback: row.callback_url_v1.map(|cb| CallbackUrl {
+                    callback_url_v1: cb,
+                }),
+                code_challenge: row.code_challenge,
+                datasharing_confirmed: row.datasharing_confirmed,
+                redirect_requires_datasharing: row.redirect_requires_datasharing,
+            },
+            user: ValidatedUser {
+                sub: row.sub,
+                email: row.email,
+                full_name: row.full_name,
+                lth_guild: row.lth_guild,
+            },
+        })
+        .fetch_optional(&self.db)
+        .await
+    }
+    pub(crate) async fn get_remove_validated_session(
+        &self,
+        txn: &mut Transaction<'_>,
+        session: &str,
+    ) -> Result<Option<ValidatedAuthSession>, sqlx::Error> {
+        let validated_session = sqlx::query!(
+            "select * from sessions
+            inner join session_validated_users on session_id = id
+            where id = $1
+            for update",
+            session
+        )
+        .map(|row| ValidatedAuthSession {
+            session: AuthSession {
+                redirect_uri: row.redirect_uri,
+                client_id: row.client_id,
+                state: row.state,
+                nonce: row.nonce,
+                callback: row.callback_url_v1.map(|cb| CallbackUrl {
+                    callback_url_v1: cb,
+                }),
+                code_challenge: row.code_challenge,
+                datasharing_confirmed: row.datasharing_confirmed,
+                redirect_requires_datasharing: row.redirect_requires_datasharing,
+            },
+            user: ValidatedUser {
+                sub: row.sub,
+                email: row.email,
+                full_name: row.full_name,
+                lth_guild: row.lth_guild,
+            },
+        })
+        .fetch_optional(&mut txn.executor())
+        .await?;
+        sqlx::query!("delete from sessions where id = $1", session)
+            .execute(&mut txn.executor())
+            .await?;
+        Ok(validated_session)
+    }
+    pub(crate) async fn validate_session(
+        &self,
+        session: &str,
+        user: &ValidatedUser,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            "insert into session_validated_users
+            (session_id, sub, email, full_name, lth_guild) values ($1, $2, $3, $4, $5)",
+            session,
+            user.sub,
+            user.email,
+            user.full_name,
+            user.lth_guild
+        )
+        .execute(&self.db)
+        .await
+        .map(|_| ())
+    }
+
+    /// # Errors
+    ///
+    /// They are logged. If we could not send callback to remote.
+    pub(crate) async fn provider_callback_next_url(
+        &self,
+        code: &str,
+        session: &ValidatedAuthSession,
+    ) -> Result<String, ()> {
+        if session.redirect_requires_datasharing && !session.datasharing_confirmed {
+            Ok(format!(
+                "/confirm-datasharing/?code={code}&provider={}",
+                session
+                    .redirect_uri
+                    .split('/')
+                    .nth(2)
+                    .unwrap_or(&session.redirect_uri)
+            ))
+        } else {
+            // we're all set to return!
+            // but what if we don't have all the info?
+            let mut additional_personal_information = false;
+            if let Some(cb_url) = &session.callback {
+                let token = jwt::encode(
+                    &jwt::StandardClaims::new(
+                        &session.client_id,
+                        CALLBACK_TOKEN_VALID_FOR,
+                        &session.user,
+                    ),
+                    &self.private_key,
+                )
+                .map_err(|_| ())?;
+                match cb_url.as_latest() {
+                    CallbackUrlVersion::V1 { url } => {
+                        let resp = self
+                            .reqwest_client
+                            .post(url)
+                            .body(token)
+                            .send()
+                            .await
+                            .inspect_err(|err| error!("auth callback POST failed: {err}"))
+                            .map_err(|_| ())?;
+                        if !resp.status().is_success() {
+                            let status = resp.status();
+                            let body = resp.text().await.ok();
+                            warn!(%status, ?body, "auth callback POST failed");
+                            return Err(());
+                        }
+                        if resp.status() == reqwest::StatusCode::CREATED
+                            && session.user.full_name.is_none()
+                        {
+                            additional_personal_information = true;
+                        }
+                    }
+                }
+            } else {
+                additional_personal_information = session.user.full_name.is_none();
+            }
+            if additional_personal_information {
+                return Ok(format!(
+                    "/personal-information/?code={code}&sub={}",
+                    session.user.sub
+                ));
+            }
+
+            let query_start = if session.redirect_uri.contains('?') {
+                '&'
+            } else {
+                '?'
+            };
+            let url = if let Some(state) = &session.state {
+                let encoded = serde_urlencoded::to_string(state);
+                format!(
+                    "{}{query_start}code={code}&state={}",
+                    session.redirect_uri,
+                    encoded.as_deref().unwrap_or(state)
+                )
+            } else {
+                format!("{}{query_start}code={code}", session.redirect_uri)
+            };
+            Ok(url)
+        }
     }
 }

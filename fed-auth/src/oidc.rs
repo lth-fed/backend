@@ -5,13 +5,14 @@
 //! login method" provider. This means we have several internal providers. The internal providers'
 //! code is located in `./api.rs` instead.
 
-use std::fmt::{Debug, Display};
+use std::fmt::Debug;
 use std::ops::Deref;
 
 use base64::Engine as _;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use fed_auth_verifier::User;
 use jsonwebtoken::jwk::JwkSet;
+use minilith_errors::MinilithEndpointError;
 use poem::http::{StatusCode, Uri};
 use poem_openapi::payload::{Form, Json, PlainText, Response};
 use poem_openapi::types::ToJSON as _;
@@ -23,7 +24,7 @@ use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 use crate::context::CallbackUrl;
-use crate::{API_DOMAIN, Context, WEBSITE_DOMAIN, context, jwt, random_id};
+use crate::{API_DOMAIN, Context, ContextWrapper, WEBSITE_DOMAIN, jwt};
 
 const TEKNOLOGAPPEN_ALLOWED_DOMAINS: &[&str] = &[
     "https://app.teknologappen.se",
@@ -93,6 +94,7 @@ enum OAuth2ErrorKind {
 
     // Custom
     Internal,
+    ServerCallbackFailed,
 }
 #[derive(Object, Clone)]
 struct OAuth2Error {
@@ -119,8 +121,8 @@ impl OAuth2ApiResponse {
         }))
     }
     #[track_caller]
-    fn db(err: impl Display) -> Self {
-        error!("Database connection failed: {err}");
+    fn db(err: impl Debug) -> Self {
+        drop(MinilithEndpointError::db(err));
         Self::Internal
     }
     fn grant_type() -> Self {
@@ -256,6 +258,12 @@ impl AuthorizeResponse {
         Self::Redirect(PlainText(String::new()))
     }
 }
+
+#[derive(Object, Deserialize, Clone)]
+struct RevokeRequest {
+    token: Uuid,
+}
+
 #[allow(clippy::needless_pass_by_value, reason = "poem wants us to")]
 fn bad_request_handler_authorize(err: poem::Error) -> AuthorizeResponse {
     OAuth2ApiResponse::oauth2error(OAuth2ErrorKind::InvalidRequest, err.to_string()).into()
@@ -306,7 +314,8 @@ fn oauth2error_redirect(
                 ctx.0,
                 if ctx.0.contains('?') { '&' } else { '?' },
                 kind.to_json_string(),
-                description.as_ref()
+                serde_urlencoded::to_string(description.as_ref())
+                    .unwrap_or_else(|_| description.as_ref().to_owned())
             ),
         )
 }
@@ -323,7 +332,7 @@ struct DatasharingResponse {
 
 #[derive(Clone)]
 pub(crate) struct MainRouter {
-    pub context: Context,
+    pub context: ContextWrapper,
 }
 impl Deref for MainRouter {
     type Target = Context;
@@ -446,8 +455,16 @@ impl MainRouter {
         &self,
         mut auth: TokenAuthoriationBody,
     ) -> OAuth2Result<Json<TokenResponse>> {
-        let Some(session) = self.auth_sessions.get(&auth.code) else {
-            return Err(OAuth2ApiResponse::unauth("invalid code"));
+        let mut txn = self.db.begin().await.map_err(OAuth2ApiResponse::db)?;
+
+        let Some(session) = self
+            .get_remove_validated_session(&mut txn, &auth.code)
+            .await
+            .map_err(OAuth2ApiResponse::db)?
+        else {
+            return Err(OAuth2ApiResponse::unauth(
+                "invalid code or not validated session",
+            ));
         };
         if session.redirect_uri != auth.redirect_uri {
             return Err(OAuth2ApiResponse::oauth2error(
@@ -476,35 +493,6 @@ impl MainRouter {
                 "skipped parts of the auth process",
             ));
         }
-        let user_data = session
-            .validated_user
-            .as_ref()
-            .ok_or_else(|| OAuth2ApiResponse::unauth("skipped parts of the auth process"))?;
-
-        if let Some(cb_url) = &session.callback {
-            let token = jwt::encode(
-                &jwt::StandardClaims::new(&session.client_id, CALLBACK_TOKEN_VALID_FOR, user_data),
-                &self.private_key,
-            )
-            .map_err(|_| OAuth2ApiResponse::Internal)?;
-            match cb_url.as_latest() {
-                context::CallbackUrlVersion::V1 { url } => {
-                    let resp = self
-                        .reqwest_client
-                        .post(url)
-                        .body(token)
-                        .send()
-                        .await
-                        .inspect_err(|err| error!("auth callback POST failed: {err}"))
-                        .map_err(|_| OAuth2ApiResponse::Internal)?;
-                    if !resp.status().is_success() {
-                        let status = resp.status();
-                        let body = resp.text().await.ok();
-                        warn!(%status, ?body, "auth callback POST failed");
-                    }
-                }
-            }
-        }
 
         let refresh_token = Uuid::new_v4();
         let row = sqlx::query!(
@@ -514,39 +502,38 @@ impl MainRouter {
             returning auth_time",
             refresh_token,
             session.client_id,
-            user_data.sub,
+            session.user.sub,
             session.nonce,
         )
-        .fetch_one(&self.db)
+        .fetch_one(&mut txn.executor())
         .await
-        .inspect_err(|err| error!("Error inserting refresh token into DB: {err}"))
-        .map_err(|_| OAuth2ApiResponse::Internal)?;
-
-        self.auth_sessions.invalidate(&auth.code);
+        .map_err(OAuth2ApiResponse::db)?;
 
         #[allow(clippy::cast_sign_loss, reason = "we are taking the abs before!")]
         let id_token = jwt::StandardClaims::new(
-            &session.client_id,
+            &session.session.client_id,
             ACCESS_TOKEN_VALID_FOR,
             IdTokenClaims {
                 iss: API_DOMAIN.to_owned(),
-                sub: user_data.sub.clone(),
+                sub: session.user.sub.clone(),
                 auth_time: (row.auth_time - OffsetDateTime::UNIX_EPOCH)
                     .whole_seconds()
                     .wrapping_abs() as u64,
-                nonce: session.nonce,
+                nonce: session.session.nonce,
             },
         );
 
         let claims = jwt::StandardClaims::new(
-            session.client_id,
+            session.session.client_id,
             ACCESS_TOKEN_VALID_FOR,
             jwt::AccesTokenClaims {
-                sub: user_data.sub.clone(),
+                sub: session.user.sub.clone(),
             },
         );
         let access_token =
             jwt::encode(&claims, &self.private_key).map_err(|_| OAuth2ApiResponse::Internal)?;
+
+        txn.commit().await.map_err(OAuth2ApiResponse::db)?;
 
         Ok(Json(TokenResponse {
             access_token,
@@ -558,33 +545,54 @@ impl MainRouter {
         }))
     }
 
+    #[oai(path = "/revoke", method = "post")]
+    async fn revoke(&self, body: Form<RevokeRequest>) -> OAuth2Result<()> {
+        sqlx::query!(
+            "delete from auth_refresh_tokens where refresh_token = $1",
+            body.token
+        )
+        .execute(&self.db)
+        .await
+        .map_err(OAuth2ApiResponse::db)?;
+        Ok(())
+    }
+
     #[oai(path = "/userinfo", method = "post", method = "get")]
     async fn userinfo_post(&self, user: User) -> Json<jwt::UserInfoClaims> {
         Json(jwt::UserInfoClaims {
             sub: user.get_id().to_owned(),
         })
     }
-    fn redirect_provider(
+    async fn redirect_provider(
         &self,
         body: AuthorizeBody,
         code: String,
         url: String,
         redirect_uri: &Uri,
+        ctx: &OAuth2ErrorCtx<'_>,
     ) -> Response<AuthorizeResponse> {
         // extension of params: provider
-        let session = context::AuthSession {
-            redirect_uri: body.redirect_uri,
-            client_id: body.client_id,
-            state: body.state,
-            nonce: body.nonce,
-            callback: body.server_callback,
-            code_challenge: body.code_challenge,
-
-            validated_user: None,
-            datasharing_confirmed: false,
-            redirect_requires_datasharing: !is_teknologappen_domain(redirect_uri),
-        };
-        self.auth_sessions.insert(code, session);
+        if sqlx::query!(
+            "insert into sessions 
+            (id, redirect_uri, client_id, state, nonce, callback_url_v1, code_challenge,
+             datasharing_confirmed, redirect_requires_datasharing)
+            values ($1, $2, $3, $4, $5, $6, $7, false, $8)",
+            code,
+            body.redirect_uri,
+            body.client_id,
+            body.state,
+            body.nonce,
+            body.server_callback.map(|cb| cb.callback_url_v1),
+            body.code_challenge,
+            !is_teknologappen_domain(redirect_uri)
+        )
+        .execute(&self.db)
+        .await
+        .map_err(MinilithEndpointError::from)
+        .is_err()
+        {
+            return oauth2error_redirect(OAuth2ErrorKind::Internal, "db", ctx);
+        }
 
         Response::new(AuthorizeResponse::redirect())
             .status(StatusCode::FOUND)
@@ -629,8 +637,8 @@ impl MainRouter {
             )
             .into();
         }
-        let ru = &body.redirect_uri;
-        let ctx = OAuth2ErrorCtx(ru, self, "/oidc/v1/authorize");
+        let ru = body.redirect_uri.clone();
+        let ctx = OAuth2ErrorCtx(&ru, self, "/oidc/v1/authorize");
 
         if body.request.is_some() {
             return oauth2error_redirect(OAuth2ErrorKind::RequestNotSupported, "", &ctx);
@@ -730,18 +738,19 @@ impl MainRouter {
             }
         }
 
-        let (code, redirect) = match self.get_provider(provider, &ctx) {
+        let (code, redirect) = match self.get_provider(provider, &ctx).await {
             Ok(value) => value,
             Err(err) => return err,
         };
 
-        self.redirect_provider(body.0, code, redirect, &redirect_uri)
+        self.redirect_provider(body.0, code, redirect, &redirect_uri, &ctx)
+            .await
     }
     #[allow(clippy::result_large_err, reason = "poem requires this type")]
-    fn get_provider(
+    async fn get_provider(
         &self,
         provider: &str,
-        ctx: &OAuth2ErrorCtx,
+        ctx: &OAuth2ErrorCtx<'_>,
     ) -> Result<(String, String), Response<AuthorizeResponse>> {
         Ok(match provider {
             "lu" => {
@@ -761,19 +770,29 @@ impl MainRouter {
                         error!("Failed to create LU SSO link");
                         oauth2error_redirect(OAuth2ErrorKind::Internal, "lu sso saml2 error", ctx)
                     })?;
-                self.saml2_request_id_cache.insert(req.id.clone(), ());
+                sqlx::query!(
+                    "insert into saml2_request_id_cache (id) values ($1)",
+                    req.id
+                )
+                .execute(&self.db)
+                .await
+                .map_err(|error| {
+                    drop(MinilithEndpointError::db(error));
+                    oauth2error_redirect(OAuth2ErrorKind::Internal, "insert to cache failed", ctx)
+                })?;
                 debug!("Added ID {} to saml2 request id cache", req.id);
                 (req.id, redirect.to_string())
             }
             "email" => {
-                let code = random_id();
+                let code = Uuid::new_v4();
                 let redirect = format!("{WEBSITE_DOMAIN}/providers/email/?code={code}");
-                (code, redirect)
+                (code.to_string(), redirect)
             }
+            #[cfg(debug_assertions)]
             "test" => {
-                let code = random_id();
+                let code = Uuid::new_v4();
                 let redirect = format!("{WEBSITE_DOMAIN}/providers/test/?code={code}");
-                (code, redirect)
+                (code.to_string(), redirect)
             }
             _ => {
                 return Err(oauth2error_redirect(
@@ -792,18 +811,28 @@ impl MainRouter {
         body: Json<DatasharingRequest>,
         headers: &poem::http::HeaderMap,
     ) -> Response<AuthorizeResponse> {
-        let Some(mut session) = self.auth_sessions.get(&body.code) else {
-            warn!(
-                "Tried to confirm datasharing with a code which is not in the database ({})",
-                body.code
-            );
-            return OAuth2ApiResponse::oauth2error(
-                OAuth2ErrorKind::InvalidRequest,
-                "no such code, try logging in from the start again",
-            )
-            .into();
+        let mut session = match self
+            .get_validated_session(&body.code)
+            .await
+            .map_err(|error| {
+                drop(MinilithEndpointError::db(error));
+                OAuth2ApiResponse::oauth2error(OAuth2ErrorKind::Internal, "db")
+            }) {
+            Ok(Some(session)) => session,
+            Ok(None) => {
+                warn!(
+                    "Tried to confirm datasharing with a code which is not in the database ({})",
+                    body.code
+                );
+                return OAuth2ApiResponse::oauth2error(
+                    OAuth2ErrorKind::InvalidRequest,
+                    "no such code or not validated, try logging in from the start again",
+                )
+                .into();
+            }
+            Err(err) => return err.into(),
         };
-        let ru = &session.redirect_uri;
+        let ru = &session.session.redirect_uri;
         let ctx = OAuth2ErrorCtx(ru, self, "/oidc/v1/confirm-datasharing");
         if headers
             .get("origin")
@@ -822,25 +851,28 @@ impl MainRouter {
                 &ctx,
             );
         }
-        if session.validated_user.is_none() {
-            warn!(
-                "Tried to confirm datasharing for a request which was not validated ({})",
-                body.code
-            );
+        if let Err(err) = sqlx::query!(
+            "update sessions set datasharing_confirmed = true where id = $1",
+            body.code
+        )
+        .execute(&self.db)
+        .await
+        {
+            drop(MinilithEndpointError::db(err));
+            return oauth2error_redirect(OAuth2ErrorKind::Internal, "db", &ctx);
+        }
+
+        session.session.datasharing_confirmed = true;
+
+        let Ok(url) = self.provider_callback_next_url(&body.code, &session).await else {
             return oauth2error_redirect(
-                OAuth2ErrorKind::InvalidRequest,
-                "you are not authenticated, try logging in from the start again",
+                OAuth2ErrorKind::ServerCallbackFailed,
+                "failed to send user data to the website you are trying to access",
                 &ctx,
             );
-        }
-        session.datasharing_confirmed = true;
-        self.auth_sessions
-            .insert(body.code.clone(), session.clone());
-
+        };
         Response::new(AuthorizeResponse::DatasharingOk(Json(
-            DatasharingResponse {
-                url: session.provider_callback_next_url(&body.code),
-            },
+            DatasharingResponse { url },
         )))
     }
 }

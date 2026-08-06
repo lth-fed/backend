@@ -1,10 +1,14 @@
 use std::ops::Deref;
+use std::str::FromStr as _;
 
 use fed_auth_verifier::{User, callbacks::AuthCallbackDataV1};
-use minilith_errors::MinilithEndpointError;
+use minilith_errors::{MinilithEndpointError, MinilithErrorResultExt as _};
+use poem_openapi::payload::Response;
 use poem_openapi::{Enum, Object, OpenApi, payload::Json};
+use sqlx::postgres::types::PgLTree;
 use sqlx::types::Uuid;
 use sqlx::types::time::OffsetDateTime;
+use tracing::warn;
 
 use crate::context::ContextWrapper;
 use crate::group::Path;
@@ -107,10 +111,10 @@ impl Router {
         Ok(Json(Me {
             id: user.id,
             name: self
-                .decrypt_string(user.name, &user.nonce)
+                .decrypt_string(user.name)
                 .wrap_err_encryption("USER_ME_NAME")?,
             language: self
-                .decrypt_string(user.language, &user.nonce)
+                .decrypt_string(user.language)
                 .wrap_err_encryption("USER_ME_LANG")?,
             creation: user.creation,
             groups,
@@ -137,16 +141,7 @@ impl Router {
             ));
         }
 
-        let nonce = sqlx::query_scalar!("select nonce from users where id = $1", user.get_id())
-            .fetch_one(&self.db)
-            .await?;
-        let nonce: [u8; _] = nonce
-            .as_slice()
-            .try_into()
-            .ok()
-            .wrap_err_encryption("USER_LANGUAGE_NONCE")?;
-        let mut encrypted_language = language.into_bytes();
-        self.endecrypt_mut_slice(&mut encrypted_language, &nonce);
+        let encrypted_language = self.encrypt(&language);
         sqlx::query!(
             "update users set language = $1 where id = $2",
             encrypted_language,
@@ -198,7 +193,7 @@ impl Router {
             body.visible,
             body.notification_level as NotificationLevel,
         )
-        .fetch_one(&self.db)
+        .execute(&self.db)
         .await?;
         Ok(())
     }
@@ -206,24 +201,77 @@ impl Router {
     ///
     /// DB, PARAM.
     #[oai(path = "/auth-callback/v1", method = "post")]
-    async fn auth_callback_v1(&self, cb_data: AuthCallbackDataV1) -> MinilithResult<()> {
-        let nonce: [u8; 12] = rand::random();
-        // this means we're leaking the name's length & lang's length, but I'm (Erik Davisson) is
-        // pretty sure that's fine.
-        let mut name: Vec<u8> = cb_data.full_name.into();
-        self.endecrypt_mut_slice(&mut name, &nonce);
+    async fn auth_callback_v1(&self, cb_data: AuthCallbackDataV1) -> MinilithResult<Response<()>> {
+        if let Some(name) = cb_data.full_name {
+            let name = self.encrypt(&name);
 
-        sqlx::query!(
-            "insert into users (id, name, language, nonce)
-            values ($1, $2, $3, $4) on conflict do nothing",
-            cb_data.sub,
-            name,
-            &[],
-            &nonce
-        )
-        .execute(&self.db)
-        .await?;
+            sqlx::query!(
+                "insert into users (id, name, language)
+                    values ($1, $2, $3) on conflict (id) do update
+                        set name = excluded.name",
+                cb_data.sub,
+                name,
+                self.encrypt("")
+            )
+            .execute(&self.db)
+            .await?;
 
-        Ok(())
+            if let Some(guild) = cb_data.lth_guild {
+                let guild_path = PgLTree::from_str(&format!("tlth.{}", guild.to_str()))
+                    .wrap_err_internal("l1: failed to get ltree path from guild")?;
+                // membership
+                let gid = sqlx::query_scalar!(
+                    "insert into group_memberships (user_id, group_id)
+                    select $1 as user_id, id as group_id 
+                    from groups where path = $2
+                    on conflict do nothing
+                    returning group_id",
+                    cb_data.sub,
+                    guild_path
+                )
+                .fetch_one(&self.db)
+                .await?;
+                // visible + notifications from guild
+                sqlx::query!(
+                    "insert into user_group_settings (user_id, group_id,
+                        visible, notification_level)
+                    values ($1, $2, true, 'all'::notification_level)
+                    on conflict do nothing",
+                    cb_data.sub,
+                    gid
+                )
+                .execute(&self.db)
+                .await?;
+                // visible - notifications from tlth
+                sqlx::query!(
+                    "insert into user_group_settings (user_id, group_id,
+                        visible, notification_level)
+                    select $1 as user_id, id as group_id, true as visible,
+                    'none'::notification_level as notification_level
+                    from groups where path = 'tlth'
+                    on conflict do nothing",
+                    cb_data.sub,
+                )
+                .execute(&self.db)
+                .await?;
+            } else {
+                warn!(user_id = cb_data.sub, "User signed up without guild");
+            }
+
+            Ok(Response::new(()))
+        } else {
+            let has_user = sqlx::query_scalar!(
+                "select exists (
+                        select 1 from users where id = $1
+                    ) as \"exists!\"",
+                cb_data.sub
+            )
+            .fetch_one(&self.db)
+            .await?;
+            if !has_user {
+                return Ok(Response::new(()).status(poem::http::StatusCode::CREATED));
+            }
+            Ok(Response::new(()))
+        }
     }
 }

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into activity_host_invites (activity_id, group_id)\n        values ($1, $2) on conflict do nothing",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "601e2a3b91ee890a488cbb0931e1dd2be6d3002f1f7b6c78ab05180979563afc"
+}

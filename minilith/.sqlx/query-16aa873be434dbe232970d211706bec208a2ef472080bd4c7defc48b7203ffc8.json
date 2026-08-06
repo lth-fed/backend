@@ -1,0 +1,69 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            select distinct\n                g.id, g.path, g.limit_membership_visibility,\n                g.name as \"name!: DIS\",\n                g.description as \"description!: DIS\",\n                g.deleted,\n                logo.id as logo_id,\n                logo.url as logo_url\n            from groups g\n            join group_memberships gm on gm.user_id = $1\n            join groups mg on mg.id = gm.group_id\n            join images logo on logo.id = g.logo_id\n            where subpath(g.path, 0, 1) = subpath(mg.path, 0, 1)\n            and g.deleted = false\n            order by g.path\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "path",
+        "type_info": {
+          "Custom": {
+            "name": "ltree",
+            "kind": "Simple"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "limit_membership_visibility",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 3,
+        "name": "name!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "description!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 5,
+        "name": "deleted",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
+        "name": "logo_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 7,
+        "name": "logo_url",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "16aa873be434dbe232970d211706bec208a2ef472080bd4c7defc48b7203ffc8"
+}

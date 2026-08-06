@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update groups set deleted = true where path <@ $1 or id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        {
+          "Custom": {
+            "name": "ltree",
+            "kind": "Simple"
+          }
+        },
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ac5743a602a7549fbde3158c2e572d529ff8a29e0c695e69ab7d08e96e316d5e"
+}

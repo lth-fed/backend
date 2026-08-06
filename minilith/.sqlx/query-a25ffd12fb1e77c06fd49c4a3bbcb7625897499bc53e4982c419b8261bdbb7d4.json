@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select deleted from groups where id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "deleted",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a25ffd12fb1e77c06fd49c4a3bbcb7625897499bc53e4982c419b8261bdbb7d4"
+}

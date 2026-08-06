@@ -284,6 +284,15 @@ impl User {
         }
 
         let data = decode_jwt::<Claims>(&token.token, context)?;
+        #[cfg(not(debug_assertions))]
+        if data.claims.sub.starts_with("test:") {
+            use minilith_errors::MinilithEndpointError;
+
+            return Err(MinilithEndpointError::unauthorized(
+                "test: account not allowed in production",
+                "",
+            ));
+        }
         span.set_attribute(opentelemetry::KeyValue::new(
             opentelemetry_semantic_conventions::attribute::USER_ID,
             data.claims.sub.clone(),

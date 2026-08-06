@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from activity_hosts where activity_id = $1 and group_id = any($2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6d9edff34cbd45382ac008b484e40f90b51ef14e3b70ffdbc69e9b5f496cce46"
+}
