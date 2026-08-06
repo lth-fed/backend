@@ -103,7 +103,7 @@ pub async fn get_endpoint(
     }
 
     let auth_context = JwkContext::<AuthUrl>::new("teknologappen").await?;
-    let transaction_context = JwkContext::<TransactionsUrl>::new("teknologappen").await?;
+    let transaction_context = JwkContext::<TransactionsUrl>::new("esek").await?;
     let api_service = OpenApiService::new(
         (
             admin::Router {

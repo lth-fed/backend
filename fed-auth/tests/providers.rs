@@ -20,6 +20,16 @@ async fn test(db: PgPool) -> color_eyre::Result<()> {
         code: String,
         accepted: bool,
     }
+    #[derive(Serialize)]
+    struct PoBody {
+        code: String,
+        name: String,
+    }
+    #[derive(Deserialize)]
+    struct PoQuery {
+        code: String,
+        sub: String,
+    }
     #[derive(Deserialize)]
     struct ResponseQuery {
         code: String,
@@ -61,6 +71,20 @@ async fn test(db: PgPool) -> color_eyre::Result<()> {
     let body_url = body.value().object().get("url").string();
     println!("body.url: {body_url}");
     let url: Uri = body_url.parse().unwrap();
+    let query = url.query().unwrap();
+    let params: PoQuery = serde_urlencoded::from_str(query).unwrap();
+    assert_eq!(params.sub, "test:er8380da-s");
+    let mut response = app
+        .post("/api/v0/personal-information")
+        .body_json(&PoBody {
+            code: params.code,
+            name: "Erik Davidsson".to_owned(),
+        })
+        .send()
+        .await;
+    let body = response.0.take_body().into_string().await.unwrap();
+    println!("body: {body}");
+    let url: Uri = body.parse().unwrap();
     let query = url.query().unwrap();
     let params: ResponseQuery = serde_urlencoded::from_str(query).unwrap();
     let code = &params.code;

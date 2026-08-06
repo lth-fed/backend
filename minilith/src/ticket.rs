@@ -1286,7 +1286,7 @@ impl Router {
                 TransactionState::Refunded => {
                     let affected = sqlx::query!(
                         "update purchased_tickets set owner_id = 'refunded:'
-                    where transaction_id = $1",
+                        where transaction_id = $1",
                         data.transaction_id
                     )
                     .execute(&self.db)

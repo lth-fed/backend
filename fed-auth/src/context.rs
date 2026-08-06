@@ -122,8 +122,10 @@ impl Context {
             configure_alert_email(EmailClient::new("ALERT")?)?;
             let email_client = EmailClient::new("MAIL")?;
             #[cfg(not(debug_assertions))]
-            let email_client =
-                Some(email_client.wrap_err("`MAIL_*` email configuration is required")?);
+            let email_client = {
+                use color_eyre::eyre::ContextCompat as _;
+                Some(email_client.wrap_err("`MAIL_*` email configuration is required")?)
+            };
             email_client
         };
 

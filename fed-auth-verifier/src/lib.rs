@@ -74,7 +74,7 @@ impl AuthContextProvider for TransactionsUrl {
     fn url() -> String {
         #[cfg(debug_assertions)]
         {
-            "http://locahost:8002/v0/jwks".to_owned()
+            "http://localhost:8002/v0/jwks".to_owned()
         }
         #[cfg(not(debug_assertions))]
         {
@@ -291,7 +291,7 @@ impl User {
             return Err(MinilithEndpointError::unauthorized(
                 "test: account not allowed in production",
                 "",
-            ));
+            ).into());
         }
         span.set_attribute(opentelemetry::KeyValue::new(
             opentelemetry_semantic_conventions::attribute::USER_ID,
