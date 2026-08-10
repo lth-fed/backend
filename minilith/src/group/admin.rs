@@ -298,8 +298,8 @@ pub async fn create_adminship(
 
 /// Creates an adminship and reports whether a row was actually inserted.
 ///
-/// If the user is not already a member of the group, a membership is created
-/// first.
+/// The matching membership is created first because every administrator is
+/// also a member, including identities invited before their first login.
 ///
 /// # Errors
 ///
@@ -316,12 +316,11 @@ pub async fn create_adminship_change(
         ));
     }
     let row = sqlx::query!(
-        r#"with ensure_membership as (
+        r#"with ensured_membership as (
             insert into group_memberships (user_id, group_id)
             values ($1, $2)
             on conflict do nothing
-        ),
-        inserted_adminship as (
+        ), inserted_adminship as (
             insert into group_adminships (user_id, group_id)
             values ($1, $2)
             on conflict do nothing
@@ -399,7 +398,7 @@ mod tests {
     use super::*;
     use sqlx::PgPool;
 
-    use crate::group::id_by_path;
+    use crate::group::{id_by_path, member::closest_user_membership};
 
     async fn id_of(db: &PgPool, path: &str) -> Uuid {
         let path: Path = path.parse().unwrap();
@@ -409,22 +408,39 @@ mod tests {
     #[sqlx::test(fixtures("adminship"))]
     async fn create_adminship_for_non_member(db: PgPool) {
         let e_id = id_of(&db, "tlth.e").await;
+        let invited = "email:invited@example.test";
 
-        let adminship = create_adminship(&db, "email:user_a", e_id).await.unwrap();
-        assert_eq!(adminship.user_id, "email:user_a");
+        let adminship = create_adminship(&db, invited, e_id).await.unwrap();
+        assert_eq!(adminship.user_id, invited);
         assert_eq!(adminship.group_path.to_string(), "tlth.e");
 
         assert_eq!(
             group_admins(&db, e_id).await.unwrap(),
-            vec!["email:user_a"],
+            vec![invited],
             "the new adminship should be visible via group_admins",
         );
         assert_eq!(
-            closest_user_adminship(&db, "email:user_a", e_id)
+            closest_user_adminship(&db, invited, e_id)
                 .await
                 .unwrap()
                 .map(|path| path.to_string()),
             Some("tlth.e".to_owned()),
+        );
+        assert!(
+            closest_user_membership(&db, invited, e_id)
+                .await
+                .unwrap()
+                .is_some(),
+            "an adminship must retain its matching membership",
+        );
+        assert!(
+            !sqlx::query_scalar!(
+                "select exists(select 1 from users where id = $1) as \"exists!\"",
+                invited,
+            )
+            .fetch_one(&db)
+            .await
+            .unwrap()
         );
     }
 

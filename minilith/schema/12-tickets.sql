@@ -71,6 +71,26 @@ create table ticket_addon_options (
     constraint bookkeeping_lengths_consistent check (cardinality(bookkeeping_prices) = cardinality(bookkeeping_price_categories))
 );
 
+-- see the bottom of this document below for the triggers which make sure one reference is valid
+create table users_in_purchase_flow (
+    user_id text primary key references users(id),
+    ticket_kind_id uuid not null references ticket_kinds(id),
+    -- denormalized since the "child" tables also have this, but it's very convenient and enforced by DB
+    unique (user_id, ticket_kind_id),
+    -- at least one of these need to be valid
+    release_queue text,
+    reservation_queue text,
+    reservation text,
+    constraint purchase_flow_references_own_user check (
+        (release_queue is null or release_queue = user_id)
+        and (reservation_queue is null or reservation_queue = user_id)
+        and (reservation is null or reservation = user_id)
+    ),
+    constraint purchase_flow_has_at_most_one_state check (
+        num_nonnulls(release_queue, reservation_queue, reservation) <= 1
+    )
+);
+
 -- people who have started queuing to buy a ticket
 -- only applicable at biljettsläpp
 -- once the ticket is released for purchase, convert all the queuers to `ticket_queue` with random placements
@@ -82,10 +102,9 @@ create table ticket_release_queuers (
     -- a biljettsläpp is only per ticket_kind, not per activity
     ticket_kind_id uuid not null references ticket_kinds(id),
     -- remove after 20 minutes, should refresh after 15 minutes
-    started_queueing timestamptz not null
-
-    -- can't check this since it requires an INNER JOIN on ticket_kinds (BACKEND HAS TO CHECK!)
-    -- constraint not_queuing_for_multiple_ticket_types unique (ticket_kind_id->activity_id, user_id)
+    started_queueing timestamptz not null,
+    foreign key (user_id, ticket_kind_id)
+        references users_in_purchase_flow(user_id, ticket_kind_id)
 );
 -- there should be a worker that every second or so checks if there are any available tickets,
 -- then pop the user with the best placement & converts it into a reservation & decrements available
@@ -103,35 +122,34 @@ create table ticket_reservation_queuers (
     -- this value is based on total placement. To get relative placement (i.e. until one can buy a ticket),
     -- subtract the ticket_kind_id->reserved_or_purchased_tickets value
     placement integer not null check (placement >= 0),
-    unique (ticket_kind_id, placement)
+    unique (ticket_kind_id, placement),
+    foreign key (user_id, ticket_kind_id)
+        references users_in_purchase_flow(user_id, ticket_kind_id)
 );
 
 -- people who have reserved a ticket
 create table ticket_reservations (
     id uuid primary key default uuidv4(),
-    user_id text unique references users(id),
+    user_id text not null unique references users(id),
     ticket_kind_id uuid not null references ticket_kinds(id),
     -- could be null before transaction is initiated
     transaction_id uuid,
     -- remove after this!
     -- or if transaction is currently happening and not cancellable wait for max an hour or smth
-    timeout timestamptz not null
-
-    -- can't check this since it requires an INNER JOIN on ticket_kinds (BACKEND HAS TO CHECK!)
-    --constraint not_reserve_multiple_ticket_kinds unique (ticket_kind_id->activity_id, user_id)
+    timeout timestamptz not null,
+    foreign key (user_id, ticket_kind_id)
+        references users_in_purchase_flow(user_id, ticket_kind_id)
 );
 -- the addons for the reserved ticket
 create table ticket_reservation_addons (
     addon_id uuid not null references ticket_addons(id),
-    ticket_id uuid not null references ticket_reservations(id),
+    ticket_id uuid not null references ticket_reservations(id) on delete cascade,
     ---
     selected_options integer[] not null,
     selected_text text not null,
     primary key (ticket_id, addon_id)
 );
 
--- ONE PERSON CAN ONLY OWN ONE TICKET KIND PER ACTIVITY
--- the backend has to check this when both buying and transferring a ticket!
 create table purchased_tickets (
     id uuid primary key default uuidv4(),
     ticket_kind_id uuid not null references ticket_kinds(id),
@@ -155,3 +173,60 @@ create table purchased_ticket_validations (
     purchased_ticket_id uuid not null references purchased_tickets(id),
     timestamp timestamptz not null default now()
 );
+
+create function ensure_purchase_flow_has_state() returns trigger
+language plpgsql as $$
+declare
+    checked_user text;
+begin
+    if tg_op = 'DELETE' then
+        checked_user := old.user_id;
+    else
+        checked_user := new.user_id;
+    end if;
+    if exists (
+        select 1 from users_in_purchase_flow flow
+        where flow.user_id = checked_user
+        and (
+            num_nonnulls(release_queue, reservation_queue, reservation) != 1
+            or (release_queue is not null) != exists (
+                select 1 from ticket_release_queuers
+                where user_id = flow.user_id and ticket_kind_id = flow.ticket_kind_id
+            )
+            or (reservation_queue is not null) != exists (
+                select 1 from ticket_reservation_queuers
+                where user_id = flow.user_id and ticket_kind_id = flow.ticket_kind_id
+            )
+            or (reservation is not null) != exists (
+                select 1 from ticket_reservations
+                where user_id = flow.user_id and ticket_kind_id = flow.ticket_kind_id
+            )
+        )
+    ) then
+        raise exception 'purchase flow for user % has inconsistent state', checked_user;
+    end if;
+    return null;
+end;
+$$;
+
+-- Transitions briefly have zero or two child rows, so consistency is checked
+-- at transaction commit rather than after each statement.
+create constraint trigger purchase_flow_has_state
+after insert or update on users_in_purchase_flow
+deferrable initially deferred
+for each row execute function ensure_purchase_flow_has_state();
+
+create constraint trigger release_queuer_has_matching_flow
+after insert or update or delete on ticket_release_queuers
+deferrable initially deferred
+for each row execute function ensure_purchase_flow_has_state();
+
+create constraint trigger reservation_queuer_has_matching_flow
+after insert or update or delete on ticket_reservation_queuers
+deferrable initially deferred
+for each row execute function ensure_purchase_flow_has_state();
+
+create constraint trigger reservation_has_matching_flow
+after insert or update or delete on ticket_reservations
+deferrable initially deferred
+for each row execute function ensure_purchase_flow_has_state();

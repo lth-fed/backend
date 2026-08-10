@@ -315,10 +315,6 @@ impl Kind {
         self.has_been_purchased
     }
 
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "compares the corresponding API fields"
-    )]
     pub(crate) fn immutable_fields_match(
         &self,
         activity_id: Uuid,
@@ -575,31 +571,30 @@ impl Router {
     ///
     /// None
     #[oai(path = "/queue", method = "put")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keeps the three purchase-flow transitions and their lock order together"
+    )]
     async fn queue(
         &self,
         user: User,
         req: Json<QueueRequest>,
     ) -> MinilithResult<Json<PurchaseStatus>> {
-        ensure_user_may_purchase_ticket(&self.db, user.get_id(), req.ticket_kind).await?;
-        let has_reservation = sqlx::query_scalar!(
-            "select exists (
-                select 1 from ticket_reservations where user_id = $1
-            ) as \"exists!\"",
-            user.get_id()
+        let mut txn = self.db.begin().await?;
+        ensure_user_may_purchase_ticket(&mut txn.executor(), user.get_id(), req.ticket_kind)
+            .await?;
+        reserve_user_purchase_flow(
+            &mut txn,
+            &[user.get_id().to_owned()],
+            req.ticket_kind,
+            &[false],
         )
-        .fetch_one(&self.db)
         .await?;
-        if has_reservation {
-            return Err(MinilithEndpointError::bad_frontend_code(
-                "user already has reservation, cancel it before queuing again",
-                "",
-            ));
-        }
         let row = sqlx::query!(
             "select has_been_released, purchasing_available_stop from ticket_kinds where id = $1",
             req.ticket_kind
         )
-        .fetch_one(&self.db)
+        .fetch_one(&mut txn.executor())
         .await?;
 
         if row.purchasing_available_stop < OffsetDateTime::now_utc() {
@@ -610,70 +605,77 @@ impl Router {
         }
 
         if row.has_been_released {
-            // we can only be in 1 type of queue
-            let _: Result<_, _> = self.unqueue(user.clone()).await;
             let row = sqlx::query!(
-                "select
-                (select count(user_id) from ticket_reservation_queuers
-                 where ticket_kind_id = $1) as \"count!\",
+                "select (
+                    select count(user_id) from ticket_reservation_queuers
+                    where ticket_kind_id = $1
+                ) as \"count!\",
                 reserved_or_purchased_tickets, max_tickets
                 from ticket_kinds where id = $1",
                 req.ticket_kind
             )
-            .fetch_one(&self.db)
+            .fetch_one(&mut txn.executor())
             .await?;
 
-            if row.reserved_or_purchased_tickets < row.max_tickets && row.count == 0 {
-                let mut txn = self.db.begin().await?;
-                if reserve_ticket_capacity(&mut txn, req.ticket_kind, 1).await? == 1 {
-                    // give reservation
-                    sqlx::query!(
-                        "insert into ticket_reservations
+            if row.reserved_or_purchased_tickets < row.max_tickets
+                && row.count == 0
+                && reserve_ticket_capacity(&mut txn, req.ticket_kind, 1).await? == 1
+            {
+                // give reservation
+                let affected = sqlx::query!(
+                    "insert into ticket_reservations
                         (user_id, ticket_kind_id, transaction_id, timeout)
                         values ($1, $2, null, now() + $3)",
-                        user.get_id(),
-                        req.ticket_kind,
-                        new_timeout_interval()
-                    )
-                    .execute(&mut txn.executor())
-                    .await?;
-                    if txn.commit().await.is_ok() {
-                        return Ok(Json(PurchaseStatus::Reserved));
-                    }
-                }
+                    user.get_id(),
+                    req.ticket_kind,
+                    new_timeout_interval()
+                )
+                .execute(&mut txn.executor())
+                .await?;
+                ensure_affected_rows(
+                    affected.rows_affected(),
+                    1,
+                    "failed to create immediate ticket reservation",
+                )?;
+                set_user_purchase_flow_reservation(&mut txn, user.get_id()).await?;
+
+                txn.commit().await?;
+                return Ok(Json(PurchaseStatus::Reserved));
                 // if the txn fails, it's because we've tried to reserve too many, stand in queue
                 // instead:
             }
 
-            sqlx::query!(
+            let affected = sqlx::query!(
                 "insert into ticket_reservation_queuers (user_id, ticket_kind_id, placement) \
                 select $1, $2,
                     -- take last placement, add one
                     coalesce(
-                        (select placement
-                        from ticket_reservation_queuers
-                        order by placement desc limit 1),
-                    0) + 1
-                
-                where not exists (
-                    select 1 from purchased_tickets where ticket_kind_id = $2 and owner_id = $1
-                )
+                        (
+                            select placement
+                            from ticket_reservation_queuers
+                            where ticket_kind_id = $2
+                            order by placement desc limit 1
+                        ),
+                        0
+                    ) + 1
+
                 on conflict (user_id) do update
                 set ticket_kind_id = excluded.ticket_kind_id, placement = excluded.placement",
                 user.get_id(),
                 req.ticket_kind
             )
-            .execute(&self.db)
+            .execute(&mut txn.executor())
             .await?;
-            // if has_been_released, move to reservation queue / reservation
-            // there's an edge-case here where this is inserted into the queue since from above it has
-            // not been released. But then it released between there and here.
-            // `update_misplaced_queuer` handles that.
+            ensure_affected_rows(
+                affected.rows_affected(),
+                1,
+                "failed to enter reservation queue",
+            )?;
+            set_user_purchase_flow_reservation_queue(&mut txn, user.get_id()).await?;
+            txn.commit().await?;
             Ok(Json(PurchaseStatus::ReservationQueued))
         } else {
-            // we can only be in 1 type of queue
-            let _: Result<_, _> = self.drop_reservation(user.clone()).await;
-            sqlx::query!(
+            let affected = sqlx::query!(
                 "insert into ticket_release_queuers (user_id, ticket_kind_id, started_queueing) \
                 select $1, $2, now()
                 where not exists (
@@ -685,33 +687,14 @@ impl Router {
                 user.get_id(),
                 req.ticket_kind
             )
-            .execute(&self.db)
+            .execute(&mut txn.executor())
             .await?;
+            // if the ticket is released now we're either gonna be in the release or the
+            // update_misplaced_queuer will handle us
+            ensure_affected_rows(affected.rows_affected(), 1, "failed to enter release queue")?;
+            set_user_purchase_flow_release_queue(&mut txn, user.get_id()).await?;
+            txn.commit().await?;
             Ok(Json(PurchaseStatus::ReleaseQueued))
-        }
-    }
-    /// Does not release a reservation.
-    ///
-    /// Call this if you no longer want to stay in a queue.
-    ///
-    /// # Errors
-    ///
-    /// - not found when the user is not release queued
-    #[oai(path = "/queue", method = "delete")]
-    async fn unqueue(&self, user: User) -> MinilithResult<()> {
-        let rows = sqlx::query_scalar!(
-            "delete from ticket_release_queuers where user_id = $1",
-            user.get_id()
-        )
-        .execute(&self.db)
-        .await?;
-        if rows.rows_affected() == 0 {
-            // not MinilithEndpointError::not_found() since that gives an error
-            Err(MinilithEndpointError::NotFound(Json(
-                minilith_errors::MinilithError::new("no reservation"),
-            )))
-        } else {
-            Ok(())
         }
     }
     /// Get the status of the queue. If 404 & user has started transacting, this means the purchase
@@ -722,111 +705,161 @@ impl Router {
     /// - 404 not found when the user is not queued (neither reservation queue nor release queue)
     #[oai(path = "/queue", method = "get")]
     async fn queue_status(&self, user: User) -> MinilithResult<Json<QueueResponse>> {
-        let reservation = sqlx::query!(
-            "select ticket_kind_id, timeout
-            from ticket_reservations
-            where user_id = $1",
-            user.get_id()
-        )
-        .fetch_optional(&self.db)
-        .await?;
-        if let Some(row) = reservation {
-            return Ok(Json(QueueResponse {
-                ticket_kind: row.ticket_kind_id,
-                placement: Some(0),
-                timeout: Some(row.timeout),
-                start_transaction_before: Some(row.timeout - 1 * time::Duration::MINUTE),
-            }));
+        let mut txn = self.db.begin().await?;
+        let flow = lock_user_purchase_flow(&mut txn, user.get_id(), None).await?;
+        match flow {
+            PurchaseFlow::Reservation => {
+                let reservation = sqlx::query!(
+                    "select ticket_kind_id, timeout
+                    from ticket_reservations
+                    where user_id = $1",
+                    user.get_id()
+                )
+                .fetch_one(&mut txn.executor())
+                .await?;
+                Ok(Json(QueueResponse {
+                    ticket_kind: reservation.ticket_kind_id,
+                    placement: Some(0),
+                    timeout: Some(reservation.timeout),
+                    start_transaction_before: Some(
+                        reservation.timeout - 1 * time::Duration::MINUTE,
+                    ),
+                }))
+            }
+            PurchaseFlow::ReservationQueue => {
+                let reservation_queue = sqlx::query!(
+                    "select placement, reserved_or_purchased_tickets, ticket_kind_id
+                    from ticket_reservation_queuers
+                    inner join ticket_kinds on
+                        (ticket_kinds.id = ticket_reservation_queuers.ticket_kind_id)
+                    where user_id = $1",
+                    user.get_id()
+                )
+                .fetch_one(&mut txn.executor())
+                .await?;
+                Ok(Json(QueueResponse {
+                    ticket_kind: reservation_queue.ticket_kind_id,
+                    placement: Some(
+                        (reservation_queue.placement
+                            - reservation_queue.reserved_or_purchased_tickets)
+                            .max(0),
+                    ),
+                    timeout: None,
+                    start_transaction_before: None,
+                }))
+            }
+            PurchaseFlow::ReleaseQueue => {
+                let queuer = sqlx::query_scalar!(
+                    "select ticket_kind_id from ticket_release_queuers where user_id = $1",
+                    user.get_id()
+                )
+                .fetch_one(&mut txn.executor())
+                .await?;
+                Ok(Json(QueueResponse {
+                    ticket_kind: queuer,
+                    placement: None,
+                    timeout: None,
+                    start_transaction_before: None,
+                }))
+            }
         }
-        let reservation_queue = sqlx::query!(
-            "select placement, reserved_or_purchased_tickets, ticket_kind_id
-            from ticket_reservation_queuers
-            inner join ticket_kinds on (ticket_kinds.id = ticket_reservation_queuers.ticket_kind_id)
-            where user_id = $1",
-            user.get_id()
-        )
-        .fetch_optional(&self.db)
-        .await?;
-        if let Some(row) = reservation_queue {
-            return Ok(Json(QueueResponse {
-                ticket_kind: row.ticket_kind_id,
-                placement: Some((row.placement - row.reserved_or_purchased_tickets).max(0)),
-                timeout: None,
-                start_transaction_before: None,
-            }));
-        }
-        let queuer = sqlx::query_scalar!(
-            "select ticket_kind_id from ticket_release_queuers where user_id = $1",
-            user.get_id()
-        )
-        .fetch_optional(&self.db)
-        .await?;
-        if let Some(id) = queuer {
-            return Ok(Json(QueueResponse {
-                ticket_kind: id,
-                placement: None,
-                timeout: None,
-                start_transaction_before: None,
-            }));
-        }
-        Err(MinilithEndpointError::not_found())
     }
-    /// Cancel the reservation if the user is no longer interested in buying it (e.g. realize they
-    /// are broke).
+    /// Cancel the reservation or drop out of queue if the user is no longer interested in buying
+    /// it (e.g. realize they are broke).
     ///
-    /// Cancelled if this returns 200.
+    /// Cancelled / dropped if this returns 200.
     ///
     /// # Errors
     ///
     /// - 404 not found when the user doesn't have a reservation
-    #[oai(path = "/reservation", method = "delete")]
-    async fn drop_reservation(&self, user: User) -> MinilithResult<()> {
+    /// - 403 if another operation with the transaction flow is happening
+    #[oai(path = "/queue", method = "delete")]
+    async fn drop_transaction_flow(&self, user: User) -> MinilithResult<()> {
         let mut txn = self.db.begin().await?;
-        let Some(row) = sqlx::query!(
-            "delete from ticket_reservations where user_id = $1
-            returning ticket_kind_id, transaction_id",
-            user.get_id(),
-        )
-        .fetch_optional(&mut txn.executor())
-        .await?
-        else {
-            return Err(MinilithEndpointError::NotFound(Json(
-                minilith_errors::MinilithError::new("no reservation"),
-            )));
-        };
-        // try to cancel transaction instead
-        if let Some(id) = row.transaction_id {
-            let resp = self
-                .transactions_post(format!("/v0/{id}/cancel"))
-                .send()
-                .await
-                .wrap_err_internal("failed to cancel transaction due to connection issues")?;
-            if !resp.status().is_success() {
-                return Err(MinilithEndpointError::internal_error(
-                    "l1: transaction cancel failed!",
-                    resp.status(),
-                ));
+        let flow = lock_user_purchase_flow(&mut txn, user.get_id(), None).await?;
+        let ticket_kind_to_fill = match flow {
+            PurchaseFlow::Reservation => {
+                let row = sqlx::query!(
+                    "select ticket_kind_id, transaction_id
+                    from ticket_reservations where user_id = $1
+                    for update",
+                    user.get_id(),
+                )
+                .fetch_one(&mut txn.executor())
+                .await?;
+                // try to cancel transaction instead
+                if let Some(id) = row.transaction_id {
+                    let resp = self
+                        .transactions_post(format!("/v0/{id}/cancel"))
+                        .send()
+                        .await
+                        .wrap_err_internal(
+                            "failed to cancel transaction due to connection issues",
+                        )?;
+                    if !resp.status().is_success() {
+                        return Err(MinilithEndpointError::internal_error(
+                            "l1: transaction cancel failed!",
+                            resp.status(),
+                        ));
+                    }
+                    // transaction is cancelled
+                }
+                let affected = sqlx::query!(
+                    "delete from ticket_reservations where user_id = $1",
+                    user.get_id(),
+                )
+                .execute(&mut txn.executor())
+                .await?;
+                ensure_affected_rows(
+                    affected.rows_affected(),
+                    1,
+                    "reservation disappeared while dropping purchase flow",
+                )?;
+                sqlx::query!(
+                    "update ticket_kinds
+                    set reserved_or_purchased_tickets = reserved_or_purchased_tickets - 1
+                    where id = $1",
+                    row.ticket_kind_id,
+                )
+                .execute(&mut txn.executor())
+                .await?;
+                Some(row.ticket_kind_id)
             }
-            // transaction is cancelled
-        }
-        sqlx::query!(
-            "update ticket_kinds
-            set reserved_or_purchased_tickets = reserved_or_purchased_tickets - 1
-            where id = $1",
-            row.ticket_kind_id,
-        )
-        .execute(&mut txn.executor())
-        .await?;
-        sqlx::query!(
-            "update ticket_reservations
-            set transaction_id = null
-            where user_id = $1",
-            user.get_id(),
-        )
-        .execute(&mut txn.executor())
-        .await?;
-        give_reservations(row.ticket_kind_id, 1, &mut txn).await?;
+            PurchaseFlow::ReleaseQueue => {
+                let affected = sqlx::query_scalar!(
+                    "delete from ticket_release_queuers where user_id = $1",
+                    user.get_id()
+                )
+                .execute(&mut txn.executor())
+                .await?;
+                ensure_affected_rows(
+                    affected.rows_affected(),
+                    1,
+                    "release queuer disappeared while dropping purchase flow",
+                )?;
+                None
+            }
+            PurchaseFlow::ReservationQueue => {
+                let affected = sqlx::query_scalar!(
+                    "delete from ticket_reservation_queuers where user_id = $1",
+                    user.get_id()
+                )
+                .execute(&mut txn.executor())
+                .await?;
+                ensure_affected_rows(
+                    affected.rows_affected(),
+                    1,
+                    "reservation queuer disappeared while dropping purchase flow",
+                )?;
+                None
+            }
+        };
+        unlist_user_purchase_flow(&mut txn, user.get_id()).await?;
         txn.commit().await?;
+
+        if let Some(ticket_kind) = ticket_kind_to_fill {
+            drop(give_reservations_in_new_transaction(&self.db, ticket_kind, 1).await);
+        }
         Ok(())
     }
     /// Try to lock in this reservation by purchasing the ticket.
@@ -863,6 +896,14 @@ impl Router {
         // this is here so nobody else tries to mess with our reservation while we are assigning it
         // a transaction_ìd
         let mut txn = self.db.begin().await?;
+        let flow =
+            lock_user_purchase_flow(&mut txn, user.get_id(), body.ticket_kind.into()).await?;
+        if !matches!(flow, PurchaseFlow::Reservation) {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "you don't have a reservation right now",
+                "",
+            ));
+        }
         let reservation = sqlx::query!(
             "select ticket_reservations.id, ticket_kind_id, timeout, transaction_id,
                 kind.name as \"ticket_kind_name!: DIS\",
@@ -878,12 +919,6 @@ impl Router {
         .fetch_optional(&mut txn.executor())
         .await?
         .wrap_err_not_found()?;
-        if reservation.ticket_kind_id != body.ticket_kind {
-            return Err(MinilithEndpointError::bad_frontend_code(
-                "ticket_kind you requested to buy is not the same as the one you have reserved",
-                "",
-            ));
-        }
         if let Some(txn_id) = reservation.transaction_id {
             let resp = self
                 .transactions_post(format!("/v0/{txn_id}/cancel"))
@@ -906,7 +941,6 @@ impl Router {
 
         // addons for a ticket_kind are immutable so we don't do it through a transaction
         let chosen_options = validate_addons(&self.db, &mut body.addons, body.ticket_kind).await?;
-        ensure_user_may_purchase_ticket(&self.db, user.get_id(), body.ticket_kind).await?;
 
         // ========
         // remove old addons
@@ -1118,8 +1152,31 @@ impl Router {
     #[oai(path = "/transfer", method = "post")]
     async fn transfer(&self, auth: User, body: Json<TransferRequest>) -> MinilithResult<()> {
         let mut txn = self.db.begin().await?;
+        let ticket_kind = sqlx::query_scalar!(
+            "select ticket_kind_id from purchased_tickets
+            where id = $1 and owner_id = $2",
+            body.purchased_ticket_id,
+            auth.get_id()
+        )
+        .fetch_optional(&mut txn.executor())
+        .await?
+        .wrap_err_bad_frontend("you don't own this ticket")?;
+        if auth.get_id() == body.to_user {
+            return Ok(());
+        }
+
+        reserve_user_purchase_flow(
+            &mut txn,
+            &[auth.get_id().to_owned(), body.to_user.clone()],
+            ticket_kind,
+            &[true, false],
+        )
+        .await?;
+
+        // The ownership check is repeated while locking the ticket. It may have
+        // changed while the flow locks above were being acquired.
         let row = sqlx::query!(
-            "select allow_transfer_ticket_bypass_allowed_groups, ticket_kind_id,
+            "select allow_transfer_ticket_bypass_allowed_groups,
             allow_transfer_ticket_start, allow_transfer_ticket_stop
             from purchased_tickets
             inner join ticket_kinds kind on kind.id = purchased_tickets.ticket_kind_id
@@ -1131,29 +1188,7 @@ impl Router {
         .fetch_optional(&mut txn.executor())
         .await?
         .wrap_err_bad_frontend("you don't own this ticket")?;
-        let other_owns = sqlx::query_scalar!(
-            "select exists (
-                select 1 from purchased_tickets where owner_id = $1 and ticket_kind_id = $2
-            ) or exists (
-                select 1 from ticket_reservations where user_id = $1 and ticket_kind_id = $2
-            ) or exists (
-                select 1 from ticket_reservation_queuers where user_id = $1 and ticket_kind_id = $2
-            ) or exists (
-                select 1 from ticket_release_queuers where user_id = $1 and ticket_kind_id = $2
-            ) as \"owns!\"",
-            body.to_user,
-            row.ticket_kind_id
-        )
-        .fetch_one(&mut txn.executor())
-        .await?;
-        if other_owns {
-            return Err(MinilithEndpointError::bad_user_input(
-                "transfer to other user who already owns",
-                "",
-                "the receiving user already owns or is buying a ticket to this event",
-                "to_user",
-            ));
-        }
+
         let now = OffsetDateTime::now_utc();
         if row.allow_transfer_ticket_stop <= now || row.allow_transfer_ticket_start >= now {
             return Err(MinilithEndpointError::bad_frontend_code(
@@ -1162,16 +1197,24 @@ impl Router {
             ));
         }
         if !row.allow_transfer_ticket_bypass_allowed_groups {
-            ensure_user_may_purchase_ticket(&mut txn.executor(), &body.to_user, row.ticket_kind_id)
+            ensure_user_may_purchase_ticket(&mut txn.executor(), &body.to_user, ticket_kind)
                 .await?;
         }
-        sqlx::query!(
+        let affected = sqlx::query!(
             "update purchased_tickets set owner_id = $2 where id = $1",
             body.purchased_ticket_id,
             body.to_user
         )
         .execute(&mut txn.executor())
         .await?;
+        ensure_affected_rows(
+            affected.rows_affected(),
+            1,
+            "purchased ticket disappeared while transferring",
+        )?;
+
+        unlist_user_purchase_flow(&mut txn, auth.get_id()).await?;
+        unlist_user_purchase_flow(&mut txn, &body.to_user).await?;
 
         txn.commit().await?;
 
@@ -1179,7 +1222,10 @@ impl Router {
     }
 
     #[oai(path = "/validate", method = "get")]
-    async fn validate_activities(&self, auth: User) -> MinilithResult<Json<Vec<ValidateActivity>>> {
+    async fn validatable_activities(
+        &self,
+        auth: User,
+    ) -> MinilithResult<Json<Vec<ValidateActivity>>> {
         sqlx::query!(
             "select title as \"title!: DIS\", description as \"description!: DIS\",
             a.id, url, time_start, time_end
@@ -1265,6 +1311,10 @@ impl Router {
     ///
     /// DB errors.
     #[oai(path = "/callback", method = "post")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keeps callback states and the cancellation lock order visible in one match"
+    )]
     pub async fn callback(
         &self,
         events: fed_auth_verifier::callbacks::TransactionsCallbackDataV1,
@@ -1300,14 +1350,10 @@ impl Router {
                 }
                 TransactionState::Cancelled => {
                     let mut txn = self.db.begin().await?;
-                    let Some(row) = sqlx::query!(
-                        "update ticket_reservations
-                        set transaction_id = null
-                        where transaction_id = $1
-                        returning
-                            id,
-                            ticket_kind_id,
-                            timeout < now() as \"has_timed_out!\"",
+                    let Some(candidate) = sqlx::query!(
+                        "select user_id, ticket_kind_id
+                        from ticket_reservations
+                        where transaction_id = $1",
                         data.transaction_id,
                     )
                     .fetch_optional(&mut txn.executor())
@@ -1323,6 +1369,44 @@ impl Router {
                         );
                         continue;
                     };
+                    let Some(flow) = wait_for_user_purchase_flow(
+                        &mut txn,
+                        &candidate.user_id,
+                        Some(candidate.ticket_kind_id),
+                    )
+                    .await?
+                    else {
+                        error!(
+                            transaction_id = %data.transaction_id,
+                            "cancelled transaction no longer has a purchase flow"
+                        );
+                        continue;
+                    };
+                    if flow != PurchaseFlow::Reservation {
+                        return Err(MinilithEndpointError::internal_error(
+                            "cancelled transaction did not have a reservation purchase flow",
+                            flow,
+                        ));
+                    }
+                    let Some(row) = sqlx::query!(
+                        "update ticket_reservations
+                        set transaction_id = null
+                        where transaction_id = $1
+                        returning
+                            id,
+                            user_id,
+                            ticket_kind_id,
+                            timeout < now() as \"has_timed_out!\"",
+                        data.transaction_id,
+                    )
+                    .fetch_optional(&mut txn.executor())
+                    .await?
+                    else {
+                        return Err(MinilithEndpointError::internal_error(
+                            "reservation changed while handling cancelled transaction",
+                            data.transaction_id,
+                        ));
+                    };
                     if row.has_timed_out {
                         sqlx::query!("delete from ticket_reservations where id = $1", row.id)
                             .execute(&mut txn.executor())
@@ -1336,9 +1420,15 @@ impl Router {
                         )
                         .execute(&mut txn.executor())
                         .await?;
-                        give_reservations(row.ticket_kind_id, 1, &mut txn).await?;
+                        unlist_user_purchase_flow(&mut txn, &row.user_id).await?;
                     }
                     txn.commit().await?;
+                    if row.has_timed_out {
+                        drop(
+                            give_reservations_in_new_transaction(&self.db, row.ticket_kind_id, 1)
+                                .await,
+                        );
+                    }
                 }
             }
         }
@@ -1359,6 +1449,257 @@ fn new_timeout_interval() -> PgInterval {
         days: 0,
         microseconds: (minute_in_microseconds * (15. + 3. * random::<f64>())) as i64,
     }
+}
+
+/// `user_ids` and `skip_activity_check` must be the same length. If no checks are to be done,
+/// `skip_activity_check.len()` can be 0.
+async fn reserve_user_purchase_flow(
+    db: &mut Transaction<'_>,
+    user_ids: &[String],
+    ticket_kind: Uuid,
+    skip_activity_check: &[bool],
+) -> MinilithResult<()> {
+    // This inserts them atomically so we don't get deadlocked if we'd do it one at a time and
+    // another request does this at the same time
+    sqlx::query!(
+        "insert into users_in_purchase_flow (user_id, ticket_kind_id) select user_id, $2 as ticket_kind_id
+        from unnest($1::text[]) as t(user_id)",
+        user_ids,
+        ticket_kind
+    )
+    .execute(&mut db.executor())
+    .await
+    .map_err(|err| {
+        if err
+            .as_database_error()
+            .is_some_and(sqlx::error::DatabaseError::is_unique_violation)
+        {
+            MinilithEndpointError::bad_frontend_code(
+                "please complete your current transaction flow \
+                (or the target user's when transfering)",
+                err,
+            )
+        } else {
+            err.into()
+        }
+    })?;
+    for (user_id, _) in user_ids
+        .iter()
+        .zip(skip_activity_check.iter().copied())
+        .filter(|(_, skip)| !skip)
+    {
+        let has_purchased_ticket_for_activity = sqlx::query_scalar!(
+            "select exists (
+                select 1 from ticket_kinds kind
+                inner join ticket_kinds all_kinds on all_kinds.activity_id = kind.activity_id
+                inner join purchased_tickets pt on pt.ticket_kind_id = all_kinds.id
+                where kind.id = $2 and owner_id = $1
+            ) as \"exists!\"",
+            user_id,
+            ticket_kind
+        )
+        .fetch_one(&mut db.executor())
+        .await?;
+        if has_purchased_ticket_for_activity {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "cannot own two tickets to an activity!",
+                "",
+            ));
+        }
+    }
+    Ok(())
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PurchaseFlow {
+    ReleaseQueue,
+    ReservationQueue,
+    Reservation,
+}
+
+#[derive(Debug)]
+struct PurchaseFlowRow {
+    ticket_kind_id: Uuid,
+    reservation: Option<String>,
+    release_queue: Option<String>,
+    reservation_queue: Option<String>,
+}
+
+fn decode_purchase_flow(
+    row: PurchaseFlowRow,
+    ticket_kind: Option<Uuid>,
+) -> MinilithResult<PurchaseFlow> {
+    if ticket_kind.is_some_and(|ticket_kind| ticket_kind != row.ticket_kind_id) {
+        return Err(MinilithEndpointError::bad_frontend_code(
+            "tried to continue purchase flow with different ticket kind",
+            "",
+        ));
+    }
+    match (
+        row.release_queue.is_some(),
+        row.reservation_queue.is_some(),
+        row.reservation.is_some(),
+    ) {
+        (true, false, false) => Ok(PurchaseFlow::ReleaseQueue),
+        (false, true, false) => Ok(PurchaseFlow::ReservationQueue),
+        (false, false, true) => Ok(PurchaseFlow::Reservation),
+        _ => Err(MinilithEndpointError::internal_error(
+            "user has invalid purchase flow state",
+            row,
+        )),
+    }
+}
+
+async fn lock_user_purchase_flow(
+    db: &mut Transaction<'_>,
+    user_id: &str,
+    ticket_kind: Option<Uuid>,
+) -> MinilithResult<PurchaseFlow> {
+    let row = sqlx::query_as!(
+        PurchaseFlowRow,
+        "select ticket_kind_id, reservation, release_queue, reservation_queue
+        from users_in_purchase_flow where user_id = $1 for update nowait",
+        user_id
+    )
+    .fetch_optional(&mut db.executor())
+    .await
+    .map_err(|err| {
+        if err
+            .as_database_error()
+            .is_some_and(|err| err.code().as_deref() == Some("55P03"))
+        {
+            MinilithEndpointError::bad_frontend_code(
+                "another request is handling this purchase flow",
+                err,
+            )
+        } else {
+            err.into()
+        }
+    })?
+    .wrap_err_not_found()?;
+    decode_purchase_flow(row, ticket_kind)
+}
+
+/// Internal jobs wait for the flow lock instead of dropping a transaction
+/// callback or repeatedly selecting the same worker job.
+async fn wait_for_user_purchase_flow(
+    db: &mut Transaction<'_>,
+    user_id: &str,
+    ticket_kind: Option<Uuid>,
+) -> MinilithResult<Option<PurchaseFlow>> {
+    let row = sqlx::query_as!(
+        PurchaseFlowRow,
+        "select ticket_kind_id, reservation, release_queue, reservation_queue
+        from users_in_purchase_flow where user_id = $1 for update",
+        user_id
+    )
+    .fetch_optional(&mut db.executor())
+    .await?;
+    row.map(|row| decode_purchase_flow(row, ticket_kind))
+        .transpose()
+}
+
+fn ensure_affected_rows(
+    affected: u64,
+    expected: usize,
+    operation: &'static str,
+) -> MinilithResult<()> {
+    if usize::try_from(affected).ok() == Some(expected) {
+        Ok(())
+    } else {
+        Err(MinilithEndpointError::internal_error(
+            operation,
+            format!("expected {expected} affected rows, got {affected}"),
+        ))
+    }
+}
+async fn set_user_purchase_flow_release_queue(
+    db: &mut Transaction<'_>,
+    user_id: &str,
+) -> MinilithResult<()> {
+    let affected = sqlx::query!(
+        "update users_in_purchase_flow
+        set release_queue = $1
+        where user_id = $1
+        and release_queue is null
+        and reservation_queue is null
+        and reservation is null",
+        user_id
+    )
+    .execute(&mut db.executor())
+    .await?;
+    ensure_affected_rows(
+        affected.rows_affected(),
+        1,
+        "failed to initialize release-queue purchase flow",
+    )
+}
+async fn set_user_purchase_flow_reservation_queue(
+    db: &mut Transaction<'_>,
+    user_id: &str,
+) -> MinilithResult<()> {
+    let affected = sqlx::query!(
+        "update users_in_purchase_flow
+        set reservation_queue = $1
+        where user_id = $1
+        and release_queue is null
+        and reservation_queue is null
+        and reservation is null",
+        user_id
+    )
+    .execute(&mut db.executor())
+    .await?;
+    ensure_affected_rows(
+        affected.rows_affected(),
+        1,
+        "failed to initialize reservation-queue purchase flow",
+    )
+}
+async fn set_user_purchase_flow_reservation(
+    db: &mut Transaction<'_>,
+    user_id: &str,
+) -> MinilithResult<()> {
+    let affected = sqlx::query!(
+        "update users_in_purchase_flow
+        set reservation = $1
+        where user_id = $1
+        and release_queue is null
+        and reservation_queue is null
+        and reservation is null",
+        user_id
+    )
+    .execute(&mut db.executor())
+    .await?;
+    ensure_affected_rows(
+        affected.rows_affected(),
+        1,
+        "failed to initialize reservation purchase flow",
+    )
+}
+async fn unlist_user_purchase_flow(
+    db: &mut Transaction<'_>,
+    user_id: impl Into<String>,
+) -> MinilithResult<()> {
+    unlist_users_purchase_flow(db, &[user_id.into()]).await
+}
+
+async fn unlist_users_purchase_flow(
+    db: &mut Transaction<'_>,
+    user_ids: &[String],
+) -> MinilithResult<()> {
+    if user_ids.is_empty() {
+        return Ok(());
+    }
+    let affected = sqlx::query!(
+        "delete from users_in_purchase_flow where user_id = any($1)",
+        user_ids
+    )
+    .execute(&mut db.executor())
+    .await?;
+    ensure_affected_rows(
+        affected.rows_affected(),
+        user_ids.len(),
+        "failed to finish multiple purchase flows",
+    )
 }
 
 /// Atomically reserves up to `requested` places while enforcing both the
@@ -1432,10 +1773,15 @@ async fn reserve_ticket_capacity(
 }
 
 /// Releases a ticket. This MUST be called at the moment the tickets should be released.
+/// It MUST have locked the `ticket_kind`.
 ///
 /// # Errors
 ///
 /// Db errors or if the id doesn't exist.
+#[allow(
+    clippy::too_many_lines,
+    reason = "keeps the bulk flow lock and both state transitions in execution order"
+)]
 pub async fn release(db: &mut Transaction<'_>, id: Uuid) -> MinilithResult<()> {
     let ticket_kind = sqlx::query!(
         "select *
@@ -1446,9 +1792,18 @@ pub async fn release(db: &mut Transaction<'_>, id: Uuid) -> MinilithResult<()> {
     .fetch_one(&mut db.executor())
     .await?;
 
+    // Purchase-flow rows are the first mutable rows locked by every path.
+    // Sorting makes bulk acquisition deterministic.
     let mut queuers = sqlx::query_scalar!(
-        "select user_id from ticket_release_queuers
-        where ticket_kind_id = $1",
+        "select flow.user_id
+        from users_in_purchase_flow flow
+        inner join ticket_release_queuers queuer
+            on queuer.user_id = flow.user_id
+            and queuer.ticket_kind_id = flow.ticket_kind_id
+        where flow.ticket_kind_id = $1
+        and flow.release_queue = flow.user_id
+        order by flow.user_id
+        for update of flow",
         id
     )
     .fetch_all(&mut db.executor())
@@ -1485,6 +1840,7 @@ pub async fn release(db: &mut Transaction<'_>, id: Uuid) -> MinilithResult<()> {
         .map(|(idx, _)| (idx + reservations.len() + 1) as i32)
         .collect();
 
+    // we don't check the amount of affected here in case some dropped out or similar
     sqlx::query!(
         "insert into ticket_reservations (user_id, ticket_kind_id, transaction_id, timeout)
         select user_id, $2 as ticket_kind_id, null as transaction_id, (from_now + now()) as timeout
@@ -1505,9 +1861,76 @@ pub async fn release(db: &mut Transaction<'_>, id: Uuid) -> MinilithResult<()> {
     )
     .execute(&mut db.executor())
     .await?;
+    sqlx::query!(
+        "update users_in_purchase_flow
+            set release_queue = null, reservation = user_id
+        where user_id = any($1)
+        and ticket_kind_id = $2
+        and release_queue = user_id
+        and reservation_queue is null
+        and reservation is null",
+        &reservations,
+        id,
+    )
+    .execute(&mut db.executor())
+    .await?;
+    sqlx::query!(
+        "update users_in_purchase_flow
+            set release_queue = null, reservation_queue = user_id
+        where user_id = any($1)
+        and ticket_kind_id = $2
+        and release_queue = user_id
+        and reservation_queue is null
+        and reservation is null",
+        &reservation_queuers,
+        id,
+    )
+    .execute(&mut db.executor())
+    .await?;
+
+    sqlx::query!(
+        "delete from ticket_release_queuers
+        where user_id = any ($1)",
+        &queuers
+    )
+    .execute(&mut db.executor())
+    .await?;
 
     Ok(())
 }
+
+async fn remove_expired_release_queuers(db: &mut Transaction<'_>) -> MinilithResult<()> {
+    let user_ids = sqlx::query_scalar!(
+        "select flow.user_id
+        from users_in_purchase_flow flow
+        inner join ticket_release_queuers queuer
+            on queuer.user_id = flow.user_id
+            and queuer.ticket_kind_id = flow.ticket_kind_id
+        where queuer.started_queueing < now() - '20 minutes'::interval
+        and flow.release_queue = flow.user_id
+        order by flow.user_id
+        for update of flow skip locked"
+    )
+    .fetch_all(&mut db.executor())
+    .await?;
+    if user_ids.is_empty() {
+        return Ok(());
+    }
+
+    let affected = sqlx::query!(
+        "delete from ticket_release_queuers where user_id = any($1)",
+        &user_ids
+    )
+    .execute(&mut db.executor())
+    .await?;
+    ensure_affected_rows(
+        affected.rows_affected(),
+        user_ids.len(),
+        "failed to remove expired release queuers",
+    )?;
+    unlist_users_purchase_flow(db, &user_ids).await
+}
+
 /// Run this xx:01 (i.e. seconds = 01 & every minute).
 /// All DB things this does have to be compatible with being called simultaneously because we might
 /// horizontally scale.
@@ -1518,31 +1941,32 @@ pub async fn release(db: &mut Transaction<'_>, id: Uuid) -> MinilithResult<()> {
 pub async fn check_all_tickets(db: &PgPool) -> MinilithResult<()> {
     // release tickets
     loop {
-        let mut txn = db.begin().await?;
-        // take one release job
-        // this works concurrently too!
-        let ticket_kind = sqlx::query!(
-            "select id from ticket_kinds
-            where
-            -- just so if the service crashes, it doesn't release
-            -- all the tickets when it comes back up.
-            purchasing_available_start > now() - '5 minutes'::interval
-            and purchasing_available_start <= now()
-            and has_been_released = false
-            limit 1
-            for update skip locked"
-        )
-        .fetch_optional(db)
-        .await?;
-        if let Some(row) = ticket_kind {
-            release(&mut txn, row.id).await?;
-            sqlx::query!(
-                "update ticket_kinds set has_been_released = true where ticket_kinds.id = $1",
-                row.id
+        // Commit the claim before acquiring flow locks. If the process dies
+        // after this, the misplaced-queuer pass completes the release.
+        let mut claim_txn = db.begin().await?;
+        let ticket_kind = sqlx::query_scalar!(
+            "with next as (
+                select id from ticket_kinds
+                where purchasing_available_start > now() - '5 minutes'::interval
+                and purchasing_available_start <= now()
+                and has_been_released = false
+                order by id
+                limit 1
+                for update skip locked
             )
-            .execute(&mut txn.executor())
-            .await?;
-            txn.commit().await?;
+            update ticket_kinds kind
+            set has_been_released = true
+            from next
+            where kind.id = next.id
+            returning kind.id"
+        )
+        .fetch_optional(&mut claim_txn.executor())
+        .await?;
+        claim_txn.commit().await?;
+        if let Some(ticket_kind) = ticket_kind {
+            let mut release_txn = db.begin().await?;
+            release(&mut release_txn, ticket_kind).await?;
+            release_txn.commit().await?;
         } else {
             // there may in certain circumstances be "jobs" left, but they will be taken care of
             // next minute in worst case
@@ -1551,12 +1975,9 @@ pub async fn check_all_tickets(db: &PgPool) -> MinilithResult<()> {
     }
 
     // Also removes people's queue positions after 20 minutes.
-    sqlx::query!(
-        "delete from ticket_release_queuers
-        where started_queueing < now() - '20 minutes'::interval"
-    )
-    .execute(db)
-    .await?;
+    let mut txn = db.begin().await?;
+    remove_expired_release_queuers(&mut txn).await?;
+    txn.commit().await?;
 
     // missplaced
     loop {
@@ -1564,13 +1985,19 @@ pub async fn check_all_tickets(db: &PgPool) -> MinilithResult<()> {
         // take one release job
         // this works concurrently too!
         let ticket_kind = sqlx::query!(
-            "select user_id, ticket_kind_id from ticket_release_queuers
-            inner join ticket_kinds kind on (kind.id = ticket_kind_id)
+            "select flow.user_id, flow.ticket_kind_id
+            from users_in_purchase_flow flow
+            inner join ticket_release_queuers queuer
+                on queuer.user_id = flow.user_id
+                and queuer.ticket_kind_id = flow.ticket_kind_id
+            inner join ticket_kinds kind on kind.id = flow.ticket_kind_id
             where kind.has_been_released = true
+            and flow.release_queue = flow.user_id
+            order by flow.user_id
             limit 1
-            for update skip locked"
+            for update of flow skip locked"
         )
-        .fetch_optional(db)
+        .fetch_optional(&mut txn.executor())
         .await?;
         if let Some(row) = ticket_kind {
             update_misplaced_queuer(&row.user_id, row.ticket_kind_id, &mut txn).await?;
@@ -1610,17 +2037,23 @@ pub async fn check_all_tickets(db: &PgPool) -> MinilithResult<()> {
         txn.commit().await?;
     }
 
-    remove_queuers_when_sold_out(db).await?;
+    let mut txn = db.begin().await?;
+    remove_queuers_when_sold_out(&mut txn).await?;
+    txn.commit().await?;
 
     Ok(())
 }
 /// Clear reservation queue when there are no more tickets.
 /// We use `purchased_tickets` since they never decrease so the lock on it doesn't matter!
-async fn remove_queuers_when_sold_out(db: impl PgExecutor<'_>) -> MinilithResult<()> {
-    sqlx::query!(
-        r#"delete from ticket_reservation_queuers queuer
-        using ticket_kinds kind
-        where kind.id = queuer.ticket_kind_id
+async fn remove_queuers_when_sold_out(db: &mut Transaction<'_>) -> MinilithResult<()> {
+    let queuers = sqlx::query_scalar!(
+        r#"select flow.user_id
+        from users_in_purchase_flow flow
+        inner join ticket_reservation_queuers queuer
+            on queuer.user_id = flow.user_id
+            and queuer.ticket_kind_id = flow.ticket_kind_id
+        inner join ticket_kinds kind on kind.id = queuer.ticket_kind_id
+        where flow.reservation_queue = flow.user_id
         and
         (
             -- inidvidual ticket
@@ -1645,11 +2078,27 @@ async fn remove_queuers_when_sold_out(db: impl PgExecutor<'_>) -> MinilithResult
                     where purchased_kind.activity_id = activities.id
                 ) >= activities.max_tickets
             )
-        )"#
+        )
+        order by flow.user_id
+        for update of flow skip locked"#
     )
-    .execute(db)
+    .fetch_all(&mut db.executor())
     .await?;
-    Ok(())
+    if queuers.is_empty() {
+        return Ok(());
+    }
+    let affected = sqlx::query!(
+        "delete from ticket_reservation_queuers where user_id = any($1)",
+        &queuers
+    )
+    .execute(&mut db.executor())
+    .await?;
+    ensure_affected_rows(
+        affected.rows_affected(),
+        queuers.len(),
+        "failed to clear sold-out reservation queue",
+    )?;
+    unlist_users_purchase_flow(db, &queuers).await
 }
 /// Checks for people in the queue once the `ticket_kind` has been released.
 /// Assumed that the `ticket_kind` is released.
@@ -1662,7 +2111,28 @@ pub async fn update_misplaced_queuer(
     ticket_kind: Uuid,
     db: &mut Transaction<'_>,
 ) -> MinilithResult<()> {
-    sqlx::query!(
+    let flow = wait_for_user_purchase_flow(db, user_id, Some(ticket_kind))
+        .await?
+        .ok_or_else(|| {
+            MinilithEndpointError::internal_error(
+                "misplaced release queuer has no purchase flow",
+                user_id,
+            )
+        })?;
+    if flow != PurchaseFlow::ReleaseQueue {
+        return Err(MinilithEndpointError::internal_error(
+            "misplaced release queuer has wrong purchase-flow state",
+            flow,
+        ));
+    }
+    sqlx::query_scalar!(
+        "select id from ticket_kinds where id = $1 for update",
+        ticket_kind
+    )
+    .fetch_one(&mut db.executor())
+    .await?;
+
+    let affected = sqlx::query!(
         "insert into ticket_reservation_queuers (user_id, ticket_kind_id, placement)
         select $1 as user_id, $2 as ticket_kind_id, coalesce((
             select placement
@@ -1673,20 +2143,48 @@ pub async fn update_misplaced_queuer(
         ), kind.reserved_or_purchased_tickets) + 1 as placement
         from ticket_release_queuers queuers
         inner join ticket_kinds kind on kind.id = $2
-        where queuers.ticket_kind_id = $2
+        where queuers.user_id = $1
+        and queuers.ticket_kind_id = $2
         limit 1",
         user_id,
         ticket_kind
     )
     .execute(&mut db.executor())
     .await?;
-    sqlx::query!(
+    ensure_affected_rows(
+        affected.rows_affected(),
+        1,
+        "failed to insert misplaced user into reservation queue",
+    )?;
+    let affected = sqlx::query!(
+        "update users_in_purchase_flow
+        set release_queue = null, reservation_queue = user_id
+        where user_id = $1
+        and ticket_kind_id = $2
+        and release_queue = user_id
+        and reservation_queue is null
+        and reservation is null",
+        user_id,
+        ticket_kind,
+    )
+    .execute(&mut db.executor())
+    .await?;
+    ensure_affected_rows(
+        affected.rows_affected(),
+        1,
+        "failed to move misplaced user's purchase flow",
+    )?;
+    let affected = sqlx::query!(
         "delete from ticket_release_queuers where user_id = $1",
         user_id
     )
     .execute(&mut db.executor())
     .await?;
-    Ok(())
+    ensure_affected_rows(
+        affected.rows_affected(),
+        1,
+        "failed to remove misplaced release queuer",
+    )
 }
 /// Checks for reservations which are timed out. If any is found, it's removed.
 /// Call [`give_reservations`] after calling this.
@@ -1696,19 +2194,40 @@ pub async fn update_misplaced_queuer(
 /// Failures from cancelling transactions.
 pub async fn remove_reservation(db: &PgPool) -> MinilithResult<ControlFlow<()>> {
     let mut txn = db.begin().await?;
-    // only remove reservations which are not in the purchase of buying!
+    // Lock the flow first; child reservation rows are always locked second.
     let removed_reservation = sqlx::query!(
-        "select transaction_id, user_id, ticket_kind_id
-        from ticket_reservations
-        where timeout < now()
-        and transaction_id is null
+        "select flow.user_id, flow.ticket_kind_id
+        from users_in_purchase_flow flow
+        inner join ticket_reservations reservation
+            on reservation.user_id = flow.user_id
+            and reservation.ticket_kind_id = flow.ticket_kind_id
+        where reservation.timeout < now()
+        and reservation.transaction_id is null
+        and flow.reservation = flow.user_id
+        order by flow.user_id
         limit 1
-        for update skip locked",
+        for update of flow skip locked",
     )
     .fetch_optional(&mut txn.executor())
     .await?;
     let do_continue = removed_reservation.is_some();
     if let Some(reservation) = removed_reservation {
+        let affected = sqlx::query!(
+            "delete from ticket_reservations
+            where user_id = $1
+            and ticket_kind_id = $2
+            and timeout < now()
+            and transaction_id is null",
+            reservation.user_id,
+            reservation.ticket_kind_id,
+        )
+        .execute(&mut txn.executor())
+        .await?;
+        ensure_affected_rows(
+            affected.rows_affected(),
+            1,
+            "expired reservation changed after its flow was locked",
+        )?;
         sqlx::query!(
             "update ticket_kinds
             set reserved_or_purchased_tickets = reserved_or_purchased_tickets - 1
@@ -1717,13 +2236,7 @@ pub async fn remove_reservation(db: &PgPool) -> MinilithResult<ControlFlow<()>> 
         )
         .execute(&mut txn.executor())
         .await?;
-        sqlx::query!(
-            "delete from ticket_reservations where user_id = $1 and ticket_kind_id = $2",
-            reservation.user_id,
-            reservation.ticket_kind_id,
-        )
-        .execute(&mut txn.executor())
-        .await?;
+        unlist_user_purchase_flow(&mut txn, &reservation.user_id).await?;
     }
     txn.commit().await?;
     Ok(if do_continue {
@@ -1744,19 +2257,23 @@ pub async fn give_reservations(
     fetch_n: i32,
     db: &mut Transaction<'_>,
 ) -> MinilithResult<()> {
-    let mut removed_reservations = sqlx::query_scalar!(
-        "select user_id
-        from ticket_reservation_queuers queuers
-        where ticket_kind_id = $1
-        order by placement asc
+    let mut new_reservations = sqlx::query_scalar!(
+        "select flow.user_id
+        from users_in_purchase_flow flow
+        inner join ticket_reservation_queuers queuer
+            on queuer.user_id = flow.user_id
+            and queuer.ticket_kind_id = flow.ticket_kind_id
+        where flow.ticket_kind_id = $1
+        and flow.reservation_queue = flow.user_id
+        order by queuer.placement asc, flow.user_id
         limit $2
-        for update skip locked",
+        for update of flow skip locked",
         ticket_kind,
         i64::from(fetch_n)
     )
     .fetch_all(&mut db.executor())
     .await?;
-    if removed_reservations.is_empty() {
+    if new_reservations.is_empty() {
         return Ok(());
     }
     #[allow(
@@ -1764,87 +2281,176 @@ pub async fn give_reservations(
         clippy::cast_possible_wrap,
         reason = "we'll never get this high"
     )]
-    let granted =
-        reserve_ticket_capacity(db, ticket_kind, removed_reservations.len() as i32).await?;
+    let granted = reserve_ticket_capacity(db, ticket_kind, new_reservations.len() as i32).await?;
+
     #[allow(clippy::cast_sign_loss, reason = "removed will always be positive")]
-    removed_reservations.truncate(granted as usize);
-    if removed_reservations.is_empty() {
+    new_reservations.truncate(granted as usize);
+    if new_reservations.is_empty() {
         return Ok(());
     }
     let timestamps: Vec<PgInterval> = std::iter::repeat_with(new_timeout_interval)
-        .take(removed_reservations.len())
+        .take(new_reservations.len())
         .collect();
-    sqlx::query!(
+    let affected = sqlx::query!(
         "insert into ticket_reservations (user_id, ticket_kind_id, transaction_id, timeout)
-        select user_id, $2 as ticket_kind_id, null as transaction_id, (from_now + now()) as timeout
+        select user_id, $2 as ticket_kind_id, null as transaction_id,
+        (from_now + now()) as timeout
         from unnest($1::text[], $3::interval[]) as t(user_id, from_now)",
-        &removed_reservations,
+        &new_reservations,
         ticket_kind,
         &timestamps
     )
     .execute(&mut db.executor())
     .await?;
-    sqlx::query!(
+    ensure_affected_rows(
+        affected.rows_affected(),
+        new_reservations.len(),
+        "failed to create promoted ticket reservations",
+    )?;
+    let affected = sqlx::query!(
+        "update users_in_purchase_flow
+            set reservation_queue = null, reservation = user_id
+        where user_id = any($1)
+        and ticket_kind_id = $2
+        and reservation_queue = user_id
+        and release_queue is null
+        and reservation is null",
+        &new_reservations,
+        ticket_kind,
+    )
+    .execute(&mut db.executor())
+    .await?;
+    ensure_affected_rows(
+        affected.rows_affected(),
+        new_reservations.len(),
+        "failed to move reservation queuers to reservations",
+    )?;
+    let affected = sqlx::query!(
         "delete from ticket_reservation_queuers
         where ticket_kind_id = $1
         and user_id = any($2)",
         ticket_kind,
-        &removed_reservations
+        &new_reservations
     )
     .execute(&mut db.executor())
     .await?;
+    ensure_affected_rows(
+        affected.rows_affected(),
+        new_reservations.len(),
+        "failed to remove promoted reservation queuers",
+    )
+}
+
+async fn give_reservations_in_new_transaction(
+    db: &PgPool,
+    ticket_kind: Uuid,
+    fetch_n: i32,
+) -> MinilithResult<()> {
+    let mut txn = db.begin().await?;
+    give_reservations(ticket_kind, fetch_n, &mut txn).await?;
+    txn.commit().await?;
+    Ok(())
+}
+
+async fn check_missing_paid_reservation(
+    txn: &mut Transaction<'_>,
+    transaction_id: Uuid,
+) -> MinilithResult<()> {
+    let exists_purchased_ticket = sqlx::query_scalar!(
+        "select exists (
+            select 1 from purchased_tickets where transaction_id = $1
+        ) as \"exists!\"",
+        transaction_id
+    )
+    .fetch_one(&mut txn.executor())
+    .await?;
+    if !exists_purchased_ticket {
+        error!(%transaction_id, "tried to pay for an unaccounted-for ticket");
+        alert(AlertLevel::L1, "tried to pay for an unknown ticket");
+    }
     Ok(())
 }
 
 /// # Returns
 ///
-/// Returns the id of ticket. None if shit went down internally. Rollback in that case.
+/// Returns the id of the ticket, or `None` for an already processed callback.
+#[allow(
+    clippy::too_many_lines,
+    reason = "keeps the flow lock, ticket creation, and reservation cleanup atomic and ordered"
+)]
 async fn pay_for_reservation(
     txn: &mut Transaction<'_>,
     transaction_id: Uuid,
 ) -> MinilithResult<Option<Uuid>> {
-    let id = sqlx::query_scalar!(
-        "insert into purchased_tickets
-        (id, purchaser_id, owner_id, ticket_kind_id, transaction_id)
-        select id, user_id as purchaser_id, user_id as owner_id,
-        ticket_kind_id, transaction_id
-        from ticket_reservations reserv
-            where transaction_id = $1
-        returning id",
+    let Some(candidate) = sqlx::query!(
+        "select id, user_id, ticket_kind_id from ticket_reservations
+        where transaction_id = $1",
         transaction_id
     )
     .fetch_optional(&mut txn.executor())
-    .await?;
-    // has this already been marked as purchased?
-    let Some(id) = id else {
-        let exists_purchased_ticket = sqlx::query_scalar!(
-            "select exists (
-                select 1 from purchased_tickets where transaction_id = $1
-            ) as \"exists!\"",
-            transaction_id
-        )
-        .fetch_one(&mut txn.executor())
-        .await?;
-        if !exists_purchased_ticket {
-            // ono somebody paid for a non-existing ticket!!
-            error!(%transaction_id,
-                "tried to pay for an unaccounted-for ticket"
-            );
-            alert(AlertLevel::L1, "tried to pay for an unknown ticket");
-        }
-        // otherwise, we're golden, this is just a second "person has paid" callback.
+    .await?
+    else {
+        check_missing_paid_reservation(txn, transaction_id).await?;
         return Ok(None);
     };
+
+    let Some(flow) =
+        wait_for_user_purchase_flow(txn, &candidate.user_id, Some(candidate.ticket_kind_id))
+            .await?
+    else {
+        // A concurrent callback may have completed while this one waited.
+        check_missing_paid_reservation(txn, transaction_id).await?;
+        return Ok(None);
+    };
+    if flow != PurchaseFlow::Reservation {
+        return Err(MinilithEndpointError::internal_error(
+            "paid transaction did not have a reservation purchase flow",
+            flow,
+        ));
+    }
+
+    let row = sqlx::query!(
+        "select reservation.id, user_id, ticket_kind_id
+        from ticket_reservations reservation
+        where transaction_id = $1
+        for update of reservation",
+        transaction_id
+    )
+    .fetch_optional(&mut txn.executor())
+    .await?
+    .ok_or_else(|| {
+        MinilithEndpointError::internal_error(
+            "reservation disappeared while its purchase flow was locked",
+            transaction_id,
+        )
+    })?;
     sqlx::query!(
         r#"update ticket_kinds
         set has_been_purchased = true
-        where id = (
-            select ticket_kind_id from purchased_tickets where id = $1
-        )"#,
-        id,
+        where id = $1"#,
+        row.ticket_kind_id,
     )
     .execute(&mut txn.executor())
     .await?;
+
+    let purchased_id = sqlx::query_scalar!(
+        "insert into purchased_tickets
+        (id, purchaser_id, owner_id, ticket_kind_id, transaction_id)
+        values ($1, $2, $2, $3, $4)
+        returning id",
+        row.id,
+        row.user_id,
+        row.ticket_kind_id,
+        transaction_id
+    )
+    .fetch_one(&mut txn.executor())
+    .await?;
+    if purchased_id != row.id {
+        return Err(MinilithEndpointError::internal_error(
+            "purchased ticket id differed from its reservation id",
+            purchased_id,
+        ));
+    }
     // move addons:
     sqlx::query!(
         "insert into purchased_ticket_addons
@@ -1852,14 +2458,14 @@ async fn pay_for_reservation(
         select addon_id, ticket_id, selected_options, selected_text
         from ticket_reservation_addons
             where ticket_id = $1",
-        id,
+        row.id,
     )
     .execute(&mut txn.executor())
     .await?;
     sqlx::query!(
         "delete from ticket_reservation_addons
             where ticket_id = $1",
-        id,
+        row.id,
     )
     .execute(&mut txn.executor())
     .await?;
@@ -1878,7 +2484,8 @@ async fn pay_for_reservation(
         alert(AlertLevel::L1, "1 row not affected when purchase complete!");
         return Ok(None);
     }
-    Ok(Some(id))
+    unlist_user_purchase_flow(txn, &row.user_id).await?;
+    Ok(Some(row.id))
 }
 
 struct ReturnedAddonOption {
@@ -2071,6 +2678,50 @@ async fn ensure_user_may_purchase_ticket(
 mod tests {
     use super::*;
 
+    async fn start_release_flow(
+        db: &PgPool,
+        user_id: &str,
+        ticket_kind: Uuid,
+    ) -> MinilithResult<()> {
+        let mut txn = db.begin().await?;
+        reserve_user_purchase_flow(&mut txn, &[user_id.to_owned()], ticket_kind, &[false]).await?;
+        sqlx::query!(
+            "insert into ticket_release_queuers
+            (user_id, ticket_kind_id, started_queueing)
+            values ($1, $2, now())",
+            user_id,
+            ticket_kind,
+        )
+        .execute(&mut txn.executor())
+        .await?;
+        set_user_purchase_flow_release_queue(&mut txn, user_id).await?;
+        txn.commit().await?;
+        Ok(())
+    }
+
+    async fn start_reservation_queue_flow(
+        db: &PgPool,
+        user_id: &str,
+        ticket_kind: Uuid,
+        placement: i32,
+    ) -> MinilithResult<()> {
+        let mut txn = db.begin().await?;
+        reserve_user_purchase_flow(&mut txn, &[user_id.to_owned()], ticket_kind, &[false]).await?;
+        sqlx::query!(
+            "insert into ticket_reservation_queuers
+            (user_id, ticket_kind_id, placement)
+            values ($1, $2, $3)",
+            user_id,
+            ticket_kind,
+            placement,
+        )
+        .execute(&mut txn.executor())
+        .await?;
+        set_user_purchase_flow_reservation_queue(&mut txn, user_id).await?;
+        txn.commit().await?;
+        Ok(())
+    }
+
     #[sqlx::test(fixtures("ticket_capacity"))]
     async fn reservation_capacity_is_shared_by_ticket_kinds(db: sqlx::PgPool) {
         let db = sqlx_tracing::Pool::from(db);
@@ -2132,5 +2783,220 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(total, Some(3));
+    }
+
+    #[sqlx::test(fixtures("ticket_capacity"))]
+    async fn only_one_concurrent_purchase_flow_can_commit(db: sqlx::PgPool) {
+        let db = sqlx_tracing::Pool::from(db);
+        let first = Uuid::parse_str("00000000-0000-0000-0000-000000000004").unwrap();
+        let second = Uuid::parse_str("00000000-0000-0000-0000-000000000005").unwrap();
+
+        let (first_result, second_result) = tokio::join!(
+            start_release_flow(&db, "test:purchase-flow-1", first),
+            start_release_flow(&db, "test:purchase-flow-1", second),
+        );
+        assert_ne!(
+            first_result.is_ok(),
+            second_result.is_ok(),
+            "exactly one concurrent flow should commit"
+        );
+
+        let flow_count = sqlx::query_scalar!(
+            "select count(*) from users_in_purchase_flow where user_id = $1",
+            "test:purchase-flow-1"
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        let child_count = sqlx::query_scalar!(
+            "select count(*) from ticket_release_queuers where user_id = $1",
+            "test:purchase-flow-1"
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert_eq!(flow_count, Some(1));
+        assert_eq!(child_count, Some(1));
+    }
+
+    #[sqlx::test(fixtures("ticket_capacity"))]
+    async fn release_moves_every_flow_and_removes_release_rows(db: sqlx::PgPool) {
+        let db = sqlx_tracing::Pool::from(db);
+        let ticket_kind = Uuid::parse_str("00000000-0000-0000-0000-000000000004").unwrap();
+        start_release_flow(&db, "test:purchase-flow-1", ticket_kind)
+            .await
+            .unwrap();
+        start_release_flow(&db, "test:purchase-flow-2", ticket_kind)
+            .await
+            .unwrap();
+
+        let mut txn = db.begin().await.unwrap();
+        release(&mut txn, ticket_kind).await.unwrap();
+        txn.commit().await.unwrap();
+
+        let release_count = sqlx::query_scalar!(
+            "select count(*) from ticket_release_queuers where ticket_kind_id = $1",
+            ticket_kind
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        let reservations = sqlx::query_scalar!(
+            "select count(*) from ticket_reservations where ticket_kind_id = $1",
+            ticket_kind
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        let reservation_flows = sqlx::query_scalar!(
+            "select count(*) from users_in_purchase_flow
+            where ticket_kind_id = $1 and reservation = user_id",
+            ticket_kind
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert_eq!(release_count, Some(0));
+        assert_eq!(reservations, Some(2));
+        assert_eq!(reservation_flows, Some(2));
+    }
+
+    #[sqlx::test(fixtures("ticket_capacity"))]
+    async fn expired_release_queue_removes_child_and_flow(db: sqlx::PgPool) {
+        let db = sqlx_tracing::Pool::from(db);
+        let ticket_kind = Uuid::parse_str("00000000-0000-0000-0000-000000000004").unwrap();
+        start_release_flow(&db, "test:purchase-flow-1", ticket_kind)
+            .await
+            .unwrap();
+        sqlx::query!(
+            "update ticket_release_queuers
+            set started_queueing = now() - '21 minutes'::interval
+            where user_id = $1",
+            "test:purchase-flow-1"
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+
+        let mut txn = db.begin().await.unwrap();
+        remove_expired_release_queuers(&mut txn).await.unwrap();
+        txn.commit().await.unwrap();
+
+        let has_flow = sqlx::query_scalar!(
+            "select exists (
+                select 1 from users_in_purchase_flow where user_id = $1
+            ) as \"exists!\"",
+            "test:purchase-flow-1"
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        let has_child = sqlx::query_scalar!(
+            "select exists (
+                select 1 from ticket_release_queuers where user_id = $1
+            ) as \"exists!\"",
+            "test:purchase-flow-1"
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert!(!has_flow);
+        assert!(!has_child);
+    }
+
+    #[sqlx::test(fixtures("ticket_capacity"))]
+    async fn reservation_queue_promotion_moves_child_and_flow(db: sqlx::PgPool) {
+        let db = sqlx_tracing::Pool::from(db);
+        let ticket_kind = Uuid::parse_str("00000000-0000-0000-0000-000000000004").unwrap();
+        start_reservation_queue_flow(&db, "test:purchase-flow-1", ticket_kind, 1)
+            .await
+            .unwrap();
+
+        let mut txn = db.begin().await.unwrap();
+        give_reservations(ticket_kind, 1, &mut txn).await.unwrap();
+        txn.commit().await.unwrap();
+
+        let state = sqlx::query!(
+            "select release_queue, reservation_queue, reservation
+            from users_in_purchase_flow where user_id = $1",
+            "test:purchase-flow-1"
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        let queue_exists = sqlx::query_scalar!(
+            "select exists (
+                select 1 from ticket_reservation_queuers where user_id = $1
+            ) as \"exists!\"",
+            "test:purchase-flow-1"
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        let reservation_exists = sqlx::query_scalar!(
+            "select exists (
+                select 1 from ticket_reservations where user_id = $1
+            ) as \"exists!\"",
+            "test:purchase-flow-1"
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert!(state.release_queue.is_none());
+        assert!(state.reservation_queue.is_none());
+        assert_eq!(state.reservation.as_deref(), Some("test:purchase-flow-1"));
+        assert!(!queue_exists);
+        assert!(reservation_exists);
+    }
+
+    #[sqlx::test(fixtures("ticket_capacity"))]
+    async fn purchase_flow_rejects_second_ticket_for_one_activity(db: sqlx::PgPool) {
+        let db = sqlx_tracing::Pool::from(db);
+        let first = Uuid::parse_str("00000000-0000-0000-0000-000000000004").unwrap();
+        let second = Uuid::parse_str("00000000-0000-0000-0000-000000000005").unwrap();
+        sqlx::query!(
+            "insert into purchased_tickets
+            (ticket_kind_id, purchaser_id, owner_id, transaction_id)
+            values ($1, $2, $2, $3)",
+            first,
+            "test:purchase-flow-1",
+            Uuid::new_v4(),
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+
+        let mut txn = db.begin().await.unwrap();
+        assert!(
+            reserve_user_purchase_flow(
+                &mut txn,
+                &["test:purchase-flow-1".to_owned()],
+                second,
+                &[false]
+            )
+            .await
+            .is_err(),
+            "the purchase flow should reject a second ticket for the activity"
+        );
+    }
+
+    #[sqlx::test(fixtures("ticket_capacity"))]
+    async fn database_rejects_committed_flow_without_state(db: sqlx::PgPool) {
+        let db = sqlx_tracing::Pool::from(db);
+        let ticket_kind = Uuid::parse_str("00000000-0000-0000-0000-000000000004").unwrap();
+        let mut txn = db.begin().await.unwrap();
+        sqlx::query!(
+            "insert into users_in_purchase_flow (user_id, ticket_kind_id)
+            values ($1, $2)",
+            "test:purchase-flow-1",
+            ticket_kind,
+        )
+        .execute(&mut txn.executor())
+        .await
+        .unwrap();
+        assert!(
+            txn.commit().await.is_err(),
+            "the deferred state constraint should reject a state-less flow"
+        );
     }
 }

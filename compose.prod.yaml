@@ -176,7 +176,14 @@ services:
       traefik.http.routers.fed-s3.tls: "true"
       traefik.http.routers.fed-s3.tls.certresolver: ${TRAEFIK_CERT_RESOLVER:-letsencrypt}
       traefik.http.routers.fed-s3.service: "fed-s3"
+      traefik.http.routers.fed-s3.middlewares: "fed-s3-cors@docker"
       traefik.http.services.fed-s3.loadbalancer.server.port: "9000"
+      traefik.http.middlewares.fed-s3-cors.headers.accesscontrolalloworiginlist: "https://app.teknologappen.se,https://admin.teknologappen.se"
+      traefik.http.middlewares.fed-s3-cors.headers.accesscontrolallowmethods: "GET,HEAD,PUT,POST,DELETE,OPTIONS"
+      traefik.http.middlewares.fed-s3-cors.headers.accesscontrolallowheaders: "*"
+      traefik.http.middlewares.fed-s3-cors.headers.accesscontrolexposeheaders: "ETag"
+      traefik.http.middlewares.fed-s3-cors.headers.accesscontrolmaxage: "86400"
+      traefik.http.middlewares.fed-s3-cors.headers.addvaryheader: "true"
       #
       traefik.http.routers.fed-s3-console.rule: Host(`${S3_ADMIN_DOMAIN:-s3-console.teknologappen.se}`)
       traefik.http.routers.fed-s3-console.entrypoints: ${TRAEFIK_ENTRYPOINT:-websecure}

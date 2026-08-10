@@ -45,13 +45,15 @@ create table group_member_requests (
 );
 
 create table group_memberships (
-    user_id text not null references users(id),
+    -- The identity may be invited before its user row is created on first login.
+    user_id text not null,
     group_id uuid not null references groups(id),
     primary key (user_id, group_id)
 );
 
 create table group_adminships (
-    user_id text not null references users(id),
+    -- Admin email identities may be invited before their first login.
+    user_id text not null,
     group_id uuid not null references groups(id),
     primary key (user_id, group_id),
     constraint group_adminships_email_account check (user_id like 'email:%'),

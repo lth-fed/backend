@@ -1,6 +1,12 @@
 insert into images (id, size, url)
 values ('00000000-0000-0000-0000-000000000001', 0, 'https://example.invalid/image');
 
+insert into users (id, name, language)
+values
+    ('test:purchase-flow-1', ''::bytea, ''::bytea),
+    ('test:purchase-flow-2', ''::bytea, ''::bytea),
+    ('test:purchase-flow-3', ''::bytea, ''::bytea);
+
 insert into groups (id, path, name, description, logo_id, limit_membership_visibility)
 values (
     '00000000-0000-0000-0000-000000000002',

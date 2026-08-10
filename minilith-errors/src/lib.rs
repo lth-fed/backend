@@ -134,7 +134,9 @@ impl MinilithEndpointError {
     #[track_caller]
     pub fn internal_error(error_message: impl AsRef<str>, error: impl Debug) -> Self {
         // so it doesn't just loop
-        if !error_message.as_ref().starts_with("email:") && !error_message.as_ref().starts_with("noalert") {
+        if !error_message.as_ref().starts_with("email:")
+            && !error_message.as_ref().starts_with("noalert")
+        {
             let level = match error_message
                 .as_ref()
                 .get(..2)
@@ -144,13 +146,14 @@ impl MinilithEndpointError {
                 "l1" => AlertLevel::L1,
                 _ => AlertLevel::L3,
             };
-            alert(
+            alert_html(
                 level,
                 format!(
-                    "internal error from wrap_err_internal, \
-                    message:<code>{}</code>, \
-                    error:<pre><code>{error:?}</code></pre>",
-                    error_message.as_ref()
+                    "<p>internal error from wrap_err_internal, \
+                    message:<i>{}</i>. Extensive error:</p> \
+                    <pre><code>{}</code></pre>",
+                    escape_email_html(error_message.as_ref()),
+                    escape_email_html(&format!("{error:#?}"))
                 ),
             );
         }
@@ -158,15 +161,6 @@ impl MinilithEndpointError {
         error!(message = error_message.as_ref(), ?error, "Internal error.");
         Self::InternalServerError(Json(MinilithError {
             message: "Something went very wrong. Contact app developers.".to_owned(),
-            field: None,
-        }))
-    }
-    #[track_caller]
-    pub fn db<E: Debug>(error: E) -> Self {
-        error!(?error, "DB error");
-        Self::InternalServerError(Json(MinilithError {
-            message: "Something went very wrong. Contact app developers. Database request failed."
-                .to_owned(),
             field: None,
         }))
     }
@@ -182,14 +176,20 @@ impl From<sqlx::Error> for MinilithEndpointError {
             // we can't connect to DB!
             AlertLevel::L2
         };
-        alert(
+        alert_html(
             level,
             format!(
-                "db error, \
-                error:<pre><code>{error:?}</code></pre>",
+                "<p>db error:</p> \
+                <pre><code>{}</code></pre>",
+                escape_email_html(&format!("{error:#?}"))
             ),
         );
-        Self::db(error)
+        error!(?error, "DB error");
+        Self::InternalServerError(Json(MinilithError {
+            message: "Something went very wrong. Contact app developers. Database request failed."
+                .to_owned(),
+            field: None,
+        }))
     }
 }
 /// Poem thing.
@@ -515,6 +515,14 @@ pub fn configure_alert_email(client: Option<EmailClient>) -> color_eyre::Result<
 /// Delivery is scheduled on the application's existing Tokio runtime so this
 /// function remains usable by synchronous error-conversion code.
 pub fn alert(level: AlertLevel, message: impl AsRef<str>) {
+    alert_html(
+        level,
+        format!("<p><i>{}</i></p>", escape_email_html(message.as_ref())),
+    );
+}
+/// Same as [`alert`] but `message` has to be escaped for HTML.
+/// `message` is not in an HTML tag.
+pub fn alert_html(level: AlertLevel, message: impl AsRef<str>) {
     let Some(client) = ALERT_EMAIL_CLIENT.get().cloned() else {
         error!(%level, "ALERTS: email is not configured");
         return;
@@ -527,8 +535,9 @@ pub fn alert(level: AlertLevel, message: impl AsRef<str>) {
         }
     };
 
-    let trace = std::backtrace::Backtrace::force_capture();
-    let message = escape_email_html(message.as_ref());
+    let trace_id = opentelemetry::trace::get_active_span(|span| span.span_context().trace_id());
+
+    let backtrace = std::backtrace::Backtrace::force_capture();
     let intro = match level {
         AlertLevel::L1 => {
             "A level 1 critical error occurred in any of the teknologappen instances. \
@@ -546,11 +555,14 @@ pub fn alert(level: AlertLevel, message: impl AsRef<str>) {
     let subject = format!("ALERT {level} from teknologappen");
     let html = format!(
         "<p>{intro}</p>\
-         <p>A message was included from the code: <code>{message}</code>. \
-         <strong>Version</strong>: <code>{GIT_VERSION}</code>.</p>\
+         <p>A message was included from the code:</p>
+         {} \
+         <p><strong>Version</strong>: <code>{GIT_VERSION}</code>. \
+         <strong>Trace ID</strong>: <code>{trace_id}</code>.</p>\
          <p>To ease debugging the backtrace is inserted below.</p>\
          <pre><code>{}</code></pre>",
-        escape_email_html(&trace.to_string()),
+        escape_email_html(message.as_ref()),
+        escape_email_html(&backtrace.to_string()),
     );
     let Ok(runtime) = tokio::runtime::Handle::try_current() else {
         error!(%level, "ALERTS: no Tokio runtime is available for email delivery");

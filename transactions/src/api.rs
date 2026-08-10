@@ -616,9 +616,7 @@ impl Route {
         insert_wares(&mut txn.executor(), uuid, &body.wares).await?;
         txn.commit().await?;
 
-        Ok(Json(CreatePaymentResponseStripe {
-            redirect_url: url,
-        }))
+        Ok(Json(CreatePaymentResponseStripe { redirect_url: url }))
     }
     /// This endpoint is called by Stripe's backend.
     #[oai(path = "/stripe-callback", method = "post", hidden = true)]

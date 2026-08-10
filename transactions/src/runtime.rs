@@ -1,9 +1,10 @@
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
-use minilith_errors::{AlertLevel, MinilithErrorResultExt as _, MinilithResult, alert};
+use minilith_errors::{
+    MinilithEndpointError, MinilithErrorOptionExt as _, MinilithErrorResultExt as _, MinilithResult,
+};
 use stripe_checkout::CheckoutSessionStatus;
-use tracing::error;
 use uuid::Uuid;
 
 use crate::callback::handle_callback_to_us;
@@ -25,57 +26,42 @@ async fn fetch_transaction_info(ctx: &Context, txn: TxnData) -> MinilithResult<C
             let Ok(client) = ctx.get_swish_client(&txn.client_id).await else {
                 return Ok(ControlFlow::Continue(()));
             };
-            let resp = match client
+            let Ok(resp) = client
                 .get(swish::payment_request_url(swish::ApiVersion::V1, txn.id))
                 .send()
                 .await
-            {
-                Ok(resp) => resp,
-                Err(err) => {
-                    alert(
-                        AlertLevel::L2,
-                        "swish connection issues when GETting payment status",
-                    );
-                    error!(
-                        ?err,
-                        "failed to fetch swish payment request status due to connection issues"
-                    );
-                    return Ok(ControlFlow::Break(()));
-                }
+                .wrap_err_internal(
+                    "l2: failed to fetch swish payment request status due to connection issues",
+                )
+            else {
+                return Ok(ControlFlow::Break(()));
             };
             drop(client);
-            if !resp.status().is_success() {
-                alert(AlertLevel::L1, "swish payment request failed");
-                error!(
-                    status_code=%resp.status(),
-                    "swish payment request status fetch failed!"
-                );
+            let status = resp.status();
+            if !status.is_success() {
+                let body = resp.text().await.ok();
+                drop(MinilithEndpointError::internal_error(
+                    format!("l1: swish payment request status fetch failed! Status: {status}"),
+                    body,
+                ));
                 return Ok(ControlFlow::Continue(()));
             }
-            match resp.json().await {
-                Ok(data) => data,
-                Err(err) => {
-                    alert(AlertLevel::L2, "swish payment request body parsing failed");
-                    error!(
-                        ?err,
-                        "failed to get body from swish payment request status \
-                        due to parsing json / reading body issues"
-                    );
-                    return Ok(ControlFlow::Continue(()));
-                }
-            }
+            let Ok(data) = resp.json().await.wrap_err_internal(
+                "l2: failed to get body from swish payment request status \
+                        due to parsing json / reading body issues",
+            ) else {
+                return Ok(ControlFlow::Continue(()));
+            };
+            data
         }
         Provider::Stripe => {
             let Ok(client) = ctx.get_stripe_client(&txn.client_id).await else {
                 return Ok(ControlFlow::Continue(()));
             };
 
-            let Some(session_id) = txn.stripe_id else {
-                alert(
-                    AlertLevel::L1,
-                    "stripe_checkouts doesn't have a stripe_id for this transaction",
-                );
-                error!("stripe_checkouts doesn't have stripe_id for a stripe transaction!");
+            let Ok(session_id) = txn.stripe_id.wrap_err_internal(
+                "l1: stripe_checkouts doesn't have a stripe_id for a stripe transaction",
+            ) else {
                 return Ok(ControlFlow::Continue(()));
             };
             let checkout =
@@ -139,13 +125,10 @@ pub fn spawn(ctx: &Arc<Context>) {
     let ctx = Arc::clone(ctx);
     tokio::spawn(async move {
         loop {
-            if let Err(err) = check_timeouts(&ctx).await {
-                error!(?err, "Error from runtime->check_timeouts");
-                alert(
-                    AlertLevel::L2,
-                    "error from transactions->runtime->check_timeouts",
-                );
-            }
+            let res = check_timeouts(&ctx)
+                .await
+                .wrap_err_internal("l2: error from runtime->check_timeouts");
+            drop(res);
 
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
         }

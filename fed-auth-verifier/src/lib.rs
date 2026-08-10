@@ -291,7 +291,8 @@ impl User {
             return Err(MinilithEndpointError::unauthorized(
                 "test: account not allowed in production",
                 "",
-            ).into());
+            )
+            .into());
         }
         span.set_attribute(opentelemetry::KeyValue::new(
             opentelemetry_semantic_conventions::attribute::USER_ID,

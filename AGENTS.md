@@ -14,6 +14,8 @@
   beginning to code.
 - follow the vision and goals outlined in `../docs/krav.typ`,
   `../docs/vision-och-värdegrund.typ`, `../docs/beslut/beslutsmetod.typ`
+- always give feedback on the prompt and ideas the human presents in relation to
+  the vision and goals outlined above
 - a list of our technologies can be found in `../docs/beslut/teknologier/`,
   including example motivations of how to make decisions
 - change visibility for existing structs & similar to reuse code. It's OK to

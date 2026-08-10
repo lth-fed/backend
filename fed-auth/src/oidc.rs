@@ -121,8 +121,8 @@ impl OAuth2ApiResponse {
         }))
     }
     #[track_caller]
-    fn db(err: impl Debug) -> Self {
-        drop(MinilithEndpointError::db(err));
+    fn db(err: sqlx::Error) -> Self {
+        drop(MinilithEndpointError::from(err));
         Self::Internal
     }
     fn grant_type() -> Self {
@@ -777,7 +777,7 @@ impl MainRouter {
                 .execute(&self.db)
                 .await
                 .map_err(|error| {
-                    drop(MinilithEndpointError::db(error));
+                    drop(MinilithEndpointError::from(error));
                     oauth2error_redirect(OAuth2ErrorKind::Internal, "insert to cache failed", ctx)
                 })?;
                 debug!("Added ID {} to saml2 request id cache", req.id);
@@ -815,7 +815,7 @@ impl MainRouter {
             .get_validated_session(&body.code)
             .await
             .map_err(|error| {
-                drop(MinilithEndpointError::db(error));
+                drop(MinilithEndpointError::from(error));
                 OAuth2ApiResponse::oauth2error(OAuth2ErrorKind::Internal, "db")
             }) {
             Ok(Some(session)) => session,
@@ -858,7 +858,7 @@ impl MainRouter {
         .execute(&self.db)
         .await
         {
-            drop(MinilithEndpointError::db(err));
+            drop(MinilithEndpointError::from(err));
             return oauth2error_redirect(OAuth2ErrorKind::Internal, "db", &ctx);
         }
 

@@ -22,9 +22,8 @@ use crate::activities::Router as ActivityRouter;
 use crate::context::ContextWrapper;
 use crate::group::admin::{
     Adminship, check_activity_adminship, check_direct_adminship, check_direct_or_parent_adminship,
-    check_ticket_kind_adminship, create_adminship_change, group_admins,
+    check_ticket_kind_adminship, create_adminship_change,
 };
-use crate::group::member::group_members;
 use crate::group::{self, Group};
 use crate::ticket::{AvailableAddon, Router as TicketRouter};
 use crate::{
@@ -175,10 +174,18 @@ pub struct CreateAdminship {
     pub user_id: String,
 }
 
+/// A user identity shown in administrator user pickers. `name` is absent for
+/// invited identities that have not logged in yet.
+#[derive(Debug, Object)]
+struct AdminUser {
+    user_id: String,
+    name: Option<String>,
+}
+
 #[derive(Debug)]
 pub struct EmailRecipient {
     pub user_id: String,
-    pub language: Vec<u8>,
+    pub language: Option<Vec<u8>>,
     pub group_name: DIS,
 }
 
@@ -206,7 +213,7 @@ pub(crate) async fn change_admin_email_recipients(
             or admin_group.path = target.parent_path
         inner join group_adminships
             on group_adminships.group_id = admin_group.id
-        inner join users on users.id = group_adminships.user_id
+        left join users on users.id = group_adminships.user_id
         where target.id = $1
         and (
             group_adminships.user_id != $2
@@ -251,9 +258,12 @@ async fn send_adminship_emails(
     let affected_user = email_from_admin_id(affected_user_id);
     let mut messages: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
     for recipient in recipients {
-        let language = context
-            .decrypt_string(recipient.language)
-            .wrap_err_encryption("admin email recipient language")?;
+        let language = match recipient.language {
+            Some(language) => context
+                .decrypt_string(language)
+                .wrap_err_encryption("admin email recipient language")?,
+            None => "sv".to_owned(),
+        };
         let group_name = recipient.group_name.resolve_intl(&language, "<group>");
         #[allow(clippy::single_match_else, reason = "futureproofing")]
         let (subject, html) = match language.split('-').next() {
@@ -1283,6 +1293,29 @@ impl Router {
         Ok(Json(tickets))
     }
 
+    /// Lists distinct add-on names from ticket kinds belonging to activities
+    /// directly administered by the caller. Intended for editor suggestions.
+    #[oai(path = "/addon-names", method = "get")]
+    async fn list_addon_names(
+        &self,
+        user: User,
+    ) -> MinilithResult<Json<Vec<InternationalizedString>>> {
+        let names = sqlx::query!(
+            r#"select distinct addons.name as "name!: DIS"
+            from ticket_addons addons
+            inner join ticket_kinds kinds on kinds.id = addons.ticket_kind_id
+            inner join activity_hosts hosts on hosts.activity_id = kinds.activity_id
+            inner join group_adminships admins on admins.group_id = hosts.group_id
+            where admins.user_id = $1
+            order by addons.name"#,
+            user.get_id(),
+        )
+        .map(|row| row.name.0)
+        .fetch_all(&self.db)
+        .await?;
+        Ok(Json(names))
+    }
+
     /// Creates or fully replaces an unpurchased ticket kind, including its
     /// allowlist, addons, and options. After the first purchase, only the
     /// purchasing window and option bookkeeping may change.
@@ -1359,12 +1392,21 @@ impl Router {
             .as_ref()
             .filter(|ticket| ticket.has_been_purchased())
         {
-            if !existing.immutable_fields_match(
+            let immutable_fields_match = existing.immutable_fields_match(
                 body.activity_id,
                 body.price,
                 &body.allowed_group_ids,
                 &body.addons,
-            ) {
+            );
+            if existing.purchasing_available_stop <= OffsetDateTime::now_utc()
+                && !immutable_fields_match
+            {
+                return Err(MinilithEndpointError::bad_frontend_code(
+                    "closed purchased ticket kinds only allow bookkeeping changes",
+                    "",
+                ));
+            }
+            if !immutable_fields_match {
                 return Err(MinilithEndpointError::bad_frontend_code(
                     "a purchased ticket kind's structure and pricing are immutable",
                     "only purchasing availability and option bookkeeping may change",
@@ -1675,6 +1717,40 @@ impl Router {
         }))
     }
 
+    /// Deletes a named ticket-kind notification that has not been sent yet.
+    #[oai(
+        path = "/ticket-kinds/:ticket_kind_id/notifications/:kind",
+        method = "delete"
+    )]
+    async fn delete_ticket_notification(
+        &self,
+        user: User,
+        Path(ticket_kind_id): Path<Uuid>,
+        Path(kind): Path<String>,
+    ) -> MinilithResult<()> {
+        check_ticket_kind_adminship(&self.db, user.get_id(), ticket_kind_id).await?;
+        let mut txn = self.db.begin().await?;
+        let notification_id = sqlx::query_scalar!(
+            r#"delete from ticket_kind_notifications
+            where ticket_kind_id = $1 and id = $2
+            returning notification_id"#,
+            ticket_kind_id,
+            kind,
+        )
+        .fetch_optional(&mut txn.executor())
+        .await?
+        .wrap_err_not_found()?;
+        sqlx::query!(
+            r#"delete from notifications
+            where id = $1"#,
+            notification_id,
+        )
+        .execute(&mut txn.executor())
+        .await?;
+        txn.commit().await?;
+        Ok(())
+    }
+
     /// Lists notifications that are still scheduled for a ticket kind, ordered
     /// by delivery time. Successfully processed notifications are not retained.
     #[oai(path = "/ticket-kinds/:ticket_kind_id/notifications", method = "get")]
@@ -1773,6 +1849,10 @@ impl Router {
         // rust-s3 0.37.2 nevertheless includes Range conditions in `dynamic_fields`:
         // https://github.com/durch/rust-s3/blob/v0.37.2/src/post_policy.rs#L135-L148
         dynamic_fields.remove("content-length-range");
+
+        sqlx::query!("insert into image_uploads (key) values ($1)", key)
+            .execute(&self.db)
+            .await?;
 
         Ok(Json(ObjectUploadAllowanceResponse {
             // The signed policy covers the form fields. The browser sends them
@@ -1906,9 +1986,9 @@ impl Router {
                     "GRP_NULL_PARENT",
                     format!("no parent with path `{new_parent}` exists"),
                 ),
-                _ => MinilithEndpointError::db(error),
+                _ => MinilithEndpointError::from(error),
             },
-            other_error => MinilithEndpointError::db(other_error),
+            other_error => MinilithEndpointError::from(other_error),
         })?;
 
         if is_new {
@@ -1997,10 +2077,30 @@ impl Router {
         &self,
         user: User,
         Path(group_id): Path<Uuid>,
-    ) -> MinilithResult<Json<Vec<String>>> {
+    ) -> MinilithResult<Json<Vec<AdminUser>>> {
         let mut txn = self.db.begin().await?;
         check_direct_adminship(&mut txn.executor(), user.get_id(), group_id).await?;
-        let members = group_members(&mut txn.executor(), group_id).await?;
+        let members = sqlx::query!(
+            r#"select memberships.user_id, users.name as "name?"
+            from group_memberships memberships
+            left join group_adminships admins
+                on admins.group_id = memberships.group_id
+                and admins.user_id = memberships.user_id
+            left join users on users.id = memberships.user_id
+            where memberships.group_id = $1 and admins.user_id is null
+            order by memberships.user_id"#,
+            group_id,
+        )
+        .map(|row| AdminUser {
+            user_id: row.user_id,
+            name: row.name.and_then(|name| {
+                self.decrypt_string(name)
+                    .wrap_err_encryption("list_members name")
+                    .ok()
+            }),
+        })
+        .fetch_all(&mut txn.executor())
+        .await?;
 
         Ok(Json(members))
     }
@@ -2065,12 +2165,64 @@ impl Router {
         &self,
         user: User,
         Path(group_id): Path<Uuid>,
-    ) -> MinilithResult<Json<Vec<String>>> {
+    ) -> MinilithResult<Json<Vec<AdminUser>>> {
         let mut txn = self.db.begin().await?;
         check_direct_or_parent_adminship(&mut txn.executor(), user.get_id(), group_id).await?;
-        let admins = group_admins(&mut txn.executor(), group_id).await?;
+        let admins = sqlx::query!(
+            r#"select admins.user_id, users.name as "name?"
+            from group_adminships admins
+            left join users on users.id = admins.user_id
+            where admins.group_id = $1
+            order by admins.user_id"#,
+            group_id,
+        )
+        .map(|row| AdminUser {
+            user_id: row.user_id,
+            name: row.name.and_then(|name| {
+                self.decrypt_string(name)
+                    .wrap_err_encryption("list_members name")
+                    .ok()
+            }),
+        })
+        .fetch_all(&mut txn.executor())
+        .await?;
 
         Ok(Json(admins))
+    }
+
+    /// Lists the distinct member and administrator identities in every group
+    /// directly administered by the caller. Intended for cached user pickers.
+    #[oai(path = "/group-users", method = "get")]
+    async fn list_group_users(&self, user: User) -> MinilithResult<Json<Vec<AdminUser>>> {
+        let users = sqlx::query!(
+            r#"with administered_groups as (
+                select group_id from group_adminships where user_id = $1
+            ), related_users as (
+                select memberships.user_id
+                from group_memberships memberships
+                inner join administered_groups using (group_id)
+                union
+                select admins.user_id
+                from group_adminships admins
+                inner join administered_groups using (group_id)
+            )
+            select related_users.user_id as "user_id!", users.name as "name?"
+            from related_users
+            left join users on users.id = related_users.user_id
+            order by related_users.user_id"#,
+            user.get_id(),
+        )
+        .map(|row| AdminUser {
+            user_id: row.user_id,
+            name: row.name.and_then(|name| {
+                self.decrypt_string(name)
+                    .wrap_err_encryption("list_members name")
+                    .ok()
+            }),
+        })
+        .fetch_all(&self.db)
+        .await?;
+        Ok(Json(users))
     }
 
     /// Create an adminship for a user in a group.
