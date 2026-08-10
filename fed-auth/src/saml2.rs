@@ -301,7 +301,7 @@ impl SamlRouter {
         let user = ValidatedUser {
             sub: format!("lund-university:{}", sub.value.clone()),
             email: None,
-            full_name: Some("Erika Davidssona".to_owned()),
+            full_name: None,
             lth_guild: None,
         };
         self.validate_session(request_id, &user).await?;

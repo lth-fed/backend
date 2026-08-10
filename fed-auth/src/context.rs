@@ -19,7 +19,7 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::LevelFilter;
 
 use crate::oidc::CALLBACK_TOKEN_VALID_FOR;
-use crate::{PgPool, jwt, saml2};
+use crate::{PgPool, WEBSITE_DOMAIN, jwt, saml2};
 
 #[derive(Clone, Debug, sqlx::Type)]
 pub(crate) struct AuthSession {
@@ -311,7 +311,7 @@ impl Context {
     ) -> Result<String, ()> {
         if session.redirect_requires_datasharing && !session.datasharing_confirmed {
             Ok(format!(
-                "/confirm-datasharing/?code={code}&provider={}",
+                "{WEBSITE_DOMAIN}/confirm-datasharing/?code={code}&provider={}",
                 session
                     .redirect_uri
                     .split('/')
@@ -360,7 +360,7 @@ impl Context {
             }
             if additional_personal_information {
                 return Ok(format!(
-                    "/personal-information/?code={code}&sub={}",
+                    "{WEBSITE_DOMAIN}/personal-information/?code={code}&sub={}",
                     session.user.sub
                 ));
             }
