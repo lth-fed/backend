@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select count(*) from users_in_purchase_flow\n            where ticket_kind_id = $1 and reservation = user_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "1cb54358f6d1f24afca21e89c9917c94f2dfd5967c07adc8b01d617cf2d5a5f1"
+}

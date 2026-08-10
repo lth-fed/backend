@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select (\n                    select count(user_id) from ticket_reservation_queuers\n                    where ticket_kind_id = $1\n                ) as \"count!\",\n                reserved_or_purchased_tickets, max_tickets\n                from ticket_kinds where id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "reserved_or_purchased_tickets",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "max_tickets",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      false,
+      false
+    ]
+  },
+  "hash": "10a72af916101429039f4499696893fb90e06a4ba704f6e8fd5295a00c0b9477"
+}

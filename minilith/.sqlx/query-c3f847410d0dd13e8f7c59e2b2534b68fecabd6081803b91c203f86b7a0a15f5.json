@@ -1,0 +1,36 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select distinct\n            group_adminships.user_id,\n            users.language,\n            target.name as \"group_name!: DIS\"\n        from groups target\n        inner join groups admin_group\n            on admin_group.id = target.id\n            or admin_group.path = target.parent_path\n        inner join group_adminships\n            on group_adminships.group_id = admin_group.id\n        left join users on users.id = group_adminships.user_id\n        where target.id = $1\n        and (\n            group_adminships.user_id != $2\n            or group_adminships.user_id = $3\n        )\n        order by group_adminships.user_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "language",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 2,
+        "name": "group_name!: DIS",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "c3f847410d0dd13e8f7c59e2b2534b68fecabd6081803b91c203f86b7a0a15f5"
+}

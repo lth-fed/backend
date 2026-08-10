@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select memberships.user_id, users.name as \"name?\"\n            from group_memberships memberships\n            left join group_adminships admins\n                on admins.group_id = memberships.group_id\n                and admins.user_id = memberships.user_id\n            left join users on users.id = memberships.user_id\n            where memberships.group_id = $1 and admins.user_id is null\n            order by memberships.user_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "name?",
+        "type_info": "Bytea"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "7e850c5c8b0c7ce3a16116d251aca7dca2496f79604991996e35b4913d869619"
+}

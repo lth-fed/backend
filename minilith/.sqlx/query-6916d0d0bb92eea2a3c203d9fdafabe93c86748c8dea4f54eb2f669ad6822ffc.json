@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select flow.user_id\n        from users_in_purchase_flow flow\n        inner join ticket_release_queuers queuer\n            on queuer.user_id = flow.user_id\n            and queuer.ticket_kind_id = flow.ticket_kind_id\n        where queuer.started_queueing < now() - '20 minutes'::interval\n        and flow.release_queue = flow.user_id\n        order by flow.user_id\n        for update of flow skip locked",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "6916d0d0bb92eea2a3c203d9fdafabe93c86748c8dea4f54eb2f669ad6822ffc"
+}

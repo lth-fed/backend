@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select ticket_kind_id from purchased_tickets\n            where id = $1 and owner_id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "ticket_kind_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "ac561af1a9a5c19f120dd7f2cc104c323d96eed82a75dd1b29d5bf7c377cda70"
+}

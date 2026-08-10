@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from ticket_reservations\n            where user_id = $1\n            and ticket_kind_id = $2\n            and timeout < now()\n            and transaction_id is null",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e9daa95aebd33c4348b9a0a28facfcce1d3fb140dca827600607b61251efde9c"
+}

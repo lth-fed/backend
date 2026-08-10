@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update ticket_reservations\n                        set transaction_id = null\n                        where transaction_id = $1\n                        returning\n                            id,\n                            user_id,\n                            ticket_kind_id,\n                            timeout < now() as \"has_timed_out!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "ticket_kind_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "has_timed_out!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "cb032dd51df90906a5c44d40f0f02d44695bdacef81a5da276108bbc09b48e01"
+}

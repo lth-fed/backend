@@ -1,11 +1,11 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select transaction_id as \"transaction_id!\", user_id, ticket_kind_id\n        from ticket_reservations\n        where transaction_id is not null",
+  "query": "select reservation.id, user_id, ticket_kind_id\n        from ticket_reservations reservation\n        where transaction_id = $1\n        for update of reservation",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "transaction_id!",
+        "name": "id",
         "type_info": "Uuid"
       },
       {
@@ -20,13 +20,15 @@
       }
     ],
     "parameters": {
-      "Left": []
+      "Left": [
+        "Uuid"
+      ]
     },
     "nullable": [
-      true,
+      false,
       false,
       false
     ]
   },
-  "hash": "101bcc58a392235f9f0476d045a37c79ceb4a69abc369e98b7cb5396a08b89f0"
+  "hash": "3e8f2779481338b25fbf93a139e66f762cb591312226710326934b2b4a0da929"
 }

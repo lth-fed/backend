@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update ticket_release_queuers\n            set started_queueing = now() - '21 minutes'::interval\n            where user_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9db18a88c76e062fa6db786d737787aee481cf109dbdeff7f5c2fbc250614158"
+}

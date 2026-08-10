@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into purchased_tickets\n        (id, purchaser_id, owner_id, ticket_kind_id, transaction_id)\n        values ($1, $2, $2, $3, $4)\n        returning id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "080bd67bc22a6484fdd11c17bbf29a3b32432396baf54659c9b63e43d37d1c90"
+}
