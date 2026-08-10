@@ -110,7 +110,6 @@ struct ActivityTicketKind {
     purchasing_available_stop: OffsetDateTime,
     /// Null if there's not a shortage of tickets.
     tickets_left: Option<i32>,
-    membership_passing: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -290,6 +289,8 @@ impl Router {
 
         Ok(Json(activity))
     }
+    /// The ticket kinds not purchasable due to membership check are not shown.
+    ///
     /// # Errors
     ///
     /// - user might not be allowed to access this activity
@@ -314,8 +315,13 @@ impl Router {
                     from ticket_kinds all_kinds
                     where all_kinds.activity_id = activities.id
                 )
-            ), 0)::int as "available_tickets!",
-            exists (
+            ), 0)::int as "available_tickets!"
+
+            from ticket_kinds as kind
+            inner join activities on activities.id = kind.activity_id
+            where kind.activity_id = $1
+            and kind.max_tickets > 0
+            and exists (
                 select 1
                 from group_memberships
                 inner join groups member_group on member_group.id = group_memberships.group_id
@@ -328,12 +334,7 @@ impl Router {
                     member_group.limit_membership_visibility = false
                     or tk_ag.group_id = group_memberships.group_id
                 )
-            ) as membership_passing
-
-            from ticket_kinds as kind
-            inner join activities on activities.id = kind.activity_id
-            where kind.activity_id = $1
-            and kind.max_tickets > 0
+            )
             "#,
             id.0,
             user.get_id()
@@ -347,7 +348,6 @@ impl Router {
                 purchasing_available_start: kind.purchasing_available_start,
                 purchasing_available_stop: kind.purchasing_available_stop,
                 tickets_left: (kind.available_tickets < 10).then_some(kind.available_tickets),
-                membership_passing: kind.membership_passing.unwrap_or(false),
             }
         })
         .fetch_all(&self.db)

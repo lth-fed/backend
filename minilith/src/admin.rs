@@ -213,7 +213,8 @@ pub(crate) async fn change_admin_email_recipients(
             or admin_group.path = target.parent_path
         inner join group_adminships
             on group_adminships.group_id = admin_group.id
-        left join users on users.id = group_adminships.user_id
+        -- don't alert admins which aren't on the app to avoid spam to them
+        inner join users on users.id = group_adminships.user_id
         where target.id = $1
         and (
             group_adminships.user_id != $2

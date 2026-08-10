@@ -3,11 +3,13 @@ use std::time::Duration;
 
 use fed_auth_verifier::callbacks::{TransactionCallbackInfo, TransactionInfo};
 use minilith_errors::{AlertLevel, MinilithResult, alert};
+use sqlx::postgres::types::PgInterval;
 use tracing::{error, info, warn};
 
 use crate::push_notifications::PushSendResult;
 use crate::{
-    ContextWrapper, DbInternationalizedString as DIS, MinilithErrorOptionExt as _, ticket,
+    ContextWrapper, DbInternationalizedString as DIS, InternationalizedString as IS,
+    MinilithErrorOptionExt as _, ticket,
 };
 
 const NOTIFICATION_POLL_INTERVAL: Duration = Duration::from_secs(10);
@@ -86,6 +88,65 @@ pub async fn initial_checks(ctx: &ContextWrapper) -> MinilithResult<()> {
         )
         .await?;
     }
+
+    Ok(())
+}
+
+async fn send_ticket_release_notification(
+    ctx: &ContextWrapper,
+    minus_start: u8,
+    minus_end: u8,
+    id: &str,
+    mut title: impl FnMut(&IS) -> serde_json::Value,
+    description: serde_json::Value,
+) -> MinilithResult<()> {
+    debug_assert!(minus_start > minus_end, "otherwise none is ever sent");
+    let mut txn = ctx.db.begin().await?;
+    // this makes it idempotent
+    let Some(row) = sqlx::query!(
+        "select kind.id, kind.name as \"name!: DIS\"
+        from ticket_kinds kind
+        left outer join ticket_kind_notifications notif
+            on notif.ticket_kind_id = kind.id
+        where purchasing_available_start > (now() - $2::interval)
+        and purchasing_available_start < (now() - $3::interval)
+        and notif.id = $1
+        and notif.notification_id is null
+        for update of kind skip locked",
+        id,
+        PgInterval {
+            microseconds: 1000 * 1000 * 60 * i64::from(minus_start),
+            days: 0,
+            months: 0,
+        },
+        PgInterval {
+            microseconds: 1000 * 1000 * 60 * i64::from(minus_end),
+            days: 0,
+            months: 0,
+        },
+    )
+    .fetch_optional(&mut txn.executor())
+    .await?
+    else {
+        return Ok(());
+    };
+
+    sqlx::query!(
+        r#"with notif as (
+            insert into notifications (id, title, content, send_at)
+            values (uuidv4(), $1, $2, now())
+            returning id
+        )
+        insert into ticket_kind_notifications (id, ticket_kind_id, notification_id) 
+        select $3, $4, notif.id as notification_id
+        from notif"#,
+        title(&row.name),
+        description,
+        id,
+        row.id
+    ).execute(&mut txn.executor()).await?;
+
+    txn.commit().await?;
 
     Ok(())
 }
@@ -240,6 +301,41 @@ pub fn spawn(ctx: &ContextWrapper) {
     let notification_ctx = Arc::clone(ctx);
     tokio::spawn(async move {
         loop {
+            drop(send_ticket_release_notification(
+                &notification_ctx,
+                16,
+                14,
+                "pre-release",
+                |title| {
+                    serde_json::json!({
+                        "sv": format!("Biljetterna till {} släpps snart!", title.resolve_intl("sv", "")),
+                        "en": format!("The tickets to {} are released soon!", title.resolve_intl("en", "")),
+                    })
+                },
+                serde_json::json!({
+                    "sv": "Gå in i appen och ställ dig i kö för att få plats.",
+                    "en": "The queues are open.",
+                }),
+            ).await);
+            drop(
+                send_ticket_release_notification(
+                    &notification_ctx,
+                    1,
+                    0,
+                    "release",
+                    |_| {
+                        serde_json::json!({
+                            "sv": format!("Biljetterna är släppta!"),
+                            "en": format!("The tickets are released!"),
+                        })
+                    },
+                    serde_json::json!({
+                        "sv": "Se om du fått en reservation.",
+                        "en": "Check if you got a reservation.",
+                    }),
+                )
+                .await,
+            );
             loop {
                 match check_next_notification(&notification_ctx).await {
                     Ok(true) => {}
