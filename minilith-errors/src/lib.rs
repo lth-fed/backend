@@ -561,7 +561,7 @@ pub fn alert_html(level: AlertLevel, message: impl AsRef<str>) {
          <strong>Trace ID</strong>: <code>{trace_id}</code>.</p>\
          <p>To ease debugging the backtrace is inserted below.</p>\
          <pre><code>{}</code></pre>",
-        escape_email_html(message.as_ref()),
+        message.as_ref(),
         escape_email_html(&backtrace.to_string()),
     );
     let Ok(runtime) = tokio::runtime::Handle::try_current() else {

@@ -144,7 +144,9 @@ async fn send_ticket_release_notification(
         description,
         id,
         row.id
-    ).execute(&mut txn.executor()).await?;
+    )
+    .execute(&mut txn.executor())
+    .await?;
 
     txn.commit().await?;
 
