@@ -41,11 +41,12 @@ pub(crate) const WEBSITE_DOMAIN: &str = "https://auth.teknologappen.se";
 ///
 /// If the endpoint fails to set up, often because env variables / database is missing.
 pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl poem::Endpoint> {
-    let tracer = get_otel(env!("CARGO_PKG_NAME"), test_db.is_some())?;
+    let is_test = test_db.is_some();
+    let tracer = get_otel(env!("CARGO_PKG_NAME"), is_test)?;
 
     let context = Arc::new(Context::new(test_db).await?);
 
-    if cfg!(not(test)) {
+    if !is_test {
         runtime::spawn(&context).await;
     }
 

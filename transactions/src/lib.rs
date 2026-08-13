@@ -90,14 +90,15 @@ impl Deref for ApiAuth {
 ///
 /// See [`Context::new`].
 pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl Endpoint> {
-    let otel = get_otel(env!("CARGO_PKG_NAME"), test_db.is_some())?;
+    let is_test = test_db.is_some();
+    let otel = get_otel(env!("CARGO_PKG_NAME"), is_test)?;
 
     let context = Arc::new(Context::new(test_db).await?);
     let api_auth_context = ApiAuthContext {
         db: context.db.clone(),
     };
 
-    if cfg!(not(test)) {
+    if !is_test {
         if let Err(err) = runtime::initial_checks(&context).await {
             tracing::error!(?err, "failed to run initial checks!");
             return Err(color_eyre::Report::msg(""));

@@ -6,6 +6,7 @@ use serde::Serialize;
 use sqlx::PgPool;
 use time::OffsetDateTime;
 use time::format_description::well_known;
+use uuid::Uuid;
 
 mod lib;
 
@@ -20,6 +21,7 @@ async fn free(db: PgPool) -> color_eyre::Result<()> {
     }
     #[derive(Serialize)]
     struct Body {
+        id: Uuid,
         timeout: String,
         wares: Vec<Ware>,
     }
@@ -31,7 +33,20 @@ async fn free(db: PgPool) -> color_eyre::Result<()> {
 
     let app = lib::get_test_client(db).await?;
 
+    let id = app
+        .post("/v0/init")
+        .header("authorization", "bearer hehe-super-secure")
+        .send()
+        .await
+        .json()
+        .await
+        .value()
+        .string()
+        .parse::<Uuid>()
+        .unwrap();
+
     let body = Body {
+        id,
         timeout: (OffsetDateTime::now_utc() + time::Duration::HOUR)
             .format(&well_known::Iso8601::DEFAULT)
             .unwrap(),
@@ -50,10 +65,8 @@ async fn free(db: PgPool) -> color_eyre::Result<()> {
         .send()
         .await;
     response.assert_status_is_ok();
-    let txn = response.json().await;
-    let txn = txn.value().object().get("transaction_id").string();
     let mut receipt = app
-        .post(format!("/v0/{txn}/receipt"))
+        .post(format!("/v0/{id}/receipt"))
         .header("authorization", "bearer hehe-super-secure")
         .body_json(&ReceiptBody {
             language: "sv".to_owned(),
