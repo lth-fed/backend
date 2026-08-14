@@ -127,7 +127,12 @@ impl MainRouter {
                 "",
             ));
         }
-        if !body.name.contains(' ') || body.name.len() < 5 {
+        if body
+            .name
+            .split_once(' ')
+            .is_none_or(|(first_name, surname)| first_name.is_empty() || surname.is_empty())
+            || body.name.len() < 5
+        {
             return Err(MinilithEndpointError::bad_user_input(
                 "name invalid",
                 "",

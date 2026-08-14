@@ -302,8 +302,7 @@ impl Router {
     ) -> MinilithResult<Json<Vec<ActivityTicketKind>>> {
         self.test_activity_access(user.get_id(), &id.0).await?;
         let kinds = sqlx::query!(
-            r#"
-            select kind.id,
+            r#"select kind.id,
             kind.name as "name!: DIS",
             kind.price,
             kind.purchasing_available_start,
@@ -320,19 +319,29 @@ impl Router {
             from ticket_kinds as kind
             inner join activities on activities.id = kind.activity_id
             where kind.activity_id = $1
-            and kind.max_tickets > 0
-            and exists (
-                select 1
-                from group_memberships
-                inner join groups member_group on member_group.id = group_memberships.group_id
-                inner join ticket_kind_allowed_groups tk_ag on tk_ag.ticket_kind_id = kind.id
-                inner join groups allowed_group on allowed_group.id = tk_ag.group_id
-                    and allowed_group.path @> member_group.path
+            and (
+                (
+                    kind.max_tickets > 0
+                    and exists (
+                        select 1
+                        from group_memberships
+                        inner join groups member_group on member_group.id = group_memberships.group_id
+                        inner join ticket_kind_allowed_groups tk_ag on tk_ag.ticket_kind_id = kind.id
+                        inner join groups allowed_group on allowed_group.id = tk_ag.group_id
+                            and allowed_group.path @> member_group.path
 
-                where group_memberships.user_id = $2
-                and (
-                    member_group.limit_membership_visibility = false
-                    or tk_ag.group_id = group_memberships.group_id
+                        where group_memberships.user_id = $2
+                        and (
+                            member_group.limit_membership_visibility = false
+                            or tk_ag.group_id = group_memberships.group_id
+                        )
+                    )
+                )
+                -- admin
+                or exists (select 1 from group_adminships admin
+                    inner join activity_hosts host on admin.group_id = host.group_id
+                    where admin.user_id = $2
+                    and host.activity_id = $1
                 )
             )
             "#,

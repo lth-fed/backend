@@ -524,7 +524,8 @@ pub fn alert(level: AlertLevel, message: impl AsRef<str>) {
 /// `message` is not in an HTML tag.
 pub fn alert_html(level: AlertLevel, message: impl AsRef<str>) {
     let Some(client) = ALERT_EMAIL_CLIENT.get().cloned() else {
-        error!(%level, "ALERTS: email is not configured");
+        let backtrace = std::backtrace::Backtrace::force_capture();
+        error!(%level, "ALERTS: email is not configured. Backtrace:\n{backtrace}");
         return;
     };
     let recipients = match alert_recipients(level) {

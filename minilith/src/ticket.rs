@@ -457,7 +457,7 @@ impl Router {
                 activities.location as "location!: Location",
                 activities.time_start as "time_start",
                 activities.time_end as "time_end",
-                (owner_id = purchaser_id) as "owned_by_me!"
+                (owner_id = $1) as "owned_by_me!"
             from purchased_tickets
             inner join ticket_kinds on ticket_kinds.id = purchased_tickets.ticket_kind_id
             inner join activities on activities.id = ticket_kinds.activity_id
@@ -510,7 +510,7 @@ impl Router {
         };
 
         let user = sqlx::query!(
-            "select name as \"name: DIS\", language
+            "select name, language
             from users where id = $1",
             auth.get_id()
         )
@@ -524,11 +524,13 @@ impl Router {
             Some("sv") => transactions::Language::Swedish,
             _ => transactions::Language::English,
         };
-        let name = user.name.resolve_intl(&lang, "<name>");
+        let name = self
+            .decrypt_string(user.name)
+            .wrap_err_encryption("user.name")?;
 
         let data = transactions::ReceiptRequest {
             language: receipt_lang,
-            customer_name: name.to_owned(),
+            customer_name: name.clone(),
         };
         let resp = self
             .transactions_post(format!("/v0/{transaction_id}/receipt"))
@@ -1152,6 +1154,20 @@ impl Router {
     #[oai(path = "/transfer", method = "post")]
     async fn transfer(&self, auth: User, body: Json<TransferRequest>) -> MinilithResult<()> {
         let mut txn = self.db.begin().await?;
+        if !sqlx::query_scalar!(
+            "select exists (select 1 from users where id = $1) as \"exists!\"",
+            body.to_user
+        )
+        .fetch_one(&mut txn.executor())
+        .await?
+        {
+            return Err(MinilithEndpointError::bad_user_input(
+                "to_user doesn't exist",
+                "",
+                "to_user doesn't exist",
+                "to_user",
+            ));
+        }
         let ticket_kind = sqlx::query_scalar!(
             "select ticket_kind_id from purchased_tickets
             where id = $1 and owner_id = $2",
@@ -1233,8 +1249,7 @@ impl Router {
             inner join activities a on a.id = activity_verifiers.activity_id
             inner join images on images.id = a.image_id
             where user_id = $1
-            and a.time_end > now() - '24 hours'::interval
-            and a.time_start < now() + '7 days'::interval",
+            and a.time_end > now() - '24 hours'::interval",
             auth.get_id()
         )
         .map(|row| ValidateActivity {

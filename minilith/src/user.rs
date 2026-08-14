@@ -224,7 +224,8 @@ impl Router {
                     "insert into group_memberships (user_id, group_id)
                     select $1 as user_id, id as group_id 
                     from groups where path = $2
-                    on conflict do nothing
+                    -- so even if it exists we return it
+                    on conflict (user_id, group_id) do update set group_id = excluded.group_id
                     returning group_id",
                     cb_data.sub,
                     guild_path
@@ -262,8 +263,8 @@ impl Router {
         } else {
             let has_user = sqlx::query_scalar!(
                 "select exists (
-                        select 1 from users where id = $1
-                    ) as \"exists!\"",
+                    select 1 from users where id = $1
+                ) as \"exists!\"",
                 cb_data.sub
             )
             .fetch_one(&self.db)

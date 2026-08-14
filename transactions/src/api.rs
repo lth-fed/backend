@@ -832,7 +832,7 @@ impl Route {
             payment_reference,
             refund_reference: transaction.refund_reference,
             wares,
-            customer_name: body.customer_name.clone(),
+            customer_name: Some(body.customer_name.clone()),
             customer_id: transaction.customer_id,
             merchant_id: transaction.client_id,
             merchant_name: client_id.name,

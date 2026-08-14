@@ -21,7 +21,7 @@ values
     null,
     'E-sektionen inom TLTH',
     'informationschef@esek.se',
-    ' Edekvata, plan B i E-huset, LTH
+    'Edekvata, plan B i E-huset, LTH
 Ole Römers väg 3B
 223 63 Lund',
     '845001-2284',

@@ -23,7 +23,7 @@ minilith-errors = { version = "0.1.0", path = "../minilith-errors", features = [
 opentelemetry.workspace = true
 poem.workspace = true
 poem-openapi.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["form", "multipart", "query"] }
 serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true

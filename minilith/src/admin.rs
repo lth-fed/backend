@@ -1822,7 +1822,8 @@ impl Router {
         }
 
         let uuid = Uuid::new_v4();
-        let max_size_bytes = 1024u32 * 1024 * 4;
+        // 1 MB
+        let max_size_bytes = 1024u32 * 1024;
         let key = format!("{uuid}.{}", body.extension);
         let policy = s3::post_policy::PostPolicy::new(PostPolicyExpiration::ExpiresIn(60 * 5))
             .condition(

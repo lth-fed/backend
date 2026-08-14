@@ -95,8 +95,8 @@ pub async fn handle_callback_to_us(
                 &ctx.client,
                 &ctx.signing_key,
                 [CallbackEvent {
-                    callback_url_v1: transaction.callback_url_v1,
-                    client_id: transaction.client_id,
+                    callback_url_v1: transaction.callback_url_v1.clone(),
+                    client_id: transaction.client_id.clone(),
                     inner: CallbackInfo {
                         transaction_id: transaction.id,
                         inner: TransactionInfo {
@@ -107,13 +107,31 @@ pub async fn handle_callback_to_us(
                 .into_iter(),
             )
             .await;
-            sqlx::query!(
-                "update transactions set payment_reference = $2 where id = $1",
-                data.id,
-                payment_reference
+            let mut db_transaction = ctx.db.begin().await?;
+            sqlx::query(
+                "update transactions
+                set payment_reference = coalesce(payment_reference, $2),
+                    paid_at = coalesce(paid_at, now())
+                where id = $1",
             )
-            .execute(&ctx.db)
+            .bind(data.id)
+            .bind(payment_reference)
+            .execute(&mut db_transaction.executor())
             .await?;
+            sqlx::query(
+                "insert into fortnox_voucher_jobs (transaction_id)
+                select transactions.id
+                from transactions
+                inner join client_ids using (client_id)
+                where transactions.id = $1
+                    and transactions.provider = 'swish'
+                    and client_ids.fortnox_client_id is not null
+                on conflict (transaction_id) do nothing",
+            )
+            .bind(data.id)
+            .execute(&mut db_transaction.executor())
+            .await?;
+            db_transaction.commit().await?;
         }
         Some(swish::Status::Paid) => {
             return Err(MinilithEndpointError::bad_frontend_code(

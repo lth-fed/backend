@@ -96,6 +96,8 @@ async fn fetch_transaction_info(ctx: &Context, txn: TxnData) -> MinilithResult<C
 ///
 /// DB errors.
 pub async fn initial_checks(ctx: &Arc<Context>) -> MinilithResult<()> {
+    crate::fortnox::recover_stale_jobs(ctx).await?;
+
     let unpaid_transactions = sqlx::query_as!(
         TxnData,
         "select id, provider as \"provider: Provider\", client_id, stripe_id
@@ -122,15 +124,39 @@ pub fn spawn(ctx: &Arc<Context>) {
     // one runtime task per instance of this, so every function called in `check_timeouts` has to
     // be safe to be called concurrently from all instances of transactions (i.e. we have to write
     // good sql queries)
-    let ctx = Arc::clone(ctx);
+    let timeout_context = Arc::clone(ctx);
     tokio::spawn(async move {
         loop {
-            let res = check_timeouts(&ctx)
+            let res = check_timeouts(&timeout_context)
                 .await
                 .wrap_err_internal("l2: error from runtime->check_timeouts");
             drop(res);
 
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        }
+    });
+
+    let fortnox_context = Arc::clone(ctx);
+    tokio::spawn(async move {
+        let mut jobs = tokio::time::interval(std::time::Duration::from_secs(2));
+        let mut stale_jobs = tokio::time::interval(std::time::Duration::from_mins(10));
+        // `interval` ticks immediately. Startup recovery already ran in `initial_checks`.
+        stale_jobs.tick().await;
+        loop {
+            tokio::select! {
+                _ = jobs.tick() => {
+                    let res = crate::fortnox::process_next_job(&fortnox_context)
+                        .await
+                        .wrap_err_internal("l2: error from runtime->process_next_fortnox_job");
+                    drop(res);
+                }
+                _ = stale_jobs.tick() => {
+                    let res = crate::fortnox::recover_stale_jobs(&fortnox_context)
+                        .await
+                        .wrap_err_internal("l2: error from runtime->recover_stale_fortnox_jobs");
+                    drop(res);
+                }
+            }
         }
     });
 }
