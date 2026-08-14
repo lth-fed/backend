@@ -3,7 +3,7 @@
 ## SQLx
 
 > Before committing, run `cargo sqlx prepare -- --all-targets`. Without
-> `--all-targets` it doesn't generate the test files.
+> `--all-targets` it doesn't generate the test files. Or run `./sqlx-prepare.sh`
 
 > Outer joins must override the variable to be optional:
 > `select id, stripe_id as "stripe_id?" from transactions txn left outer join stripe_checkouts s on txn.id = s.transaction_id`

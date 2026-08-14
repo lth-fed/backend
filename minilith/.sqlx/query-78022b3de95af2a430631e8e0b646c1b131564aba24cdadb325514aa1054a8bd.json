@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select\n                purchased_tickets.id as \"id\",\n                purchased_tickets.ticket_kind_id as \"ticket_kind_id\",\n                ticket_kinds.activity_id as \"activity_id\",\n                ticket_kinds.name as \"ticket_kind_name!: DIS\",\n                activities.title as \"activity_title!: DIS\",\n                creator.id as creator_id,\n                creator.path as creator_path,\n                creator.name as \"creator_name!: DIS\",\n                activities.location as \"location!: Location\",\n                activities.time_start as \"time_start\",\n                activities.time_end as \"time_end\",\n                (owner_id = purchaser_id) as \"owned_by_me!\"\n            from purchased_tickets\n            inner join ticket_kinds on ticket_kinds.id = purchased_tickets.ticket_kind_id\n            inner join activities on activities.id = ticket_kinds.activity_id\n            inner join groups creator on creator.id = activities.creator_id\n            where purchased_tickets.owner_id = $1 or purchased_tickets.purchaser_id = $1\n            ",
+  "query": "select\n                purchased_tickets.id as \"id\",\n                purchased_tickets.ticket_kind_id as \"ticket_kind_id\",\n                ticket_kinds.activity_id as \"activity_id\",\n                ticket_kinds.name as \"ticket_kind_name!: DIS\",\n                activities.title as \"activity_title!: DIS\",\n                creator.id as creator_id,\n                creator.path as creator_path,\n                creator.name as \"creator_name!: DIS\",\n                activities.location as \"location!: Location\",\n                activities.time_start as \"time_start\",\n                activities.time_end as \"time_end\",\n                (owner_id = $1) as \"owned_by_me!\"\n            from purchased_tickets\n            inner join ticket_kinds on ticket_kinds.id = purchased_tickets.ticket_kind_id\n            inner join activities on activities.id = ticket_kinds.activity_id\n            inner join groups creator on creator.id = activities.creator_id\n            where purchased_tickets.owner_id = $1 or purchased_tickets.purchaser_id = $1\n            ",
   "describe": {
     "columns": [
       {
@@ -113,5 +113,5 @@
       null
     ]
   },
-  "hash": "3c75fbb23a3ed554bacf90b2f2fdb2332c5432bdaf0fe1d1e40bbdb680cf8443"
+  "hash": "78022b3de95af2a430631e8e0b646c1b131564aba24cdadb325514aa1054a8bd"
 }

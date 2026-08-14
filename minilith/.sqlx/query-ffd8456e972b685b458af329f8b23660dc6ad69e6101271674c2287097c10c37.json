@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into group_memberships (user_id, group_id)\n                    select $1 as user_id, id as group_id \n                    from groups where path = $2\n                    -- so even if it exists we return it\n                    on conflict (user_id, group_id) do update set group_id = excluded.group_id\n                    returning group_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "group_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        {
+          "Custom": {
+            "name": "ltree",
+            "kind": "Simple"
+          }
+        }
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "ffd8456e972b685b458af329f8b23660dc6ad69e6101271674c2287097c10c37"
+}

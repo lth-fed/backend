@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select exists (\n                        select 1 from users where id = $1\n                    ) as \"exists!\"",
+  "query": "select exists (\n                    select 1 from users where id = $1\n                ) as \"exists!\"",
   "describe": {
     "columns": [
       {
@@ -18,5 +18,5 @@
       null
     ]
   },
-  "hash": "4eaf90f1e525b6eb8d6153638662929dd83df8b932e6879c3df20129a7db2de7"
+  "hash": "af8e5f646e157f356bfbf8d06e84fae805c34a8ccd33151add2347fc6a67af42"
 }
