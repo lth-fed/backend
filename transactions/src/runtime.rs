@@ -4,6 +4,7 @@ use std::sync::Arc;
 use minilith_errors::{
     MinilithEndpointError, MinilithErrorOptionExt as _, MinilithErrorResultExt as _, MinilithResult,
 };
+use sqlx::postgres::types::PgMoney;
 use stripe_checkout::CheckoutSessionStatus;
 use uuid::Uuid;
 
@@ -65,7 +66,7 @@ async fn fetch_transaction_info(ctx: &Context, txn: TxnData) -> MinilithResult<C
                 return Ok(ControlFlow::Continue(()));
             };
             let checkout =
-                stripe_checkout::checkout_session::RetrieveCheckoutSession::new(session_id)
+                stripe_checkout::checkout_session::RetrieveCheckoutSession::new(session_id.as_str())
                     .send(&*client)
                     .await
                     .wrap_err_internal("stripe: retrieve checkout")?;
@@ -75,6 +76,20 @@ async fn fetch_transaction_info(ctx: &Context, txn: TxnData) -> MinilithResult<C
                 Some(CheckoutSessionStatus::Open) | None => None,
                 _ => Some(swish::Status::Cancelled),
             };
+            if status == Some(swish::Status::Paid) {
+                let fee = ctx
+                    .stripe_get_fee(&txn.client_id, session_id)
+                    .await?;
+
+                // set so this is idempotent
+                sqlx::query!(
+                    "update transactions set total_transaction_fee = $1 where id = $2",
+                    PgMoney(fee),
+                    txn.id,
+                )
+                .execute(&ctx.db)
+                .await?;
+            }
 
             swish::Callback {
                 id: txn.id,

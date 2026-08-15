@@ -9,7 +9,7 @@ use minilith_errors::{
 };
 use poem::http::HeaderMap;
 use poem_openapi::param::Path;
-use poem_openapi::payload::{Binary, Json, PlainText, Response};
+use poem_openapi::payload::{Binary, Json, Response};
 use poem_openapi::{Enum, Object, OpenApi};
 use serde::Serialize;
 use sqlx::postgres::types::PgMoney;
@@ -622,9 +622,13 @@ impl Route {
     #[oai(path = "/stripe-callback", method = "post", hidden = true)]
     async fn stripe_callback(
         &self,
-        body: PlainText<String>,
+        body: Binary<Vec<u8>>,
         headers: &HeaderMap,
     ) -> MinilithResult<()> {
+        // Stripe sends JSON (`application/json; charset=utf-8`), but the
+        // signature must be checked against the exact, unparsed payload.
+        let body = String::from_utf8(body.0)
+            .wrap_err_bad_frontend("stripe: webhook body is not valid UTF-8")?;
         let signature = headers
             .get("stripe-signature")
             .and_then(|header| header.to_str().ok())
@@ -664,52 +668,12 @@ impl Route {
                 };
 
                 if status == Some(swish::Status::Paid) {
-                    let client = self.get_stripe_client(&row.client_id).await?;
-                    let data =
-                        stripe_checkout::checkout_session::RetrieveCheckoutSession::new(&event.id)
-                            // for getting the fee
-                            .expand(
-                                [
-                                    "payment_intent",
-                                    "payment_intent.latest_charge",
-                                    "payment_intent.latest_charge.balance_transaction",
-                                    "latest_charge",
-                                    "balance_transaction",
-                                ]
-                                .map(str::to_owned),
-                            )
-                            .send(&*client)
-                            .await
-                            .wrap_err_internal("l1: stripe: fetch session data failed when paid")?;
-                    drop(client);
-
-                    // broooo
-                    let intent = data
-                        .payment_intent
-                        .as_ref()
-                        .wrap_err_bad_frontend("payment_intent should exist when paid")?;
-                    let intent = intent
-                        .as_object()
-                        .wrap_err_bad_frontend("didn't expand payment_intent")?;
-                    let charge = intent
-                        .latest_charge
-                        .as_ref()
-                        .wrap_err_bad_frontend("no charge when paid")?;
-                    let charge = charge
-                        .as_object()
-                        .wrap_err_bad_frontend("didn't expand latest_charge")?;
-                    let balance = charge
-                        .balance_transaction
-                        .as_ref()
-                        .wrap_err_bad_frontend("no balance_transaction when paid")?;
-                    let balance = balance
-                        .as_object()
-                        .wrap_err_bad_frontend("didn't expand balance_transaction")?;
+                    let fee = self.stripe_get_fee(&row.client_id, &event.id).await?;
 
                     // set so this is idempotent
                     sqlx::query!(
                         "update transactions set total_transaction_fee = $1 where id = $2",
-                        PgMoney(balance.fee),
+                        PgMoney(fee),
                         row.transaction_id,
                     )
                     .execute(&self.db)

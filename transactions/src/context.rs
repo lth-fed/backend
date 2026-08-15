@@ -326,4 +326,48 @@ impl Context {
             Provider::Free => Ok(false),
         }
     }
+
+    pub async fn stripe_get_fee(&self, client_id: &str, id: impl Into<stripe_checkout::CheckoutSessionId>) -> MinilithResult<i64> {
+        let client = self.get_stripe_client(client_id).await?;
+        let data = stripe_checkout::checkout_session::RetrieveCheckoutSession::new(id)
+            // for getting the fee
+            .expand(
+                [
+                    "payment_intent",
+                    "payment_intent.latest_charge",
+                    "payment_intent.latest_charge.balance_transaction",
+                    "latest_charge",
+                    "balance_transaction",
+                ]
+                .map(str::to_owned),
+            )
+            .send(&*client)
+            .await
+            .wrap_err_internal("l1: stripe: fetch session data failed when paid")?;
+        drop(client);
+
+        // broooo
+        let intent = data
+            .payment_intent
+            .as_ref()
+            .wrap_err_bad_frontend("payment_intent should exist when paid")?;
+        let intent = intent
+            .as_object()
+            .wrap_err_bad_frontend("didn't expand payment_intent")?;
+        let charge = intent
+            .latest_charge
+            .as_ref()
+            .wrap_err_bad_frontend("no charge when paid")?;
+        let charge = charge
+            .as_object()
+            .wrap_err_bad_frontend("didn't expand latest_charge")?;
+        let balance = charge
+            .balance_transaction
+            .as_ref()
+            .wrap_err_bad_frontend("no balance_transaction when paid")?;
+        let balance = balance
+            .as_object()
+            .wrap_err_bad_frontend("didn't expand balance_transaction")?;
+        Ok(balance.fee)
+    }
 }
