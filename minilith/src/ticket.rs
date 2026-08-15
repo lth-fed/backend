@@ -934,7 +934,9 @@ impl Router {
                 .send()
                 .await
                 .wrap_err_internal("failed to cancel transaction")?;
-            if let Err(error) = resp.error_for_status_ref() {
+            if resp.status() != reqwest::StatusCode::NOT_FOUND
+                && let Err(error) = resp.error_for_status_ref()
+            {
                 return Err(MinilithEndpointError::internal_error(
                     "l1: failed to cancel transaction due to status code",
                     error,
