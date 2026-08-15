@@ -194,6 +194,8 @@ impl Context {
     pub async fn new(test_db: Option<PgPool>) -> color_eyre::Result<Self> {
         let _: Result<PathBuf, dotenvy::Error> = dotenvy::dotenv();
 
+        drop(rustls::crypto::ring::default_provider().install_default());
+
         if test_db.is_none() {
             configure_alert_email(EmailClient::new("ALERT")?)?;
         }

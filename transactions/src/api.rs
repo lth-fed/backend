@@ -591,15 +591,6 @@ impl Route {
         let mut txn = self.db.begin().await?;
 
         sqlx::query!(
-            "insert into stripe_checkouts (transaction_id, stripe_id)
-            values ($1, $2)",
-            uuid,
-            session.id.as_str()
-        )
-        .execute(&mut txn.executor())
-        .await?;
-
-        sqlx::query!(
             "insert into transactions (id, customer_id, client_id, callback_url_v1,
                 timeout, provider, total_transaction_fee, callback_identifier)
             values ($1, $2, $3, $4, $5, 'stripe'::provider, '0.00'::money, $6)",
@@ -609,6 +600,15 @@ impl Route {
             auth.callback_url_v1,
             body.timeout,
             uuid,
+        )
+        .execute(&mut txn.executor())
+        .await?;
+
+        sqlx::query!(
+            "insert into stripe_checkouts (transaction_id, stripe_id)
+            values ($1, $2)",
+            uuid,
+            session.id.as_str()
         )
         .execute(&mut txn.executor())
         .await?;

@@ -6412,6 +6412,7 @@ dependencies = [
  "poem",
  "poem-openapi",
  "reqwest 0.13.4",
+ "rustls 0.23.41",
  "serde",
  "serde_json",
  "sqlx",

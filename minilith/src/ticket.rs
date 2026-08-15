@@ -1047,7 +1047,9 @@ impl Router {
         // ========
         // Check provider
         // ========
-        let total_amount = transaction_wares.iter().fold(0, |acc, ware| acc + ware.amount);
+        let total_amount = transaction_wares
+            .iter()
+            .fold(0, |acc, ware| acc + ware.amount);
         if body.provider == PurchaseProvider::Free && total_amount != 0 {
             return Err(MinilithEndpointError::bad_frontend_code(
                 "cannot pay for non-free ticket with free provider",
