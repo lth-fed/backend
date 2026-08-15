@@ -378,6 +378,8 @@ struct ValidateResponse {
     verified: bool,
     owner_id: Option<String>,
     owner_name: Option<String>,
+    has_been_transfered: bool,
+    purchaser_name: Option<String>,
     previous_verifications: Vec<Validation>,
 }
 impl ValidateResponse {
@@ -386,6 +388,8 @@ impl ValidateResponse {
             verified: false,
             owner_id: None,
             owner_name: None,
+            has_been_transfered: false,
+            purchaser_name: None,
             previous_verifications: vec![],
         }
     }
@@ -798,7 +802,10 @@ impl Router {
                         .wrap_err_internal(
                             "failed to cancel transaction due to connection issues",
                         )?;
-                    if !resp.status().is_success() {
+                    // if not found, there was no transactions
+                    if !resp.status().is_success()
+                        && resp.status() != reqwest::StatusCode::NOT_FOUND
+                    {
                         return Err(MinilithEndpointError::internal_error(
                             "l1: transaction cancel failed!",
                             resp.status(),
@@ -1036,6 +1043,23 @@ impl Router {
                 });
             transaction_wares.extend(options);
         }
+
+        // ========
+        // Check provider
+        // ========
+        let total_amount = transaction_wares.iter().fold(0, |acc, ware| acc + ware.amount);
+        if body.provider == PurchaseProvider::Free && total_amount != 0 {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "cannot pay for non-free ticket with free provider",
+                "",
+            ));
+        }
+        let provider = if total_amount == 0 {
+            PurchaseProvider::Free
+        } else {
+            body.provider
+        };
+
         // ========
         // Get UUID
         // ========
@@ -1073,21 +1097,6 @@ impl Router {
             timeout,
             wares: transaction_wares,
             stripe_success_url: body.stripe_success_url,
-        };
-        let total_amount = payment_req
-            .wares
-            .iter()
-            .fold(0, |acc, ware| acc + ware.amount);
-        if body.provider == PurchaseProvider::Free && total_amount != 0 {
-            return Err(MinilithEndpointError::bad_frontend_code(
-                "cannot pay for non-free ticket with free provider",
-                "",
-            ));
-        }
-        let provider = if total_amount == 0 {
-            PurchaseProvider::Free
-        } else {
-            body.provider
         };
         let url = match provider {
             PurchaseProvider::Free => "/v0/free",
@@ -1273,17 +1282,19 @@ impl Router {
         body: Json<ValidateRequest>,
     ) -> MinilithResult<Json<ValidateResponse>> {
         let now = OffsetDateTime::now_utc();
-        let min5 = time::Duration::MINUTE * 5;
-        if body.created_at < now.saturating_sub(min5) || body.created_at > now.saturating_add(min5)
+        let leeway = time::Duration::MINUTE;
+        if body.created_at < now.saturating_sub(leeway)
+            || body.created_at > now.saturating_add(leeway)
         {
             return Ok(Json(ValidateResponse::not_valid()));
         }
         let Some(row) = sqlx::query!(
-            "select owner_id, users.name
+            "select owner_id, purchaser_id, owner.name as oname, purchaser.name as pname
             from purchased_tickets 
             inner join ticket_kinds kind on kind.id = purchased_tickets.ticket_kind_id
             inner join activity_verifiers on activity_verifiers.activity_id = kind.activity_id
-            inner join users on users.id = owner_id
+            inner join users owner on owner.id = owner_id
+            inner join users purchaser on purchaser.id = purchaser_id
             where purchased_tickets.id = $1 
                 and activity_verifiers.user_id = $2",
             body.purchased_ticket_id,
@@ -1294,6 +1305,13 @@ impl Router {
         else {
             return Ok(Json(ValidateResponse::not_valid()));
         };
+        let previous_verifications = sqlx::query!(
+            "select timestamp from purchased_ticket_validations where purchased_ticket_id = $1",
+            body.purchased_ticket_id
+        )
+        .map(|row| Validation { at: row.timestamp })
+        .fetch_all(&self.db)
+        .await?;
         sqlx::query!(
             "insert into purchased_ticket_validations (id, purchased_ticket_id)
             values ($1, $2)",
@@ -1302,19 +1320,17 @@ impl Router {
         )
         .execute(&self.db)
         .await?;
-        let previous_verifications = sqlx::query!(
-            "select timestamp from purchased_ticket_validations where purchased_ticket_id = $1",
-            body.purchased_ticket_id
-        )
-        .map(|row| Validation { at: row.timestamp })
-        .fetch_all(&self.db)
-        .await?;
         Ok(Json(ValidateResponse {
             verified: true,
+            has_been_transfered: row.owner_id != row.purchaser_id,
             owner_id: Some(row.owner_id),
             owner_name: Some(
-                self.decrypt_string(row.name)
+                self.decrypt_string(row.oname)
                     .wrap_err_encryption("validate name")?,
+            ),
+            purchaser_name: Some(
+                self.decrypt_string(row.pname)
+                    .wrap_err_encryption("validate purchaser name")?,
             ),
             previous_verifications,
         }))
