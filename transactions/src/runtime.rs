@@ -65,11 +65,12 @@ async fn fetch_transaction_info(ctx: &Context, txn: TxnData) -> MinilithResult<C
             ) else {
                 return Ok(ControlFlow::Continue(()));
             };
-            let checkout =
-                stripe_checkout::checkout_session::RetrieveCheckoutSession::new(session_id.as_str())
-                    .send(&*client)
-                    .await
-                    .wrap_err_internal("stripe: retrieve checkout")?;
+            let checkout = stripe_checkout::checkout_session::RetrieveCheckoutSession::new(
+                session_id.as_str(),
+            )
+            .send(&*client)
+            .await
+            .wrap_err_internal("stripe: retrieve checkout")?;
             drop(client);
             let status = match checkout.status {
                 Some(CheckoutSessionStatus::Complete) => Some(swish::Status::Paid),
@@ -77,9 +78,7 @@ async fn fetch_transaction_info(ctx: &Context, txn: TxnData) -> MinilithResult<C
                 _ => Some(swish::Status::Cancelled),
             };
             if status == Some(swish::Status::Paid) {
-                let fee = ctx
-                    .stripe_get_fee(&txn.client_id, session_id)
-                    .await?;
+                let fee = ctx.stripe_get_fee(&txn.client_id, session_id).await?;
 
                 // set so this is idempotent
                 sqlx::query!(

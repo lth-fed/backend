@@ -27,3 +27,9 @@ create table ticket_kind_notifications (
     primary key (id, ticket_kind_id),
     notification_id uuid not null references notifications (id) on delete cascade
 );
+
+create table group_notifications (
+    id uuid primary key,
+    group_id uuid not null references groups (id),
+    notification_id uuid not null references notifications (id) on delete cascade
+);

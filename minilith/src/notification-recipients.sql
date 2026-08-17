@@ -1,4 +1,5 @@
 with notification_allowed_groups as (
+    -- ticket kind notifications
     select distinct
         allowed_group.id,
         allowed_group.path
@@ -6,9 +7,19 @@ with notification_allowed_groups as (
     inner join ticket_kind_allowed_groups
         on ticket_kind_allowed_groups.ticket_kind_id
             = ticket_kind_notifications.ticket_kind_id
-    inner join groups as allowed_group
+    inner join groups allowed_group
         on allowed_group.id = ticket_kind_allowed_groups.group_id
     where ticket_kind_notifications.notification_id = $1
+
+    union
+
+    -- group notifications
+    select distinct
+        groups.id,
+        groups.path
+    from group_notifications
+    inner join groups on groups.id = group_notifications.group_id
+    where group_notifications.notification_id = $1
 ),
 visible_users as (
     select distinct

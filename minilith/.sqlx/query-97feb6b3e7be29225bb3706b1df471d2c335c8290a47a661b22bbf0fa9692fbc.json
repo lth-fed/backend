@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select notification_id from group_notifications\n            where id = $1 and group_id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "notification_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "97feb6b3e7be29225bb3706b1df471d2c335c8290a47a661b22bbf0fa9692fbc"
+}

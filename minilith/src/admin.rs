@@ -133,7 +133,7 @@ struct PutGroup {
 }
 
 #[derive(Debug, Object)]
-struct PutTicketNotification {
+struct PutNotification {
     title: InternationalizedString,
     content: InternationalizedString,
     send_at: OffsetDateTime,
@@ -143,7 +143,13 @@ struct PutTicketNotification {
 struct TicketNotification {
     kind: String,
     #[oai(flatten)]
-    notification: PutTicketNotification,
+    notification: PutNotification,
+}
+#[derive(Debug, Object)]
+struct GroupNotification {
+    id: Uuid,
+    #[oai(flatten)]
+    notification: PutNotification,
 }
 
 #[derive(Debug, Clone, Object)]
@@ -1628,7 +1634,7 @@ impl Router {
         user: User,
         Path(ticket_kind_id): Path<Uuid>,
         Path(kind): Path<String>,
-        Json(body): Json<PutTicketNotification>,
+        Json(body): Json<PutNotification>,
     ) -> MinilithResult<Json<TicketNotification>> {
         check_ticket_kind_adminship(&self.db, user.get_id(), ticket_kind_id).await?;
         let mut txn = self.db.begin().await?;
@@ -1677,44 +1683,6 @@ impl Router {
         Ok(Json(TicketNotification {
             kind,
             notification: body,
-        }))
-    }
-
-    /// Gets a named ticket-kind notification.
-    #[oai(
-        path = "/ticket-kinds/:ticket_kind_id/notifications/:kind",
-        method = "get"
-    )]
-    async fn get_ticket_notification(
-        &self,
-        user: User,
-        Path(ticket_kind_id): Path<Uuid>,
-        Path(kind): Path<String>,
-    ) -> MinilithResult<Json<TicketNotification>> {
-        check_ticket_kind_adminship(&self.db, user.get_id(), ticket_kind_id).await?;
-        let row = sqlx::query!(
-            r#"select
-                notifications.title as "title!: DIS",
-                notifications.content as "content!: DIS",
-                notifications.send_at
-            from ticket_kind_notifications
-            inner join notifications
-                on notifications.id = ticket_kind_notifications.notification_id
-            where ticket_kind_notifications.ticket_kind_id = $1
-            and ticket_kind_notifications.id = $2"#,
-            ticket_kind_id,
-            kind,
-        )
-        .fetch_optional(&self.db)
-        .await?
-        .wrap_err_not_found()?;
-        Ok(Json(TicketNotification {
-            kind,
-            notification: PutTicketNotification {
-                title: row.title.0,
-                content: row.content.0,
-                send_at: row.send_at,
-            },
         }))
     }
 
@@ -1776,7 +1744,7 @@ impl Router {
         )
         .map(|row| TicketNotification {
             kind: row.kind,
-            notification: PutTicketNotification {
+            notification: PutNotification {
                 title: row.title.0,
                 content: row.content.0,
                 send_at: row.send_at,
@@ -2468,6 +2436,136 @@ impl Router {
         .execute(&self.db)
         .await?;
         Ok(())
+    }
+
+    /// Creates or replaces a notification for a group. All direct & descendant members see it.
+    #[oai(path = "/groups/:group_id/notifications/:id", method = "put")]
+    async fn put_group_notification(
+        &self,
+        user: User,
+        Path(group_id): Path<Uuid>,
+        Path(id): Path<Uuid>,
+        Json(body): Json<PutNotification>,
+    ) -> MinilithResult<Json<GroupNotification>> {
+        check_direct_adminship(&self.db, user.get_id(), group_id).await?;
+        let mut txn = self.db.begin().await?;
+        sqlx::query_scalar!("select id from groups where id = $1 for update", group_id,)
+            .fetch_one(&mut txn.executor())
+            .await?;
+        let notification_id = sqlx::query_scalar!(
+            r#"select notification_id from group_notifications
+            where id = $1 and group_id = $2"#,
+            id,
+            group_id
+        )
+        .fetch_optional(&mut txn.executor())
+        .await?
+        .unwrap_or_else(Uuid::new_v4);
+        sqlx::query!(
+            r#"insert into notifications (id, title, content, send_at)
+            values ($1, $2, $3, $4)
+            on conflict (id) do update set
+                title = excluded.title,
+                content = excluded.content,
+                send_at = excluded.send_at"#,
+            notification_id,
+            body.title.to_json_value(),
+            body.content.to_json_value(),
+            body.send_at,
+        )
+        .execute(&mut txn.executor())
+        .await?;
+        let affected = sqlx::query!(
+            r#"insert into group_notifications
+                (id, group_id, notification_id)
+            values ($1, $2, $3)
+            on conflict (id) do update set 
+                notification_id = excluded.notification_id
+            where group_notifications.group_id = excluded.group_id"#,
+            id,
+            group_id,
+            notification_id,
+        )
+        .execute(&mut txn.executor())
+        .await?;
+        if affected.rows_affected() != 1 {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "not unique notification id",
+                "",
+            ));
+        }
+        txn.commit().await?;
+        Ok(Json(GroupNotification {
+            id,
+            notification: body,
+        }))
+    }
+
+    /// Deletes a named group notification that has not been sent yet.
+    #[oai(path = "/groups/:group_id/notifications/:id", method = "delete")]
+    async fn delete_group_notification(
+        &self,
+        user: User,
+        Path(group_id): Path<Uuid>,
+        Path(id): Path<Uuid>,
+    ) -> MinilithResult<()> {
+        check_direct_adminship(&self.db, user.get_id(), group_id).await?;
+        let mut txn = self.db.begin().await?;
+        let notification_id = sqlx::query_scalar!(
+            r#"delete from group_notifications
+            where group_id = $1 and id = $2
+            returning notification_id"#,
+            // for access control
+            group_id,
+            id,
+        )
+        .fetch_optional(&mut txn.executor())
+        .await?
+        .wrap_err_not_found()?;
+        sqlx::query!(
+            r#"delete from notifications
+            where id = $1"#,
+            notification_id,
+        )
+        .execute(&mut txn.executor())
+        .await?;
+        txn.commit().await?;
+        Ok(())
+    }
+
+    /// Lists notifications that are still scheduled for a group, ordered by delivery time.
+    /// Successfully processed notifications are not retained.
+    #[oai(path = "/groups/:group_id/notifications", method = "get")]
+    async fn list_group_notifications(
+        &self,
+        user: User,
+        Path(group_id): Path<Uuid>,
+    ) -> MinilithResult<Json<Vec<GroupNotification>>> {
+        check_direct_adminship(&self.db, user.get_id(), group_id).await?;
+        let notifications = sqlx::query!(
+            r#"select
+                group_notifications.id,
+                notifications.title as "title!: DIS",
+                notifications.content as "content!: DIS",
+                notifications.send_at
+            from group_notifications
+            inner join notifications
+                on notifications.id = group_notifications.notification_id
+            where group_notifications.group_id = $1
+            order by notifications.send_at, group_notifications.id"#,
+            group_id,
+        )
+        .map(|row| GroupNotification {
+            id: row.id,
+            notification: PutNotification {
+                title: row.title.0,
+                content: row.content.0,
+                send_at: row.send_at,
+            },
+        })
+        .fetch_all(&self.db)
+        .await?;
+        Ok(Json(notifications))
     }
 }
 

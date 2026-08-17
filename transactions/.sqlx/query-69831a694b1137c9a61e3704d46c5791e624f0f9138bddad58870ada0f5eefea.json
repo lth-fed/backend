@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select transaction_id, transactions.client_id, stripe_endpoint_secret\n                    from stripe_checkouts \n                    inner join transactions on (transactions.id = transaction_id)\n                    inner join client_ids on (client_ids.client_id = transactions.client_id)\n                    where stripe_id = $1",
+  "query": "select transaction_id, transactions.client_id, stripe_endpoint_secret\n                    from stripe_checkouts\n                    inner join transactions on (transactions.id = transaction_id)\n                    inner join client_ids on (client_ids.client_id = transactions.client_id)\n                    where stripe_id = $1",
   "describe": {
     "columns": [
       {
@@ -30,5 +30,5 @@
       true
     ]
   },
-  "hash": "0fe430d263f4ab4b2ee47278a50c8375519051821d2a0f565d07240a3316281d"
+  "hash": "69831a694b1137c9a61e3704d46c5791e624f0f9138bddad58870ada0f5eefea"
 }

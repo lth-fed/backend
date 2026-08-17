@@ -4,8 +4,14 @@
   `migrations/xxx_initial.sql`, then `sqlx database reset -fy`.
 - Use the error handling in `minilith-errors` (NOT color_eyre), except for
   functions which are called in `Context::new` in the respective folders
+- We have an alert system set up. If something warrants sending an email use it.
+  For internal errors, prefixing the message with `l1` or `l2` makes the error
+  handling send an alert of level 1 respectively level 2 instead of the default
+  level 3. In general the higher the level the more recipients and the higher
+  criticality. Level 1 is generally for loss of funds for us or customer, level
+  2 for service breaking signs, and level 3 for potential behaviour breakage.
 - run `cargo clippy` to fix all lints
-- keep the documentation amount low, just document the non-obvious neccesary
+- keep the documentation amount low, just document the non-obvious necessary
   things
 - alert the human if anything is ambiguous
 - keep down code duplication

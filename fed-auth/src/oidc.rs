@@ -34,6 +34,7 @@ const TEKNOLOGAPPEN_ALLOWED_DOMAINS: &[&str] = &[
     "capacitor://localhost",
     // android app
     "https://localhost",
+    "tappen://oauth_callback",
 ];
 /// `(client_id, allowed_domains[])[]`.
 const ALLOWED_DOMAINS: &[(&str, &[&str])] = &[

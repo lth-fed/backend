@@ -16,6 +16,7 @@ use sqlx::postgres::types::PgMoney;
 use stripe_checkout::checkout_session::{
     CreateCheckoutSessionLineItems, CreateCheckoutSessionLineItemsPriceData,
     CreateCheckoutSessionLineItemsPriceDataTaxBehavior, CreateCheckoutSessionPaymentIntentData,
+    CreateCheckoutSessionPaymentIntentDataCaptureMethod,
     CreateCheckoutSessionPaymentIntentDataSetupFutureUsage,
     CreateCheckoutSessionPaymentMethodTypes, ProductData,
 };
@@ -360,8 +361,8 @@ impl Route {
         auth: ApiAuth,
         body: Json<CreatePaymentRequest>,
     ) -> MinilithResult<Json<CreatePaymentResponseSwish>> {
-        let amount = body.total_amount();
-        if amount < 100 {
+        let total_amount = body.total_amount();
+        if total_amount < 100 {
             return Err(MinilithEndpointError::bad_user_input(
                 "low amount",
                 "",
@@ -372,7 +373,7 @@ impl Route {
 
         let uuid = self.validate_init_id(body.id).await?;
         let cb_ident = Uuid::new_v4();
-        let mut amount = amount.to_string();
+        let mut amount = total_amount.to_string();
         amount.insert(amount.len() - 2, '.');
         let mut message = body
             .wares
@@ -413,15 +414,33 @@ impl Route {
             .wrap_err_internal("swish gave us no PaymentRequestToken")?;
 
         let mut txn = self.db.begin().await?;
+        let fees = sqlx::query!(
+            "select swish_payment_fee_fixed, swish_payment_fee_fraction, swish_payment_fee_max
+            from client_ids where client_id = $1",
+            auth.client_id
+        )
+        .fetch_one(&mut txn.executor())
+        .await?;
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_precision_loss,
+            reason = "it's min:ed either way"
+        )]
+        let fees = fees.swish_payment_fee_fixed
+            + PgMoney(
+                ((fees.swish_payment_fee_fraction * total_amount as f64 + 1e-6).floor() as i64)
+                    .min(fees.swish_payment_fee_max.0),
+            );
         sqlx::query!(
             "insert into transactions (id, customer_id, client_id, callback_url_v1,
                 timeout, provider, total_transaction_fee, callback_identifier)
-            values ($1, $2, $3, $4, $5, 'swish'::provider, '1.50'::money, $6)",
+            values ($1, $2, $3, $4, $5, 'swish'::provider, $6, $7)",
             uuid,
             body.customer_id,
             auth.client_id,
             auth.callback_url_v1,
             body.timeout,
+            fees,
             cb_ident
         )
         .execute(&mut txn.executor())
@@ -551,7 +570,10 @@ impl Route {
             .payment_method_types(vec![CreateCheckoutSessionPaymentMethodTypes::Card])
             .payment_intent_data(CreateCheckoutSessionPaymentIntentData {
                 application_fee_amount: None,
-                capture_method: None,
+                // so we know the fee directly afterwards
+                capture_method: Some(
+                    CreateCheckoutSessionPaymentIntentDataCaptureMethod::Automatic,
+                ),
                 description: None,
                 metadata: None,
                 on_behalf_of: None,
@@ -644,16 +666,20 @@ impl Route {
         match event.data.object {
             EventObject::CheckoutSessionCompleted(event)
             | EventObject::CheckoutSessionExpired(event) => {
-                let row = sqlx::query!(
+                let Some(row) = sqlx::query!(
                     "select transaction_id, transactions.client_id, stripe_endpoint_secret
-                    from stripe_checkouts 
+                    from stripe_checkouts
                     inner join transactions on (transactions.id = transaction_id)
                     inner join client_ids on (client_ids.client_id = transactions.client_id)
                     where stripe_id = $1",
                     event.id.as_str()
                 )
-                .fetch_one(&self.db)
-                .await?;
+                .fetch_optional(&self.db)
+                .await?
+                else {
+                    // then we don't have it anymore because it was previously cancelled
+                    return Ok(());
+                };
 
                 let stripe_endpoint_secret = row
                     .stripe_endpoint_secret

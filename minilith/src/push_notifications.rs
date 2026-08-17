@@ -176,7 +176,7 @@ impl Deref for Router {
 
 #[derive(Enum, Type, Clone, Copy, Debug)]
 #[oai(rename_all = "lowercase")]
-#[sqlx(rename_all = "lowercase")]
+#[sqlx(rename_all = "lowercase", type_name = "push_platform")]
 pub enum PushPlatform {
     Ios,
     Android,

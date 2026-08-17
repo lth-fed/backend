@@ -82,6 +82,26 @@
         "ordinal": 15,
         "name": "fortnox_voucher_series",
         "type_info": "Text"
+      },
+      {
+        "ordinal": 16,
+        "name": "swish_payment_fee_fixed",
+        "type_info": "Money"
+      },
+      {
+        "ordinal": 17,
+        "name": "swish_payment_fee_fraction",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 18,
+        "name": "swish_payment_fee_max",
+        "type_info": "Money"
+      },
+      {
+        "ordinal": 19,
+        "name": "swish_refund_fee",
+        "type_info": "Money"
       }
     ],
     "parameters": {
@@ -105,7 +125,11 @@
       true,
       true,
       true,
-      true
+      true,
+      false,
+      false,
+      false,
+      false
     ]
   },
   "hash": "984906f3f715b1b06af044d2b004601aea5f56c3bc430b5ca3be5db596b10577"

@@ -2,6 +2,10 @@ insert into client_ids (
     client_id,
 
     swish_number,
+    swish_payment_fee_fixed,
+    swish_payment_fee_fraction,
+    swish_payment_fee_max,
+    swish_refund_fee,
 
     stripe_secret,
 
@@ -18,6 +22,10 @@ values
 (
     'esek',
     '123456789',
+    '3'::money,
+    0.0,
+    '3'::money,
+    '3'::money,
     null,
     'E-sektionen inom TLTH',
     'informationschef@esek.se',
