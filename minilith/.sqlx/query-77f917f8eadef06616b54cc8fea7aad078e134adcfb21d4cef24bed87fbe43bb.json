@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from ticket_reservation_placement_tails tails\n        using ticket_kinds kind\n        where kind.id = tails.ticket_kind_id\n            and purchasing_available_stop < now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "77f917f8eadef06616b54cc8fea7aad078e134adcfb21d4cef24bed87fbe43bb"
+}

@@ -349,7 +349,6 @@ impl Router {
             user.get_id()
         )
         .map(|kind| {
-            // todo(release): check activity max too
             ActivityTicketKind {
                 id: kind.id,
                 name: kind.name.0,

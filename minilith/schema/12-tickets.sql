@@ -110,18 +110,19 @@ create table ticket_release_queuers (
 -- then pop the user with the best placement & converts it into a reservation & decrements available
 -- tickets (transaction)
 --
--- I HAVE NOT VALIDATED THAT THINGS WILL BE CONSISTENT IF THERE ARE SEVERAL WORKERS PER TICKET_KIND
---
 -- If there are no reservations & no available tickets, clear this table and (notify users?) and stop worker
 -- Upon server startup, check if there are any people in this queue, for every ticket_kind, and if there is,
 --     start the worker.
 -- The worker should start after the biljettsläpp if there were more people interested than there was tickets
+create table ticket_reservation_placement_tails (
+    ticket_kind_id uuid primary key references ticket_kinds(id),
+    placement_tail integer not null
+);
 create table ticket_reservation_queuers (
     user_id text primary key references users(id),
     ticket_kind_id uuid not null references ticket_kinds(id),
-    -- this value is based on total placement. To get relative placement (i.e. until one can buy a ticket),
-    -- subtract the ticket_kind_id->reserved_or_purchased_tickets value
-    placement integer not null check (placement >= 0),
+    -- this value is relative placement
+    placement integer not null check (placement > 0),
     unique (ticket_kind_id, placement),
     foreign key (user_id, ticket_kind_id)
         references users_in_purchase_flow(user_id, ticket_kind_id)

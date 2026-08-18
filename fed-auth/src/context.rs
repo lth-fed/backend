@@ -146,6 +146,7 @@ impl Context {
             setup_db(
                 &std::env::var("DATABASE_URL").wrap_err("`DATABASE_URL` not set")?,
                 Some(migrate!("./migrations")),
+                8,
             )
             .await
             .wrap_err("Failed to set up the database")
@@ -345,7 +346,7 @@ impl Context {
                             .body(token)
                             .send()
                             .await
-                            .inspect_err(|err| error!("auth callback POST failed: {err}"))
+                            .inspect_err(|err| error!("auth callback POST failed: {err:?}"))
                             .map_err(|_| ())?;
                         if !resp.status().is_success() {
                             let status = resp.status();

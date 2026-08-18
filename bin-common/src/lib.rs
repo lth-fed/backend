@@ -19,7 +19,11 @@ pub type Transaction<'a> = sqlx_tracing::Transaction<'a, Postgres>;
 /// # Errors
 ///
 /// Fails if DB communication or migration fails.
-pub async fn setup_db(db_url: &str, migrator: Option<Migrator>) -> color_eyre::Result<PgPool> {
+pub async fn setup_db(
+    db_url: &str,
+    migrator: Option<Migrator>,
+    connections: u32,
+) -> color_eyre::Result<PgPool> {
     if !Postgres::database_exists(db_url)
         .await
         .wrap_err("Failed to check if database exists")?
@@ -28,7 +32,7 @@ pub async fn setup_db(db_url: &str, migrator: Option<Migrator>) -> color_eyre::R
     }
 
     let db = PgPoolOptions::new()
-        .max_connections(50)
+        .max_connections(connections)
         .connect(db_url)
         .await
         .wrap_err("Failed to create database pool")?;

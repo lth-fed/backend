@@ -209,6 +209,7 @@ impl Context {
             setup_db(
                 &std::env::var("DATABASE_URL").wrap_err("`DATABASE_URL` not set")?,
                 Some(migrate!("./migrations")),
+                24,
             )
             .await
             .wrap_err("Failed to set up the database")

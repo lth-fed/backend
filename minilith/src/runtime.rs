@@ -277,7 +277,7 @@ async fn check_next_notification(ctx: &ContextWrapper) -> MinilithResult<bool> {
 ///
 /// # Panics
 ///
-/// If 1 >= 60.
+/// If 0 >= 60.
 pub fn spawn(ctx: &ContextWrapper) {
     let ticket_ctx = Arc::clone(ctx);
     // one runtime task per instance of this, so every function called in `check_all_tickets` has to
@@ -285,16 +285,16 @@ pub fn spawn(ctx: &ContextWrapper) {
     // sql queries)
     tokio::spawn(async move {
         loop {
+            println!("check! {:?}", time::OffsetDateTime::now_utc());
             if let Err(err) = ticket::check_all_tickets(&ticket_ctx.db).await {
                 error!(?err, "Error from runtime->check_all_tickets");
             }
 
             let now = time::OffsetDateTime::now_utc();
             // next minute on xx:01
-            let mut next = now;
-            next += time::Duration::MINUTE;
+            let next = now + time::Duration::MINUTE;
             #[allow(clippy::unwrap_used, reason = "bruh")]
-            next.replace_second(1).unwrap();
+            let next = next.replace_second(0).unwrap();
             let until = next - now;
             tokio::time::sleep(until.unsigned_abs()).await;
         }

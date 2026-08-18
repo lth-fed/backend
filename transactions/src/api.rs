@@ -314,8 +314,8 @@ impl Route {
             ));
         }
 
-        let mut txn = self.db.begin().await?;
         let transaction_id = self.validate_init_id(body.id).await?;
+        let mut txn = self.db.begin().await?;
         sqlx::query!(
             "insert into transactions (id, customer_id, client_id, callback_url_v1,
                 timeout, provider, total_transaction_fee, callback_identifier, payment_reference)

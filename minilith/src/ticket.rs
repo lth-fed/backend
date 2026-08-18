@@ -623,9 +623,18 @@ impl Router {
             .fetch_one(&mut txn.executor())
             .await?;
 
+            let reserved = reserve_ticket_capacity(&mut txn, req.ticket_kind, 1).await?;
+            if reserved == 0 {
+                return Err(MinilithEndpointError::bad_user_input(
+                    "the tickets are sold out",
+                    "",
+                    "the tickets are sold out",
+                    "ticket_kind_id",
+                ));
+            }
             if row.reserved_or_purchased_tickets < row.max_tickets
                 && row.count == 0
-                && reserve_ticket_capacity(&mut txn, req.ticket_kind, 1).await? == 1
+                && reserved == 1
             {
                 // give reservation
                 let affected = sqlx::query!(
@@ -647,23 +656,72 @@ impl Router {
 
                 txn.commit().await?;
                 return Ok(Json(PurchaseStatus::Reserved));
-                // if the txn fails, it's because we've tried to reserve too many, stand in queue
-                // instead:
             }
+            // if row.reserved_or_purchased_tickets < row.max_tickets && row.count == 0 {
+            //     // give reservation
+            //     // copied from reserve_ticket_capacity to make it 1 query instead
+            //     let affected = sqlx::query_scalar!(
+            //         r#"with capacity as materialized (
+            //             select greatest(least(
+            //                 $2,
+            //                 kind.max_tickets - kind.reserved_or_purchased_tickets,
+            //                 activities.max_tickets
+            //                 - kind.reserved_or_purchased_tickets
+            //                 - coalesce((
+            //                     select sum(greatest(
+            //                         all_kinds.reserved_or_purchased_tickets,
+            //                         all_kinds.min_tickets
+            //                     ))::int
+            //                     from ticket_kinds all_kinds
+            //                     where all_kinds.activity_id = activities.id
+            //                         and all_kinds.id != kind.id
+            //                 ), 0)
+            //             ), 0)::int as granted
+            //             from ticket_kinds kind
+            //             inner join activities on activities.id = kind.activity_id
+            //             where kind.id = $1
+            //         ), updated as (
+            //             update ticket_kinds
+            //             set reserved_or_purchased_tickets =
+            //                 reserved_or_purchased_tickets + capacity.granted
+            //             from capacity
+            //             where ticket_kinds.id = $1
+            //             returning ticket_kinds.id
+            //         )
+            //         insert into ticket_reservations
+            //             (user_id, ticket_kind_id, transaction_id, timeout)
+            //         select $3, $1, null, now() + $4
+            //         from updated"#,
+            //         req.ticket_kind,
+            //         1,
+            //         user.get_id(),
+            //         new_timeout_interval()
+            //     )
+            //     .execute(&mut txn.executor())
+            //     .await?;
+            //
+            //     if affected.rows_affected() != 1 {
+            //         return Err(MinilithEndpointError::bad_frontend_code(
+            //             "no tickets left",
+            //             "",
+            //         ));
+            //     }
+            //     set_user_purchase_flow_reservation(&mut txn, user.get_id()).await?;
+            //
+            //     txn.commit().await?;
+            //     return Ok(Json(PurchaseStatus::Reserved));
+            // }
 
             let affected = sqlx::query!(
-                "insert into ticket_reservation_queuers (user_id, ticket_kind_id, placement) \
-                select $1, $2,
-                    -- take last placement, add one
-                    coalesce(
-                        (
-                            select placement
-                            from ticket_reservation_queuers
-                            where ticket_kind_id = $2
-                            order by placement desc limit 1
-                        ),
-                        0
-                    ) + 1
+                "with placement as (
+                    update ticket_reservation_placement_tails
+                        set placement_tail = placement_tail + 1
+                    where ticket_kind_id = $2
+                    returning old.placement_tail
+                )
+                insert into ticket_reservation_queuers (user_id, ticket_kind_id, placement) 
+                select $1, $2, placement.placement_tail
+                from placement
 
                 on conflict (user_id) do update
                 set ticket_kind_id = excluded.ticket_kind_id, placement = excluded.placement",
@@ -902,6 +960,10 @@ impl Router {
                 "",
             ));
         }
+
+        // addons for a ticket_kind are immutable so we don't do it through a transaction
+        let chosen_options = validate_addons(&self.db, &mut body.addons, body.ticket_kind).await?;
+
         // this is here so nobody else tries to mess with our reservation while we are assigning it
         // a transaction_ìd
         let mut txn = self.db.begin().await?;
@@ -921,8 +983,7 @@ impl Router {
             from ticket_reservations
             inner join ticket_kinds kind on (kind.id = ticket_kind_id)
             inner join activities on (activities.id = kind.activity_id)
-            where user_id = $1
-            for update",
+            where user_id = $1",
             user.get_id()
         )
         .fetch_optional(&mut txn.executor())
@@ -949,9 +1010,6 @@ impl Router {
             .execute(&mut txn.executor())
             .await?;
         }
-
-        // addons for a ticket_kind are immutable so we don't do it through a transaction
-        let chosen_options = validate_addons(&self.db, &mut body.addons, body.ticket_kind).await?;
 
         // ========
         // remove old addons
@@ -983,7 +1041,7 @@ impl Router {
         // prepare Ware:s for transaction API
         // ========
         let lang = sqlx::query_scalar!("select language from users where id = $1", user.get_id())
-            .fetch_one(&self.db)
+            .fetch_one(&mut txn.executor())
             .await?;
         let lang = self
             .decrypt_string(lang)
@@ -1002,13 +1060,13 @@ impl Router {
             where id = any($1)",
             &body.addons.iter().map(|addon| addon.id).collect::<Vec<_>>()
         )
-        .fetch_all(&self.db)
+        .fetch_all(&mut txn.executor())
         .await?;
 
         let mut transaction_wares = vec![transactions::Ware {
             name: format!("{activity_title} - {ticket_kind_name}"),
             amount: reservation.price.0,
-            tax: 1.25,
+            tax: 1.0,
             currency: transactions::Currency::Sek,
         }];
         let get_addon_idx = |id: Uuid| {
@@ -1119,7 +1177,7 @@ impl Router {
         if !resp.status().is_success() {
             return Err(MinilithEndpointError::internal_error(
                 "failed to start transaction due to us being bad",
-                "",
+                (resp.status(), resp.text().await),
             ));
         }
         // ========
@@ -1829,6 +1887,51 @@ async fn reserve_ticket_capacity(
     Ok(granted)
 }
 
+async fn release_next_ticket(db: &PgPool) -> MinilithResult<bool> {
+    // Commit the claim before acquiring flow locks. If the process dies
+    // after this, the misplaced-queuer pass completes the release.
+    let mut claim_txn = db.begin().await?;
+    let ticket_kind = sqlx::query_scalar!(
+        "with next as (
+            select id from ticket_kinds
+            where purchasing_available_start > now() - '5 minutes'::interval
+            and purchasing_available_start <= now() + '30 seconds'::interval
+            and has_been_released = false
+            order by id
+            limit 1
+            for update skip locked
+        )
+        update ticket_kinds kind
+        set has_been_released = true
+        from next
+        where kind.id = next.id
+        returning kind.id"
+    )
+    .fetch_optional(&mut claim_txn.executor())
+    .await?;
+    claim_txn.commit().await?;
+    if let Some(ticket_kind) = ticket_kind {
+        let mut release_txn = db.begin().await?;
+        release(&mut release_txn, ticket_kind).await?;
+        release_txn.commit().await?;
+        Ok(true)
+    } else {
+        // there may in certain circumstances be "jobs" left, but they will be taken care of
+        // next minute in worst case
+        Ok(false)
+    }
+}
+async fn remove_reservation_tails(db: &PgPool) -> MinilithResult<()> {
+    sqlx::query_scalar!(
+        "delete from ticket_reservation_placement_tails tails
+        using ticket_kinds kind
+        where kind.id = tails.ticket_kind_id
+            and purchasing_available_stop < now()"
+    )
+    .execute(db)
+    .await?;
+    Ok(())
+}
 /// Releases a ticket. This MUST be called at the moment the tickets should be released.
 /// It MUST have locked the `ticket_kind`.
 ///
@@ -1860,7 +1963,7 @@ pub async fn release(db: &mut Transaction<'_>, id: Uuid) -> MinilithResult<()> {
         where flow.ticket_kind_id = $1
         and flow.release_queue = flow.user_id
         order by flow.user_id
-        for update of flow",
+        for update of flow skip locked",
         id
     )
     .fetch_all(&mut db.executor())
@@ -1915,6 +2018,19 @@ pub async fn release(db: &mut Transaction<'_>, id: Uuid) -> MinilithResult<()> {
         reservation_queuers,
         id,
         &placements
+    )
+    .execute(&mut db.executor())
+    .await?;
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap,
+        reason = "we know it won't, we hopefully don't have more than 2G reservations..."
+    )]
+    sqlx::query!(
+        "insert into ticket_reservation_placement_tails (ticket_kind_id, placement_tail)
+        values ($1, $2)",
+        id,
+        (reservations.len() + reservation_queuers.len() + 1) as i32,
     )
     .execute(&mut db.executor())
     .await?;
@@ -1998,38 +2114,11 @@ async fn remove_expired_release_queuers(db: &mut Transaction<'_>) -> MinilithRes
 pub async fn check_all_tickets(db: &PgPool) -> MinilithResult<()> {
     // release tickets
     loop {
-        // Commit the claim before acquiring flow locks. If the process dies
-        // after this, the misplaced-queuer pass completes the release.
-        let mut claim_txn = db.begin().await?;
-        let ticket_kind = sqlx::query_scalar!(
-            "with next as (
-                select id from ticket_kinds
-                where purchasing_available_start > now() - '5 minutes'::interval
-                and purchasing_available_start <= now()
-                and has_been_released = false
-                order by id
-                limit 1
-                for update skip locked
-            )
-            update ticket_kinds kind
-            set has_been_released = true
-            from next
-            where kind.id = next.id
-            returning kind.id"
-        )
-        .fetch_optional(&mut claim_txn.executor())
-        .await?;
-        claim_txn.commit().await?;
-        if let Some(ticket_kind) = ticket_kind {
-            let mut release_txn = db.begin().await?;
-            release(&mut release_txn, ticket_kind).await?;
-            release_txn.commit().await?;
-        } else {
-            // there may in certain circumstances be "jobs" left, but they will be taken care of
-            // next minute in worst case
+        if release_next_ticket(db).await? {
             break;
         }
     }
+    remove_reservation_tails(db).await?;
 
     // Also removes people's queue positions after 20 minutes.
     let mut txn = db.begin().await?;
@@ -2190,19 +2279,15 @@ pub async fn update_misplaced_queuer(
     .await?;
 
     let affected = sqlx::query!(
-        "insert into ticket_reservation_queuers (user_id, ticket_kind_id, placement)
-        select $1 as user_id, $2 as ticket_kind_id, coalesce((
-            select placement
-            from ticket_reservation_queuers reserv
-            where reserv.ticket_kind_id = $2
-            order by placement desc 
-            limit 1
-        ), kind.reserved_or_purchased_tickets) + 1 as placement
-        from ticket_release_queuers queuers
-        inner join ticket_kinds kind on kind.id = $2
-        where queuers.user_id = $1
-        and queuers.ticket_kind_id = $2
-        limit 1",
+        "with placement as (
+            update ticket_reservation_placement_tails
+                set placement_tail = placement_tail + 1
+            where ticket_kind_id = $2
+            returning old.placement_tail
+        )
+        insert into ticket_reservation_queuers (user_id, ticket_kind_id, placement)
+        select $1 as user_id, $2 as ticket_kind_id, placement.placement_tail as placement
+        from placement",
         user_id,
         ticket_kind
     )

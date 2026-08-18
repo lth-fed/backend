@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "with placement as (\n                    update ticket_reservation_placement_tails\n                        set placement_tail = placement_tail + 1\n                    where ticket_kind_id = $2\n                    returning old.placement_tail\n                )\n                insert into ticket_reservation_queuers (user_id, ticket_kind_id, placement) \n                select $1, $2, placement.placement_tail\n                from placement\n\n                on conflict (user_id) do update\n                set ticket_kind_id = excluded.ticket_kind_id, placement = excluded.placement",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3bdc8b70c2a1feca65db94cd026a1a803dd24b514f0a5f57867793b1301d128a"
+}
