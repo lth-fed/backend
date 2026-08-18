@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                update groups\n                set path = case\n                        when id = $1 then $2::ltree\n                        else $2::ltree || subpath(path, nlevel($3::ltree))\n                    end,\n                    name = case when id = $1 then $4 else name end,\n                    description = case when id = $1 then $5 else description end,\n                    limit_membership_visibility = case\n                        when id = $1 then $6\n                        else limit_membership_visibility\n                    end,\n                    logo_id = case when id = $1 then $7 else logo_id end\n                where path <@ $3::ltree",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        {
+          "Custom": {
+            "name": "ltree",
+            "kind": "Simple"
+          }
+        },
+        {
+          "Custom": {
+            "name": "ltree",
+            "kind": "Simple"
+          }
+        },
+        "Jsonb",
+        "Jsonb",
+        "Bool",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5d6842516946de09c5e3e4474aac75f75badefbd764655101041cd30b91d7cff"
+}

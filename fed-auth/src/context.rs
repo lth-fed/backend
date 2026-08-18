@@ -289,7 +289,12 @@ impl Context {
     ) -> Result<(), sqlx::Error> {
         sqlx::query!(
             "insert into session_validated_users
-            (session_id, sub, email, full_name, lth_guild) values ($1, $2, $3, $4, $5)",
+            (session_id, sub, email, full_name, lth_guild) values ($1, $2, $3, $4, $5)
+            on conflict (session_id) do update set
+                sub = excluded.sub,
+                email = excluded.email,
+                full_name = excluded.full_name,
+                lth_guild = excluded.lth_guild",
             session,
             user.sub,
             user.email,

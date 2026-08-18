@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into session_validated_users\n            (session_id, sub, email, full_name, lth_guild) values ($1, $2, $3, $4, $5)\n            on conflict (session_id) do update set\n                sub = excluded.sub,\n                email = excluded.email,\n                full_name = excluded.full_name,\n                lth_guild = excluded.lth_guild",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e74abfa84116528628f3b719c2af742ee74b5ccaff6576eb851b6c0013ee487c"
+}

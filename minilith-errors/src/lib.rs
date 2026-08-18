@@ -424,11 +424,23 @@ impl EmailClient {
         let message = message
             .body(html.into())
             .wrap_err_internal("email: failed to format email")?;
-        let response = self
-            .transport
-            .send(message)
-            .await
-            .wrap_err_internal("email: failed to send email")?;
+
+        let mut tries = 0;
+        let max_tries = 5;
+        let mut wait = std::time::Duration::from_millis(50);
+        let response = loop {
+            tries += 1;
+            let res = self.transport.send(message.clone()).await;
+            let err = match res {
+                Ok(resp) => break resp,
+                Err(err) => err,
+            };
+            if tries >= max_tries {
+                return Err(err).wrap_err_internal("email: failed to send email")?;
+            }
+            tokio::time::sleep(wait).await;
+            wait *= 2;
+        };
         if !response.is_positive() {
             // we can't alert here, that could cause loops
             // alert(

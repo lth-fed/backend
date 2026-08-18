@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            select distinct\n                g.id, g.path, g.limit_membership_visibility,\n                g.name as \"name!: DIS\",\n                g.description as \"description!: DIS\",\n                g.deleted,\n                logo.id as logo_id,\n                logo.url as logo_url\n            from groups g\n            join group_memberships gm on gm.user_id = $1\n            join groups mg on mg.id = gm.group_id\n            join images logo on logo.id = g.logo_id\n            where subpath(g.path, 0, 1) = subpath(mg.path, 0, 1)\n            and g.deleted = false\n            order by g.path\n        ",
+  "query": "\n            select distinct\n                g.id, g.path, g.limit_membership_visibility,\n                g.name as \"name!: DIS\",\n                g.description as \"description!: DIS\",\n                g.deleted,\n                logo.id as logo_id,\n                logo.url as logo_url,\n                (select array(select user_id from group_adminships where group_id = g.id)) as admin_ids\n            from groups g\n            join group_memberships gm on gm.user_id = $1\n            join groups mg on mg.id = gm.group_id\n            join images logo on logo.id = g.logo_id\n            where subpath(g.path, 0, 1) = subpath(mg.path, 0, 1)\n            and g.deleted = false\n            order by g.path\n        ",
   "describe": {
     "columns": [
       {
@@ -47,6 +47,11 @@
         "ordinal": 7,
         "name": "logo_url",
         "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "admin_ids",
+        "type_info": "TextArray"
       }
     ],
     "parameters": {
@@ -62,8 +67,9 @@
       false,
       false,
       false,
-      false
+      false,
+      null
     ]
   },
-  "hash": "16aa873be434dbe232970d211706bec208a2ef472080bd4c7defc48b7203ffc8"
+  "hash": "3a480581a77dac19ccd729ef9e0d131a67fc552e80743a69bec18d62f4d3cf0c"
 }

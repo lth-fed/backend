@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into fortnox_voucher_jobs (transaction_id)\n                select transactions.id\n                from transactions\n                inner join client_ids using (client_id)\n                where transactions.id = $1\n                    and transactions.provider = 'swish'\n                    and client_ids.fortnox_client_id is not null\n                on conflict (transaction_id) do nothing",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e7f7acd35840b42f2d568635407e8ca2abda35d1d8e87c6193a0a692e6aa79be"
+}

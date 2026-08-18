@@ -127,11 +127,21 @@ impl MainRouter {
                 "",
             ));
         }
-        if body
-            .name
-            .split_once(' ')
-            .is_none_or(|(first_name, surname)| first_name.is_empty() || surname.is_empty())
-            || body.name.len() < 5
+        let sub = sqlx::query_scalar!(
+            "select sub from session_validated_users where session_id = $1",
+            body.code
+        )
+        .fetch_optional(&self.db)
+        .await?
+        .wrap_err_not_found()?;
+
+        // if email (admin) login, don't enforce name!
+        if !sub.starts_with("email:")
+            && (body
+                .name
+                .split_once(' ')
+                .is_none_or(|(first_name, surname)| first_name.is_empty() || surname.is_empty())
+                || body.name.len() < 5)
         {
             return Err(MinilithEndpointError::bad_user_input(
                 "name invalid",

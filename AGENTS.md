@@ -1,4 +1,5 @@
 - Don't run `cargo sqlx prepare`, the human will do that before committing.
+- use sqlx macros for database queries
 - To update the schema: write to files under `schema/xx-<name>.sql` in the
   crate. Run `create-migration.sh initial` after removing the
   `migrations/xxx_initial.sql`, then `sqlx database reset -fy`.

@@ -108,17 +108,17 @@ pub async fn handle_callback_to_us(
             )
             .await;
             let mut db_transaction = ctx.db.begin().await?;
-            sqlx::query(
+            sqlx::query!(
                 "update transactions
                 set payment_reference = coalesce(payment_reference, $2),
                     paid_at = coalesce(paid_at, now())
                 where id = $1",
+                data.id,
+                payment_reference
             )
-            .bind(data.id)
-            .bind(payment_reference)
             .execute(&mut db_transaction.executor())
             .await?;
-            sqlx::query(
+            sqlx::query!(
                 "insert into fortnox_voucher_jobs (transaction_id)
                 select transactions.id
                 from transactions
@@ -127,8 +127,8 @@ pub async fn handle_callback_to_us(
                     and transactions.provider = 'swish'
                     and client_ids.fortnox_client_id is not null
                 on conflict (transaction_id) do nothing",
+                data.id
             )
-            .bind(data.id)
             .execute(&mut db_transaction.executor())
             .await?;
             db_transaction.commit().await?;

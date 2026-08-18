@@ -1166,10 +1166,19 @@ impl Router {
     /// Check these values by fetching the data of the Kind using `/v0/tickets/ticket-kind/<uuid>`
     #[oai(path = "/transfer", method = "post")]
     async fn transfer(&self, auth: User, body: Json<TransferRequest>) -> MinilithResult<()> {
+        let to_user = if body.to_user.contains(':') {
+            body.to_user.clone()
+        } else {
+            format!(
+                "{}:{}",
+                auth.get_id().split(':').next().unwrap_or(auth.get_id()),
+                body.to_user
+            )
+        };
         let mut txn = self.db.begin().await?;
         if !sqlx::query_scalar!(
             "select exists (select 1 from users where id = $1) as \"exists!\"",
-            body.to_user
+            to_user
         )
         .fetch_one(&mut txn.executor())
         .await?
@@ -1190,13 +1199,27 @@ impl Router {
         .fetch_optional(&mut txn.executor())
         .await?
         .wrap_err_bad_frontend("you don't own this ticket")?;
-        if auth.get_id() == body.to_user {
+        if auth.get_id() == to_user {
             return Ok(());
+        }
+        if !sqlx::query_scalar!(
+            "select exists (select 1 from purchased_ticket_validations where id = $1) as \"exists!\"",
+            body.purchased_ticket_id
+        )
+        .fetch_one(&mut txn.executor())
+        .await?
+        {
+            return Err(MinilithEndpointError::bad_user_input(
+                "ticket has been used",
+                "",
+                "ticket has been used",
+                "ticket_id",
+            ));
         }
 
         reserve_user_purchase_flow(
             &mut txn,
-            &[auth.get_id().to_owned(), body.to_user.clone()],
+            &[auth.get_id().to_owned(), to_user.clone()],
             ticket_kind,
             &[true, false],
         )
@@ -1226,13 +1249,12 @@ impl Router {
             ));
         }
         if !row.allow_transfer_ticket_bypass_allowed_groups {
-            ensure_user_may_purchase_ticket(&mut txn.executor(), &body.to_user, ticket_kind)
-                .await?;
+            ensure_user_may_purchase_ticket(&mut txn.executor(), &to_user, ticket_kind).await?;
         }
         let affected = sqlx::query!(
             "update purchased_tickets set owner_id = $2 where id = $1",
             body.purchased_ticket_id,
-            body.to_user
+            to_user
         )
         .execute(&mut txn.executor())
         .await?;
@@ -1243,7 +1265,7 @@ impl Router {
         )?;
 
         unlist_user_purchase_flow(&mut txn, auth.get_id()).await?;
-        unlist_user_purchase_flow(&mut txn, &body.to_user).await?;
+        unlist_user_purchase_flow(&mut txn, &to_user).await?;
 
         txn.commit().await?;
 

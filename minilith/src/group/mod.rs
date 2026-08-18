@@ -55,6 +55,19 @@ pub struct Group {
     pub logo_id: Uuid,
     pub logo_url: String,
 }
+#[derive(Debug, Object)]
+#[allow(clippy::module_name_repetitions, reason = "ye")]
+pub struct FatGroup {
+    pub id: Uuid,
+    pub path: Path,
+    pub limit_membership_visibility: bool,
+    pub name: IS,
+    pub description: IS,
+    pub deleted: bool,
+    pub logo_id: Uuid,
+    pub logo_url: String,
+    pub admin_ids: Option<Vec<String>>,
+}
 
 #[derive(Debug, Object)]
 struct JoinableGroup {
@@ -65,15 +78,69 @@ struct JoinableGroup {
 
 #[OpenApi(prefix_path = "/groups")]
 impl Router {
-    /// List all groups the user is a direct or transitive member of. Useful for setting the filters
+    /// List all groups the user is a direct or transitive member of.
     /// for groups.
     ///
     /// # Errors
     ///
     /// DB, AUTH
     #[oai(path = "/tree", method = "get")]
-    async fn tree(&self, user: User) -> MinilithResult<Json<Vec<Group>>> {
+    async fn tree(&self, user: User) -> MinilithResult<Json<Vec<FatGroup>>> {
         let groups = user_groups_tree(&self.context.db, user.get_id()).await?;
+
+        Ok(Json(groups))
+    }
+
+    /// List all groups the user has visibility/notification settings for and groups with events
+    /// in the future or recent path.
+    ///
+    /// # Errors
+    ///
+    /// DB, AUTH
+    #[oai(path = "/for-filters", method = "get")]
+    async fn for_filters(&self, user: User) -> MinilithResult<Json<Vec<Group>>> {
+        let groups = sqlx::query_as!(
+            Group,
+            r#"select distinct
+                pg.id,
+                pg.path,
+                pg.limit_membership_visibility,
+                pg.name as "name!: DIS",
+                pg.description as "description!: DIS",
+                pg.deleted,
+                logo.id as logo_id,
+                logo.url as logo_url
+            from groups g
+            join groups pg on pg.path @> g.path
+            join images logo on logo.id = pg.logo_id
+            where g.deleted = false
+            and exists (
+                select 1
+                from group_memberships gm
+                join groups mg on mg.id = gm.group_id
+                where gm.user_id = $1
+                and subpath(g.path, 0, 1) = subpath(mg.path, 0, 1)
+            )
+            and (
+                exists (
+                    select 1
+                    from activity_hosts ah
+                    join activities act on act.id = ah.activity_id
+                    where ah.group_id = g.id
+                    and act.time_start > now() - interval '3 months'
+                )
+                or exists (
+                    select 1
+                    from user_group_settings ugs
+                    where ugs.group_id = g.id
+                    and ugs.user_id = $1
+                )
+            )
+            order by pg.path"#,
+            user.get_id()
+        )
+        .fetch_all(&self.db)
+        .await?;
 
         Ok(Json(groups))
     }
