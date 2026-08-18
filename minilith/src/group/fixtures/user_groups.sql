@@ -3,7 +3,8 @@ insert into images (id, size, url) values ('e2a92dcc-06cf-4d47-9865-d33f59d0261f
 insert into users (id, name, language, latest_refresh) values
     ('user_a', ''::bytea, ''::bytea, now()),
     ('user_b', ''::bytea, ''::bytea, now()),
-    ('user_c', ''::bytea, ''::bytea, now());
+    ('user_c', ''::bytea, ''::bytea, now()),
+    ('email:admin@example.com', ''::bytea, ''::bytea, now());
 
 insert into groups (path, name, description, logo_id, limit_membership_visibility) values
     ('tlth',             '{}'::jsonb, '{}'::jsonb, 'e2a92dcc-06cf-4d47-9865-d33f59d0261f'::uuid, false),
@@ -24,4 +25,8 @@ insert into group_memberships (user_id, group_id) values
     ('user_b', (select id from groups where path = 'tlth.d.nolla')),
     -- overlapping memberships at the federation root and a guild
     ('user_c', (select id from groups where path = 'tlth')),
-    ('user_c', (select id from groups where path = 'tlth.f'));
+    ('user_c', (select id from groups where path = 'tlth.f')),
+    ('email:admin@example.com', (select id from groups where path = 'tlth.e'));
+
+insert into group_adminships (user_id, group_id) values
+    ('email:admin@example.com', (select id from groups where path = 'tlth.e'));

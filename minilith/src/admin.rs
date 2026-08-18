@@ -646,7 +646,7 @@ async fn revoke_activity_verifier(
 }
 
 fn is_allowed_image_extension(extension: &str) -> bool {
-    matches!(extension, "jpg" | "jpeg" | "webp" | "png" | "avif")
+    matches!(extension, "jpg" | "jpeg" | "webp" | "png" | "avif" | "svg")
 }
 
 #[OpenApi(prefix_path = "/admin")]
@@ -1764,6 +1764,7 @@ impl Router {
     /// - webp
     /// - png
     /// - avif
+    /// - svg
     ///
     /// Notably, no GIF support.
     ///
@@ -1908,7 +1909,10 @@ impl Router {
                 sqlx::query!(
                     r#"
                 update groups
-                set path = $2::ltree || subpath(path, nlevel($3::ltree)),
+                set path = case
+                        when id = $1 then $2::ltree
+                        else $2::ltree || subpath(path, nlevel($3::ltree))
+                    end,
                     name = case when id = $1 then $4 else name end,
                     description = case when id = $1 then $5 else description end,
                     limit_membership_visibility = case
