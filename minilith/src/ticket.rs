@@ -1401,6 +1401,10 @@ impl Router {
     }
 
     #[oai(path = "/validate", method = "post")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "it's linear and just has a bunch of sql queries"
+    )]
     async fn validate(
         &self,
         auth: User,

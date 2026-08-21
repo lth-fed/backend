@@ -69,6 +69,7 @@ impl MainRouter {
         let resp = self
             .reqwest_client
             .post("https://medcheck.tlth.se")
+            .timeout(std::time::Duration::from_secs(5))
             .header("content-type", "application/x-www-form-urlencoded")
             .body(format!("id={pn}"))
             .send()
@@ -160,7 +161,8 @@ impl MainRouter {
                 ));
             }
 
-            self.get_guild(pn).await.ok().flatten()
+            // TODO: remove hack, we fall back to E if medcheck is bad
+            Some(self.get_guild(pn).await.ok().flatten().unwrap_or(Guild::E))
         } else {
             None
         };
