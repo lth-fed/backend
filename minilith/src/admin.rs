@@ -1628,6 +1628,88 @@ impl Router {
         Ok(())
     }
 
+    /// Deletes a ticket kind only while it is still safe to withdraw: it must
+    /// have no buyers, never have been released, and release must be more than
+    /// twenty minutes away.
+    #[oai(path = "/ticket-kinds/:id", method = "delete")]
+    async fn delete_ticket_kind(&self, user: User, Path(id): Path<Uuid>) -> MinilithResult<()> {
+        check_ticket_kind_adminship(&self.db, user.get_id(), id).await?;
+        let mut txn = self.db.begin().await?;
+        let ticket = sqlx::query!(
+            r#"select
+                purchasing_available_start,
+                has_been_released,
+                exists (
+                    select 1 from purchased_tickets where ticket_kind_id = $1
+                ) as "has_buyers!"
+            from ticket_kinds
+            where id = $1
+            for update"#,
+            id,
+        )
+        .fetch_optional(&mut txn.executor())
+        .await?
+        .wrap_err_not_found()?;
+        if ticket.has_buyers {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "cannot delete a ticket kind with buyers",
+                "",
+            ));
+        }
+        if ticket.has_been_released {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "cannot delete a ticket kind that has been released",
+                "",
+            ));
+        }
+        if ticket.purchasing_available_start
+            <= OffsetDateTime::now_utc() + time::Duration::minutes(20)
+        {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "cannot delete a ticket kind less than twenty minutes before release",
+                "",
+            ));
+        }
+
+        let notification_ids = sqlx::query_scalar!(
+            r#"delete from ticket_kind_notifications
+            where ticket_kind_id = $1
+            returning notification_id"#,
+            id,
+        )
+        .fetch_all(&mut txn.executor())
+        .await?;
+        sqlx::query!(
+            "delete from notifications where id = any($1)",
+            &notification_ids,
+        )
+        .execute(&mut txn.executor())
+        .await?;
+        sqlx::query!(
+            r#"delete from ticket_addon_options
+            where ticket_addon_id in (
+                select id from ticket_addons where ticket_kind_id = $1
+            )"#,
+            id,
+        )
+        .execute(&mut txn.executor())
+        .await?;
+        sqlx::query!("delete from ticket_addons where ticket_kind_id = $1", id)
+            .execute(&mut txn.executor())
+            .await?;
+        sqlx::query!(
+            "delete from ticket_kind_allowed_groups where ticket_kind_id = $1",
+            id,
+        )
+        .execute(&mut txn.executor())
+        .await?;
+        sqlx::query!("delete from ticket_kinds where id = $1", id)
+            .execute(&mut txn.executor())
+            .await?;
+        txn.commit().await?;
+        Ok(())
+    }
+
     /// Creates or replaces a named notification for a ticket kind.
     #[oai(
         path = "/ticket-kinds/:ticket_kind_id/notifications/:kind",

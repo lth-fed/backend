@@ -1301,7 +1301,7 @@ impl Router {
         if auth.get_id() == to_user {
             return Ok(());
         }
-        if !sqlx::query_scalar!(
+        if sqlx::query_scalar!(
             "select exists (select 1 from purchased_ticket_validations where id = $1) as \"exists!\"",
             body.purchased_ticket_id
         )

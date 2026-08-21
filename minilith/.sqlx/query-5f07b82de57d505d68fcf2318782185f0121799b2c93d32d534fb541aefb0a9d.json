@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from ticket_kind_notifications\n            where ticket_kind_id = $1\n            returning notification_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "notification_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "5f07b82de57d505d68fcf2318782185f0121799b2c93d32d534fb541aefb0a9d"
+}

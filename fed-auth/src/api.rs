@@ -74,9 +74,9 @@ impl MainRouter {
             .body(format!("id={pn}"))
             .send()
             .await
-            .wrap_err_internal("medcheck: transport error")?
+            .wrap_err_internal("noalert medcheck: transport error")?
             .error_for_status()
-            .wrap_err_internal("medcheck: status error")?;
+            .wrap_err_internal("noalert medcheck: status error")?;
         let body = resp
             .text()
             .await
