@@ -79,6 +79,14 @@ impl CallbackUrl {
 
 pub(crate) type ContextWrapper = Arc<Context>;
 
+// TODO: remove fed-lu hack
+#[derive(Clone)]
+pub(crate) struct FedLuConfig {
+    pub authorize_url: String,
+    pub token_url: String,
+    pub client_secret: Option<String>,
+}
+
 #[derive(Clone)]
 pub(crate) struct Context {
     // service connections
@@ -86,9 +94,14 @@ pub(crate) struct Context {
     pub reqwest_client: reqwest::Client,
     pub email_client: Option<EmailClient>,
 
+    // TODO: remove fed-lu hack
+    pub fed_lu: FedLuConfig,
+
     // keys
     pub private_key: EncodingKey,
     pub jwks: JwkSet,
+    // TODO: remove fed-lu hack
+    #[allow(dead_code, reason = "used again when the temporary LU bridge is removed")]
     pub saml_private_key: openssl::pkey::PKey<openssl::pkey::Private>,
 
     pub service_provider: ServiceProvider,
@@ -153,6 +166,22 @@ impl Context {
             .suggestion("Start the database with `docker compose up -d`")?
         };
 
+        let client = reqwest::Client::builder()
+            .tcp_keepalive(Some(std::time::Duration::from_secs(30)))
+            .http2_keep_alive_interval(Some(std::time::Duration::from_secs(30)))
+            .pool_idle_timeout(std::time::Duration::from_secs(30))
+            .pool_max_idle_per_host(50)
+            .build()?;
+
+        // TODO: remove fed-lu hack
+        let fed_lu = FedLuConfig {
+            authorize_url: std::env::var("FED_LU_AUTHORIZE_URL")
+                .unwrap_or_else(|_| "https://auth.esek.se/fed-lu/authorize".to_owned()),
+            token_url: std::env::var("FED_LU_TOKEN_URL")
+                .unwrap_or_else(|_| "https://auth.esek.se/fed-lu/token".to_owned()),
+            client_secret: std::env::var("FED_LU_CLIENT_SECRET").ok(),
+        };
+
         let (sp, saml_pk) = saml2::get_service_provider().await?;
 
         // so they are grouped with the usual poem errors:
@@ -160,8 +189,9 @@ impl Context {
         let meter = opentelemetry::global::meter("poem");
         let context = Context {
             db,
-            reqwest_client: reqwest::Client::new(),
+            reqwest_client: client,
             email_client,
+            fed_lu,
             private_key,
             jwks,
             service_provider: sp,
