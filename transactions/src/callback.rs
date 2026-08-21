@@ -8,11 +8,7 @@ use uuid::Uuid;
 use crate::context::Context;
 use crate::{CallbackEvent, CallbackInfo, TransactionInfo, TransactionState, swish};
 
-pub async fn send_callbacks(
-    client: &reqwest::Client,
-    signing_key: &jsonwebtoken::EncodingKey,
-    events: impl Iterator<Item = CallbackEvent>,
-) {
+pub async fn send_callbacks(ctx: &Context, events: impl Iterator<Item = CallbackEvent>) {
     let mut endpoints: HashMap<String, (String, Vec<CallbackInfo>)> = HashMap::new();
     for event in events {
         let entry = endpoints.entry(event.callback_url_v1.clone());
@@ -42,11 +38,17 @@ pub async fn send_callbacks(
 
         let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::EdDSA);
         header.kid = Some("main".to_owned());
-        let Ok(token) = jsonwebtoken::encode(&header, &claims, signing_key) else {
+        let Ok(token) = jsonwebtoken::encode(&header, &claims, &ctx.signing_key) else {
             continue;
         };
 
-        match client
+        // retrying this only fucks more with minilith. Preferably, we should change to QUIC or a
+        // similar protocol or pooling for communication between the services to avoid the issues
+        // with multiple sets of 3K connections. Minilith polls every 5 seconds, but for normal
+        // usage it's nicer with push so we keep this, just trying once & being fine with failure on
+        // high load scenarios.
+        match ctx
+            .client
             .post(&endpoint)
             .body(token)
             .send()
@@ -92,8 +94,7 @@ pub async fn handle_callback_to_us(
         None => {}
         Some(swish::Status::Paid) if let Some(payment_reference) = data.payment_reference => {
             send_callbacks(
-                &ctx.client,
-                &ctx.signing_key,
+                ctx,
                 [CallbackEvent {
                     callback_url_v1: transaction.callback_url_v1.clone(),
                     client_id: transaction.client_id.clone(),
@@ -141,8 +142,7 @@ pub async fn handle_callback_to_us(
         }
         _ => {
             send_callbacks(
-                &ctx.client,
-                &ctx.signing_key,
+                ctx,
                 [CallbackEvent {
                     callback_url_v1: transaction.callback_url_v1,
                     client_id: transaction.client_id,

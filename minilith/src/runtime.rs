@@ -9,7 +9,7 @@ use tracing::{error, info, warn};
 use crate::push_notifications::PushSendResult;
 use crate::{
     ContextWrapper, DbInternationalizedString as DIS, InternationalizedString as IS,
-    MinilithErrorOptionExt as _, ticket,
+    MinilithErrorOptionExt as _, ticket, transactions,
 };
 
 const NOTIFICATION_POLL_INTERVAL: Duration = Duration::from_secs(10);

@@ -111,7 +111,21 @@ impl Context {
 
                     None
                 }
-                Ok(Some(push_clients)) => Some(push_clients),
+                Ok(Some(push_clients)) => match push_clients.verify_credentials().await {
+                    Ok(()) => Some(push_clients),
+                    Err(error) => {
+                        #[cfg(not(debug_assertions))]
+                        alert(
+                            AlertLevel::L2,
+                            "push-notifications credential test failed. See logs",
+                        );
+                        error!(
+                            ?error,
+                            "push-notification sending disabled because its credential test failed"
+                        );
+                        None
+                    }
+                },
                 Err(error) => {
                     #[cfg(not(debug_assertions))]
                     alert(AlertLevel::L2, "push-notifications setup failed. See logs");
@@ -172,11 +186,18 @@ impl Context {
             }
         }
 
+        let client = reqwest::Client::builder()
+            .tcp_keepalive(Some(std::time::Duration::from_secs(30)))
+            .http2_keep_alive_interval(Some(std::time::Duration::from_secs(30)))
+            .pool_idle_timeout(std::time::Duration::from_secs(30))
+            .pool_max_idle_per_host(50)
+            .build()?;
+
         let context = Self {
             db,
             encryption_key,
             transactions_api: transactions_api.to_owned(),
-            transactions_client: reqwest::Client::new(),
+            transactions_client: client,
             transactions_token,
 
             push_clients,

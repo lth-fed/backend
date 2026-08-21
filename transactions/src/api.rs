@@ -290,7 +290,7 @@ impl Route {
         }
         Ok(id)
     }
-    /// You WILL NOT get info on the callback, the transaction will be marked paid instantly.
+    /// You WILL get info on the callback, the transaction will be marked paid instantly.
     ///
     /// Keep in mind to complete your transaction before calling this, else we might call your
     /// callback prematurely.
@@ -335,8 +335,7 @@ impl Route {
         txn.commit().await?;
 
         callback::send_callbacks(
-            &self.client,
-            &self.signing_key,
+            self,
             [CallbackEvent {
                 callback_url_v1: auth.callback_url_v1.clone(),
                 client_id: auth.client_id.clone(),

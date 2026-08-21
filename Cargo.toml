@@ -13,7 +13,7 @@ dotenvy = "0.15.7"
 ed25519-dalek = "2.2.0"
 # v11 fixes our hack
 jsonwebtoken = { version = "10.3.0", default-features = false, features = ["rust_crypto", "use_pem"] }
-lettre = { version = "0.11.22", default-features = false, features = ["builder", "pool", "ring", "smtp-transport", "tokio1-rustls", "webpki-roots"] }
+lettre = { version = "0.11.22", default-features = false, features = ["builder", "pool", "aws-lc-rs", "smtp-transport", "tokio1-rustls", "webpki-roots"] }
 # same version as poem
 opentelemetry =  "0.30.0"
 opentelemetry-appender-tracing = "0.30.1"

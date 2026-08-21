@@ -123,6 +123,9 @@ services:
       dockerfile: Dockerfile
       target: minilith
     image: ${CONTAINER_REGISTRY:-localhost}/minilith:${CONTAINER_TAG:-production}
+    volumes:
+      - ./firebase-service-account.json:/run/secrets/firebase-service-account.json
+      - ./AuthKey.p8:/run/secrets/AuthKey.p8
     restart: unless-stopped
     expose:
       - "8000"

@@ -4,3 +4,6 @@
 
 # make sure to run `cargo sqlx prepare` without --workspace
 /.sqlx
+
+firebase-service-account.json
+AuthKey.p8

@@ -8,7 +8,7 @@ use sqlx::postgres::types::PgMoney;
 use stripe_checkout::CheckoutSessionStatus;
 use uuid::Uuid;
 
-use crate::callback::handle_callback_to_us;
+use crate::callback::{self, handle_callback_to_us};
 use crate::context::{CancelTransactionData, Context};
 use crate::{CallbackEvent, CallbackInfo, Provider, TransactionInfo, TransactionState, swish};
 
@@ -217,9 +217,8 @@ pub async fn check_timeouts(ctx: &Context) -> MinilithResult<()> {
         }
     }
 
-    crate::callback::send_callbacks(
-        &ctx.client,
-        &ctx.signing_key,
+    callback::send_callbacks(
+        ctx,
         cancelled.iter().map(|row| CallbackEvent {
             callback_url_v1: row.callback_url_v1.clone(),
             client_id: row.client_id.clone(),

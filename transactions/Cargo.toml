@@ -24,7 +24,7 @@ opentelemetry.workspace = true
 poem.workspace = true
 poem-openapi.workspace = true
 reqwest = { workspace = true, features = ["form", "multipart", "query"] }
-rustls = { version = "0.23.41", default-features = false, features = ["ring"] }
+rustls = "0.23.43"
 serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true

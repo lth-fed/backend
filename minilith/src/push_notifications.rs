@@ -99,6 +99,75 @@ impl PushClients {
         }))
     }
 
+    /// Verifies both provider configurations without delivering to a real device.
+    ///
+    /// APNs and FCM require a target on every send. The deliberately invalid targets below
+    /// therefore must be rejected as targets after authentication succeeds.
+    pub(crate) async fn verify_credentials(&self) -> MinilithResult<()> {
+        let (apns, fcm) = tokio::join!(
+            self.verify_apns_credentials(),
+            self.verify_fcm_credentials()
+        );
+        apns?;
+        fcm?;
+        Ok(())
+    }
+
+    async fn verify_apns_credentials(&self) -> MinilithResult<()> {
+        const APNS_TEST_TOKEN: &str =
+            "0000000000000000000000000000000000000000000000000000000000000000";
+
+        let payload = DefaultNotificationBuilder::new()
+            .set_title("Credential check")
+            .set_body("This notification has no recipient.")
+            .build(
+                APNS_TEST_TOKEN,
+                NotificationOptions {
+                    apns_id: Some("00000000-0000-0000-0000-000000000000"),
+                    apns_push_type: Some(PushType::Alert),
+                    apns_topic: Some(&self.apns_topic),
+                    ..NotificationOptions::default()
+                },
+            );
+        match self.apns.send(payload).await {
+            Err(ApnsError::ResponseError(response))
+                if response
+                    .error
+                    .as_ref()
+                    .is_some_and(|error| error.reason == ApnsErrorReason::BadDeviceToken) => {}
+            Ok(_) => {
+                return Err(MinilithEndpointError::internal_error(
+                    "APNs accepted the credential-test target",
+                    "the synthetic token unexpectedly accepted a notification",
+                ));
+            }
+            Err(error) => return Err(error).wrap_err_internal("APNs credential test failed"),
+        }
+
+        Ok(())
+    }
+
+    async fn verify_fcm_credentials(&self) -> MinilithResult<()> {
+        let mut notification = FcmNotification::new();
+        notification.set_title("Credential check".to_owned());
+        notification.set_body("This notification has no recipient.".to_owned());
+        let mut message = FcmMessage::new();
+        message.set_notification(Some(notification));
+        message.set_target(Target::Token("credential-test-no-device".to_owned()));
+        match self.fcm.send_notification(message).await {
+            Err(error) if fcm_test_target_rejected(&error.to_string()) => {}
+            Ok(()) => {
+                return Err(MinilithEndpointError::internal_error(
+                    "FCM accepted the credential-test target",
+                    "the synthetic token unexpectedly accepted a notification",
+                ));
+            }
+            Err(error) => return Err(error).wrap_err_internal("FCM credential test failed"),
+        }
+
+        Ok(())
+    }
+
     pub(crate) async fn send(
         &self,
         platform: PushPlatform,
@@ -161,6 +230,11 @@ impl PushClients {
 
         Ok(PushSendResult::Sent)
     }
+}
+
+fn fcm_test_target_rejected(error: &str) -> bool {
+    error.contains("UNREGISTERED")
+        || (error.contains("INVALID_ARGUMENT") && error.contains("registration token"))
 }
 
 #[derive(Clone, Debug)]

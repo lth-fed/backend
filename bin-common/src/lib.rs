@@ -33,6 +33,7 @@ pub async fn setup_db(
 
     let db = PgPoolOptions::new()
         .max_connections(connections)
+        .acquire_slow_threshold(std::time::Duration::from_secs(5))
         .connect(db_url)
         .await
         .wrap_err("Failed to create database pool")?;
