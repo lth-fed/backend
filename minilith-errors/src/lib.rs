@@ -536,7 +536,15 @@ pub fn alert(level: AlertLevel, message: impl AsRef<str>) {
 /// `message` is not in an HTML tag.
 pub fn alert_html(level: AlertLevel, message: impl AsRef<str>) {
     let Some(client) = ALERT_EMAIL_CLIENT.get().cloned() else {
-        let backtrace = std::backtrace::Backtrace::force_capture();
+        let backtrace = std::backtrace::Backtrace::force_capture()
+            .to_string()
+            .lines()
+            .take(14)
+            .fold(String::new(), |mut acc, line| {
+                acc.push_str(line);
+                acc.push('\n');
+                acc
+            });
         error!(%level, "ALERTS: email is not configured. Backtrace:\n{backtrace}");
         return;
     };

@@ -20,73 +20,79 @@ const NOTIFICATION_POLL_INTERVAL: Duration = Duration::from_secs(10);
 ///
 /// DB errors.
 pub async fn initial_checks(ctx: &ContextWrapper) -> MinilithResult<()> {
-    let unpaid_transactions = sqlx::query!(
-        "select transaction_id as \"transaction_id!\", user_id, ticket_kind_id
+    check_unpaid_transactions(ctx).await
+}
+async fn check_unpaid_transactions(ctx: &ContextWrapper) -> MinilithResult<()> {
+    let unpaid_transactions = sqlx::query_scalar!(
+        "select transaction_id as \"transaction_id!\"
         from ticket_reservations
         where transaction_id is not null"
     )
     .fetch_all(&ctx.db)
     .await?;
 
-    for txn in unpaid_transactions {
-        let resp = match ctx
-            .transactions_get(format!("/v0/{}", txn.transaction_id))
-            .send()
-            .await
-        {
-            Ok(resp) => resp,
-            Err(err) => {
-                alert(
-                    AlertLevel::L2,
-                    "connection issues for transaction API when starting up to check txns",
-                );
-                error!(
-                    ?err,
-                    "failed to fetch transaction status due to connection issues"
-                );
-                break;
-            }
-        };
-        if !resp.status().is_success() {
-            alert(AlertLevel::L1, "transaction status != 200, see logs");
-            let status = resp.status();
-            let body = resp.text().await;
-            error!(
-                ?body,
-                status_code=%status,
-                "transaction status fetch failed!"
+    let resp = match ctx
+        .transactions_post("/v0/info")
+        .json(&transactions::InfoRequest {
+            transaction_ids: unpaid_transactions,
+        })
+        .send()
+        .await
+    {
+        Ok(resp) => resp,
+        Err(err) => {
+            alert(
+                AlertLevel::L2,
+                "connection issues for transaction API when starting up to check txns",
             );
-            continue;
+            error!(
+                ?err,
+                "failed to fetch transaction status due to connection issues"
+            );
+            return Ok(());
         }
-        let data: TransactionInfo = match resp.json().await {
-            Ok(data) => data,
-            Err(err) => {
-                alert(
-                    AlertLevel::L2,
-                    "transaction initial fetch failed to parse JSON",
-                );
-                error!(
-                    ?err,
-                    "failed to get body from transaction status \
+    };
+    if !resp.status().is_success() {
+        alert(AlertLevel::L1, "transaction status != 200, see logs");
+        let status = resp.status();
+        let body = resp.text().await;
+        error!(
+            ?body,
+            status_code=%status,
+            "transaction status fetch failed!"
+        );
+        return Ok(());
+    }
+    let data: Vec<transactions::SingleInfoResponse> = match resp.json().await {
+        Ok(data) => data,
+        Err(err) => {
+            alert(
+                AlertLevel::L2,
+                "transaction initial fetch failed to parse JSON",
+            );
+            error!(
+                ?err,
+                "failed to get body from transaction status \
                     due to parsing json / reading body issues"
-                );
-                continue;
-            }
-        };
-
-        // dumb hack to simulate HTTP request.
-        ticket::Router {
-            context: Arc::clone(ctx),
+            );
+            return Ok(());
         }
-        .callback(
-            fed_auth_verifier::callbacks::TransactionsCallbackDataV1::single(
-                TransactionCallbackInfo {
-                    transaction_id: txn.transaction_id,
-                    inner: data,
-                },
-            ),
-        )
-        .await?;
+    };
+    // dumb hack to simulate HTTP request.
+    let router = ticket::Router {
+        context: Arc::clone(ctx),
+    };
+    for info in data {
+        router
+            .callback(
+                fed_auth_verifier::callbacks::TransactionsCallbackDataV1::single(
+                    TransactionCallbackInfo {
+                        transaction_id: info.id,
+                        inner: TransactionInfo { state: info.state },
+                    },
+                ),
+            )
+            .await?;
     }
 
     Ok(())
