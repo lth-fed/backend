@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n                purchased_tickets.id,\n                purchased_tickets.ticket_kind_id,\n                purchased_tickets.purchaser_id,\n                purchased_tickets.owner_id,\n                purchased_tickets.transaction_id,\n                (select array(select group_id from group_memberships \n                 where user_id = owner_id)) as owner_memberships\n            from purchased_tickets\n            where purchased_tickets.ticket_kind_id = $1\n            order by purchased_tickets.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "ticket_kind_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "purchaser_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "owner_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "transaction_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 5,
+        "name": "owner_memberships",
+        "type_info": "UuidArray"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "6eaeed56984ee8ea49cfc6a64b9ff0104339157a69a7c0aa1669f58bc59a1940"
+}

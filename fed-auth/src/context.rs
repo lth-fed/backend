@@ -101,7 +101,10 @@ pub(crate) struct Context {
     pub private_key: EncodingKey,
     pub jwks: JwkSet,
     // TODO: remove fed-lu hack
-    #[allow(dead_code, reason = "used again when the temporary LU bridge is removed")]
+    #[allow(
+        dead_code,
+        reason = "used again when the temporary LU bridge is removed"
+    )]
     pub saml_private_key: openssl::pkey::PKey<openssl::pkey::Private>,
 
     pub service_provider: ServiceProvider,

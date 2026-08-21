@@ -283,7 +283,7 @@ async fn check_next_notification(ctx: &ContextWrapper) -> MinilithResult<bool> {
 ///
 /// # Panics
 ///
-/// If 0 >= 60.
+/// If 58 >= 60 or if 0 > 1e9.
 pub fn spawn(ctx: &ContextWrapper) {
     let ticket_ctx = Arc::clone(ctx);
     // one runtime task per instance of this, so every function called in `check_all_tickets` has to
@@ -291,18 +291,35 @@ pub fn spawn(ctx: &ContextWrapper) {
     // sql queries)
     tokio::spawn(async move {
         loop {
-            println!("check! {:?}", time::OffsetDateTime::now_utc());
             if let Err(err) = ticket::check_all_tickets(&ticket_ctx.db).await {
                 error!(?err, "Error from runtime->check_all_tickets");
             }
 
             let now = time::OffsetDateTime::now_utc();
-            // next minute on xx:01
-            let next = now + time::Duration::MINUTE;
+            // next minute on xx:58
+            // TODO: revert to :00, this is because the frontend jitters at :00 - :10 and in :00 -
+            // :01 we may still be actively releasing it.
             #[allow(clippy::unwrap_used, reason = "bruh")]
-            let next = next.replace_second(0).unwrap();
+            let mut next = now
+                .replace_second(58)
+                .unwrap()
+                .replace_nanosecond(0)
+                .unwrap();
+            if next <= now {
+                next += time::Duration::MINUTE;
+            }
             let until = next - now;
             tokio::time::sleep(until.unsigned_abs()).await;
+        }
+    });
+
+    let unpaid_ctx = Arc::clone(ctx);
+    tokio::spawn(async move {
+        loop {
+            if check_unpaid_transactions(&unpaid_ctx).await.is_err() {
+                error!("Error from runtime->check_unpaid_transactions");
+            }
+            tokio::time::sleep(Duration::from_secs(5)).await;
         }
     });
 

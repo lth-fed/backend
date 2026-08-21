@@ -809,7 +809,9 @@ impl Router {
     #[oai(path = "/queue", method = "get")]
     async fn queue_status(&self, user: User) -> MinilithResult<Json<QueueResponse>> {
         let mut txn = self.db.begin().await?;
-        let flow = lock_user_purchase_flow(&mut txn, user.get_id(), None).await?;
+        let flow = wait_for_user_purchase_flow(&mut txn, user.get_id(), None)
+            .await?
+            .wrap_err_not_found()?;
         match flow {
             PurchaseFlow::Reservation => {
                 let reservation = sqlx::query!(
@@ -1990,15 +1992,14 @@ async fn reserve_ticket_capacity(
     Ok(granted)
 }
 
-async fn release_next_ticket(db: &PgPool) -> MinilithResult<bool> {
+async fn release_next_ticket(db: &PgPool) -> MinilithResult<ControlFlow<()>> {
     // Commit the claim before acquiring flow locks. If the process dies
     // after this, the misplaced-queuer pass completes the release.
-    let mut claim_txn = db.begin().await?;
     let ticket_kind = sqlx::query_scalar!(
         "with next as (
             select id from ticket_kinds
             where purchasing_available_start > now() - '5 minutes'::interval
-            and purchasing_available_start <= now() + '30 seconds'::interval
+            and purchasing_available_start <= now() + '40 seconds'::interval
             and has_been_released = false
             order by id
             limit 1
@@ -2010,18 +2011,17 @@ async fn release_next_ticket(db: &PgPool) -> MinilithResult<bool> {
         where kind.id = next.id
         returning kind.id"
     )
-    .fetch_optional(&mut claim_txn.executor())
+    .fetch_optional(db)
     .await?;
-    claim_txn.commit().await?;
     if let Some(ticket_kind) = ticket_kind {
         let mut release_txn = db.begin().await?;
         release(&mut release_txn, ticket_kind).await?;
         release_txn.commit().await?;
-        Ok(true)
+        Ok(ControlFlow::Continue(()))
     } else {
         // there may in certain circumstances be "jobs" left, but they will be taken care of
         // next minute in worst case
-        Ok(false)
+        Ok(ControlFlow::Break(()))
     }
 }
 async fn remove_reservation_tails(db: &PgPool) -> MinilithResult<()> {
@@ -2217,7 +2217,7 @@ async fn remove_expired_release_queuers(db: &mut Transaction<'_>) -> MinilithRes
 pub async fn check_all_tickets(db: &PgPool) -> MinilithResult<()> {
     // release tickets
     loop {
-        if release_next_ticket(db).await? {
+        if release_next_ticket(db).await?.is_break() {
             break;
         }
     }
