@@ -166,6 +166,7 @@ struct AdminPurchasedTicket {
     purchaser_id: String,
     owner_id: String,
     transaction_id: Uuid,
+    owner_memberships: Vec<Uuid>,
     addons: Vec<AdminPurchasedAddon>,
 }
 
@@ -1281,7 +1282,9 @@ impl Router {
                 purchased_tickets.ticket_kind_id,
                 purchased_tickets.purchaser_id,
                 purchased_tickets.owner_id,
-                purchased_tickets.transaction_id
+                purchased_tickets.transaction_id,
+                (select array(select group_id from group_memberships 
+                 where user_id = owner_id)) as owner_memberships
             from purchased_tickets
             where purchased_tickets.ticket_kind_id = $1
             order by purchased_tickets.id"#,
@@ -1293,6 +1296,7 @@ impl Router {
             purchaser_id: row.purchaser_id,
             owner_id: row.owner_id,
             transaction_id: row.transaction_id,
+            owner_memberships: row.owner_memberships.unwrap_or_default(),
             addons: addons.get(&row.id).cloned().unwrap_or_default(),
         })
         .fetch_all(&self.db)

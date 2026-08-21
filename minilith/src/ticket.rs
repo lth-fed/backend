@@ -238,6 +238,7 @@ pub struct Addon {
 pub struct PurchasedAddon {
     #[oai(flatten)]
     pub inner: Addon,
+    pub options: Vec<AddonOption>,
     pub selected_options: Vec<i32>,
     pub selected_text: String,
 }
@@ -381,6 +382,7 @@ struct ValidateResponse {
     has_been_transfered: bool,
     purchaser_name: Option<String>,
     previous_verifications: Vec<Validation>,
+    purchased_addons: Vec<PurchasedAddon>,
 }
 impl ValidateResponse {
     pub fn not_valid() -> Self {
@@ -391,6 +393,7 @@ impl ValidateResponse {
             has_been_transfered: false,
             purchaser_name: None,
             previous_verifications: vec![],
+            purchased_addons: vec![],
         }
     }
 }
@@ -401,9 +404,41 @@ impl Router {
     ///
     /// AUTH, DB
     #[oai(path = "/", method = "get")]
+    #[allow(clippy::too_many_lines, reason = "it's linear")]
     async fn my_tickets(&self, user: User) -> MinilithResult<Json<Vec<PurchasedTicket>>> {
         let id = user.get_id();
 
+        let available_options: HashMap<Uuid, Vec<AddonOption>> = sqlx::query!(
+            "select opt.id, opt.idx, opt.name as \"name!: DIS\", opt.price,
+            bookkeeping_prices as \"bp!: Vec<i64>\", bookkeeping_price_categories,
+            add.id as add_id
+            from purchased_tickets
+            inner join ticket_kinds kind on purchased_tickets.ticket_kind_id = kind.id
+            inner join ticket_addons add on add.ticket_kind_id = kind.id 
+            inner join ticket_addon_options opt on opt.ticket_addon_id = add.id
+            where purchased_tickets.owner_id = $1 or purchased_tickets.purchaser_id = $1",
+            user.get_id()
+        )
+        .map(|row| {
+            (
+                row.add_id,
+                AddonOption {
+                    id: row.id,
+                    idx: row.idx,
+                    name: row.name.0,
+                    price: row.price.0,
+                    bookkeeping_prices: row.bp,
+                    bookkeeping_price_categories: row.bookkeeping_price_categories,
+                },
+            )
+        })
+        .fetch_all(&self.db)
+        .await?
+        .into_iter()
+        .fold(HashMap::new(), |mut map, (addon_id, option)| {
+            map.entry(addon_id).or_default().push(option);
+            map
+        });
         let mut addons: HashMap<Uuid, Vec<PurchasedAddon>> = sqlx::query!(
             r#"select
                 purchased_ticket_addons.ticket_id as "ticket_id",
@@ -437,6 +472,10 @@ impl Router {
                     },
                     selected_options: row.selected_options,
                     selected_text: row.selected_text,
+                    options: available_options
+                        .get(&row.addon_id)
+                        .cloned()
+                        .unwrap_or_default(),
                 },
             )
         })
@@ -1373,7 +1412,8 @@ impl Router {
             return Ok(Json(ValidateResponse::not_valid()));
         }
         let Some(row) = sqlx::query!(
-            "select owner_id, purchaser_id, owner.name as oname, purchaser.name as pname
+            "select owner_id, purchaser_id, owner.name as oname, purchaser.name as pname,
+            ticket_kind_id
             from purchased_tickets 
             inner join ticket_kinds kind on kind.id = purchased_tickets.ticket_kind_id
             inner join activity_verifiers on activity_verifiers.activity_id = kind.activity_id
@@ -1396,6 +1436,68 @@ impl Router {
         .map(|row| Validation { at: row.timestamp })
         .fetch_all(&self.db)
         .await?;
+        let mut available_options: HashMap<Uuid, Vec<AddonOption>> = sqlx::query!(
+            "select opt.id, opt.idx, opt.name as \"name!: DIS\", opt.price,
+            bookkeeping_prices as \"bp!: Vec<i64>\", bookkeeping_price_categories,
+            add.id as add_id
+            from ticket_kinds kind
+            inner join ticket_addons add on add.ticket_kind_id = kind.id 
+            inner join ticket_addon_options opt on opt.ticket_addon_id = add.id
+            where kind.id = $1",
+            row.ticket_kind_id
+        )
+        .map(|row| {
+            (
+                row.add_id,
+                AddonOption {
+                    id: row.id,
+                    idx: row.idx,
+                    name: row.name.0,
+                    price: row.price.0,
+                    bookkeeping_prices: row.bp,
+                    bookkeeping_price_categories: row.bookkeeping_price_categories,
+                },
+            )
+        })
+        .fetch_all(&self.db)
+        .await?
+        .into_iter()
+        .fold(HashMap::new(), |mut map, (addon_id, option)| {
+            map.entry(addon_id).or_default().push(option);
+            map
+        });
+        let purchased_addons: Vec<PurchasedAddon> = sqlx::query!(
+            r#"select
+                purchased_ticket_addons.ticket_id as "ticket_id",
+                ticket_addons.id as "addon_id",
+                ticket_addons.name as "addon_name: DIS",
+                ticket_addons.multiple_alternatives as "multiple_alternatives",
+                ticket_addons.has_text_field as "has_text_field",
+                ticket_addons.required as "required",
+                purchased_ticket_addons.selected_options as "selected_options",
+                purchased_ticket_addons.selected_text as "selected_text"
+            from purchased_ticket_addons
+            inner join ticket_addons on
+                ticket_addons.id = purchased_ticket_addons.addon_id
+            where purchased_ticket_addons.ticket_id = $1
+            order by ticket_addons.idx
+            "#,
+            body.purchased_ticket_id
+        )
+        .map(|row| PurchasedAddon {
+            inner: Addon {
+                id: row.addon_id,
+                name: row.addon_name.0,
+                multiple_alternatives: row.multiple_alternatives,
+                has_text_field: row.has_text_field,
+                required: row.required,
+            },
+            selected_options: row.selected_options,
+            selected_text: row.selected_text,
+            options: available_options.remove(&row.addon_id).unwrap_or_default(),
+        })
+        .fetch_all(&self.context.db)
+        .await?;
         sqlx::query!(
             "insert into purchased_ticket_validations (id, purchased_ticket_id)
             values ($1, $2)",
@@ -1417,6 +1519,7 @@ impl Router {
                     .wrap_err_encryption("validate purchaser name")?,
             ),
             previous_verifications,
+            purchased_addons,
         }))
     }
 
@@ -1474,14 +1577,14 @@ impl Router {
                     .fetch_optional(&mut txn.executor())
                     .await?
                     else {
-                        error!(
-                            transaction_id = %data.transaction_id,
-                            "transaction which we do not track is cancelled"
-                        );
-                        alert(
-                            AlertLevel::L2,
-                            "transaction which we do not track is cancelled",
-                        );
+                        // error!(
+                        //     transaction_id = %data.transaction_id,
+                        //     "transaction which we do not track is cancelled"
+                        // );
+                        // alert(
+                        //     AlertLevel::L2,
+                        //     "transaction which we do not track is cancelled",
+                        // );
                         continue;
                     };
                     let Some(flow) = wait_for_user_purchase_flow(
