@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select activities.id,\n                title as \"title!: DIS\",\n                activities.description as \"description!: DIS\",\n                location as \"location!: Location\", time_start, time_end,\n                max_tickets,\n                responsible_name,\n                responsible_contact,\n                images.url as \"image_url\",\n                activities.image_id,\n                creator_id,\n                is_hidden,\n                is_hidden_for_other_admins\n            from activities\n            inner join images on images.id = image_id\n            where activities.id = $1;\n            ",
+  "query": "select activities.id,\n                title as \"title!: DIS\",\n                activities.description as \"description!: DIS\",\n                location as \"location!: Location\", time_start, time_end,\n                max_tickets,\n                responsible_name,\n                responsible_contact,\n                images.url as \"image_url\",\n                activities.image_id,\n                creator_id,\n                is_hidden,\n                is_hidden_for_other_admins,\n                (select exists (\n                    select 1\n                    from ticket_kinds tk\n                    inner join ticket_kind_allowed_groups g on g.ticket_kind_id = tk.id\n                    inner join groups ag on ag.id = g.group_id\n                    inner join groups ug on ag.path @> ug.path\n                    inner join group_memberships m on m.group_id = ug.id\n                    where tk.activity_id = $1\n                    and max_tickets > 0\n                    and m.user_id = $2\n                )) as \"can_see_ticket!\"\n            from activities\n            inner join images on images.id = image_id\n            where activities.id = $1;\n            ",
   "describe": {
     "columns": [
       {
@@ -96,11 +96,17 @@
         "ordinal": 13,
         "name": "is_hidden_for_other_admins",
         "type_info": "Bool"
+      },
+      {
+        "ordinal": 14,
+        "name": "can_see_ticket!",
+        "type_info": "Bool"
       }
     ],
     "parameters": {
       "Left": [
-        "Uuid"
+        "Uuid",
+        "Text"
       ]
     },
     "nullable": [
@@ -117,8 +123,9 @@
       false,
       false,
       false,
-      false
+      false,
+      null
     ]
   },
-  "hash": "a191b0e1f07db878e601f16af601ad329350ed07f5ad16157db69e91281e32c5"
+  "hash": "4e933a2c0bb06dafca9621000c034132d724b0e28c3627a9e7e103783810f5a7"
 }

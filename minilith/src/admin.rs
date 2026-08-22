@@ -857,6 +857,47 @@ impl Router {
         Ok(())
     }
 
+    /// Permanently deletes an unpublished activity with no ticket kinds.
+    ///
+    /// The activity row is locked while checking the contract, preventing a
+    /// ticket kind from being created concurrently with deletion.
+    #[oai(path = "/activities/:id", method = "delete")]
+    async fn delete_activity(&self, user: User, Path(id): Path<Uuid>) -> MinilithResult<()> {
+        check_activity_adminship(&self.db, user.get_id(), id).await?;
+        let mut txn = self.db.begin().await?;
+        let activity = sqlx::query!(
+            r#"select
+                is_hidden,
+                exists (select 1 from ticket_kinds where activity_id = $1) as "has_ticket_kinds!"
+            from activities
+            where id = $1
+            for update"#,
+            id,
+        )
+        .fetch_optional(&mut txn.executor())
+        .await?
+        .wrap_err_not_found()?;
+
+        if !activity.is_hidden {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "cannot delete a published activity",
+                "hide the activity before deleting it",
+            ));
+        }
+        if activity.has_ticket_kinds {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "cannot delete an activity with ticket kinds",
+                "delete every ticket kind first",
+            ));
+        }
+
+        sqlx::query!("delete from activities where id = $1", id)
+            .execute(&mut txn.executor())
+            .await?;
+        txn.commit().await?;
+        Ok(())
+    }
+
     /// Lists pending host invitations addressed to groups the caller directly
     /// administers. Invitations for deleted groups are omitted.
     #[oai(path = "/activity-host-invites", method = "get")]
