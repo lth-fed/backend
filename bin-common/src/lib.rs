@@ -166,12 +166,6 @@ pub async fn shutdown_signal() {
 }
 
 #[must_use]
-#[cfg(not(debug_assertions))]
-pub fn listeners(port: u16) -> impl Listener {
-    TcpListener::bind(format!("[::]:{port}"))
-}
-#[must_use]
-#[cfg(debug_assertions)]
 pub fn listeners(port: u16) -> impl Listener {
     TcpListener::bind(format!("[::]:{port}"))
         .combine(TcpListener::bind(format!("[::]:{}", port + 50)).rustls(debug_rustls_config()))
