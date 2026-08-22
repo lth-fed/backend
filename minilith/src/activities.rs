@@ -220,12 +220,24 @@ impl Router {
                 activities.image_id,
                 creator_id,
                 is_hidden,
-                is_hidden_for_other_admins
+                is_hidden_for_other_admins,
+                (select exists (
+                    select 1
+                    from ticket_kinds tk
+                    inner join ticket_kind_allowed_groups g on g.ticket_kind_id = tk.id
+                    inner join groups ag on ag.id = g.group_id
+                    inner join groups ug on ag.path @> ug.path
+                    inner join group_memberships m on m.group_id = ug.id
+                    where tk.activity_id = $1
+                    and max_tickets > 0
+                    and m.user_id = $2
+                )) as "can_see_ticket!"
             from activities
             inner join images on images.id = image_id
             where activities.id = $1;
             "#,
-            *id
+            *id,
+            user.get_id()
         )
         .fetch_optional(&self.context.db)
         .await?
@@ -242,18 +254,6 @@ impl Router {
             activity.creator_id,
         )
         .fetch_all(&self.context.db)
-        .await?;
-        let tickets_available = sqlx::query!(
-            r#"select exists (
-                select 1
-                from ticket_kinds tk
-                where tk.activity_id = $1
-                and max_tickets > 0
-            ) as value;
-            "#,
-            *id,
-        )
-        .fetch_one(&self.context.db)
         .await?;
 
         let hosts = hosts
@@ -284,7 +284,7 @@ impl Router {
             is_hidden_for_other_admins: activity.is_hidden_for_other_admins,
             max_tickets: activity.max_tickets,
             hosts,
-            tickets_exist: tickets_available.value.unwrap_or(false),
+            tickets_exist: activity.can_see_ticket,
         };
 
         Ok(Json(activity))

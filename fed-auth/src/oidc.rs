@@ -51,6 +51,7 @@ fn is_allowed_domain(client_id: &str, domain: &Uri) -> bool {
     if eq_uri_domain(domain, "http://localhost:5173")
         || eq_uri_domain(domain, "http://localhost:5175")
         || eq_uri_domain(domain, "http://localhost:8000")
+        || eq_uri_domain(domain, "https://localhost:8050")
         || eq_uri_domain(domain, API_DOMAIN)
         || eq_uri_domain(domain, WEBSITE_DOMAIN)
     {
@@ -65,6 +66,7 @@ fn is_teknologappen_domain(domain: &Uri) -> bool {
     if eq_uri_domain(domain, "http://localhost:5173")
         || eq_uri_domain(domain, "http://localhost:5175")
         || eq_uri_domain(domain, "http://localhost:8000")
+        || eq_uri_domain(domain, "https://localhost:8050")
         || eq_uri_domain(domain, API_DOMAIN)
         || eq_uri_domain(domain, WEBSITE_DOMAIN)
     {

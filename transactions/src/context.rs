@@ -216,6 +216,10 @@ impl Context {
             .suggestion("Start the database with `docker compose up -d`")?
         };
 
+        let client = reqwest::Client::builder()
+            .tls_danger_accept_invalid_certs(cfg!(debug_assertions))
+            .build()?;
+
         let typst_world = OurWonderfulTypstWorldBase::default();
 
         let context = Self {
@@ -224,7 +228,7 @@ impl Context {
             swish_clients: ClientStore::default(),
             stripe_clients: ClientStore::default(),
 
-            client: reqwest::Client::new(),
+            client,
             jwks,
             signing_key: encoding_key,
 

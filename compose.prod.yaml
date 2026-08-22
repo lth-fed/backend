@@ -63,7 +63,7 @@ services:
     image: ${CONTAINER_REGISTRY:-localhost}/fed-auth:${CONTAINER_TAG:-production}
     restart: unless-stopped
     expose:
-      - "8001"
+      - "8051"
     networks:
       - default
       - traefik
@@ -74,7 +74,8 @@ services:
       traefik.http.routers.fed-auth.entrypoints: ${TRAEFIK_ENTRYPOINT:-websecure}
       traefik.http.routers.fed-auth.tls: "true"
       traefik.http.routers.fed-auth.tls.certresolver: ${TRAEFIK_CERT_RESOLVER:-letsencrypt}
-      traefik.http.services.fed-auth.loadbalancer.server.port: "8001"
+      traefik.http.services.fed-auth.loadbalancer.server.port: "8051"
+      traefik.http.services.fed-auth.loadbalancer.server.scheme: https
     env_file:
       - ./fed-auth/.env
     environment:
@@ -94,7 +95,7 @@ services:
     image: ${CONTAINER_REGISTRY:-localhost}/transactions:${CONTAINER_TAG:-production}
     restart: unless-stopped
     expose:
-      - "8002"
+      - "8052"
     networks:
       - default
       - traefik
@@ -105,7 +106,8 @@ services:
       traefik.http.routers.transactions.entrypoints: ${TRAEFIK_ENTRYPOINT:-websecure}
       traefik.http.routers.transactions.tls: "true"
       traefik.http.routers.transactions.tls.certresolver: ${TRAEFIK_CERT_RESOLVER:-letsencrypt}
-      traefik.http.services.transactions.loadbalancer.server.port: "8002"
+      traefik.http.services.transactions.loadbalancer.server.port: "8052"
+      traefik.http.services.transactions.loadbalancer.server.scheme: https
     env_file:
       - ./transactions/.env
     environment:
@@ -128,7 +130,7 @@ services:
       - ./AuthKey.p8:/run/secrets/AuthKey.p8
     restart: unless-stopped
     expose:
-      - "8000"
+      - "8050"
     networks:
       - default
       - traefik
@@ -139,7 +141,8 @@ services:
       traefik.http.routers.minilith.entrypoints: ${TRAEFIK_ENTRYPOINT:-websecure}
       traefik.http.routers.minilith.tls: "true"
       traefik.http.routers.minilith.tls.certresolver: ${TRAEFIK_CERT_RESOLVER:-letsencrypt}
-      traefik.http.services.minilith.loadbalancer.server.port: "8000"
+      traefik.http.services.minilith.loadbalancer.server.port: "8050"
+      traefik.http.services.minilith.loadbalancer.server.scheme: https
     env_file:
       - ./minilith/.env
     environment:

@@ -29,7 +29,7 @@ pub use bin_common::PgPool;
 pub(crate) use context::{Context, ContextWrapper};
 
 #[cfg(debug_assertions)]
-pub(crate) const API_DOMAIN: &str = "http://localhost:8001";
+pub(crate) const API_DOMAIN: &str = "https://localhost:8051";
 #[cfg(not(debug_assertions))]
 pub(crate) const API_DOMAIN: &str = "https://api.auth.teknologappen.se";
 #[cfg(debug_assertions)]

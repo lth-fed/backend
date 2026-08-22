@@ -94,6 +94,14 @@ S3_DOMAIN=s3.teknologappen.se
 S3_CONSOLE_DOMAIN=s3-console.teknologappen.se
 ```
 
+Traefik connects to the services over TLS and negotiates HTTP/2 on ports `8050`
+(minilith), `8051` (`fed-auth`), and `8052` (`transactions`). The services use a
+self-signed certificate, so add `--serversTransport.insecureSkipVerify=true` to
+Traefik's static configuration. This disables certificate verification for all
+of Traefik's upstream services, not only these three. The three release binaries
+must have their TLS listeners available on these ports before deploying this
+Compose configuration.
+
 Copy each `.env.example` to `.env` in `minilith`, `fed-auth`, and
 `transactions`, then replace the example values. Compose supplies
 `DATABASE_URL`, so it may be omitted from these service files.

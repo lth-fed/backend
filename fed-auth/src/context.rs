@@ -170,10 +170,7 @@ impl Context {
         };
 
         let client = reqwest::Client::builder()
-            .tcp_keepalive(Some(std::time::Duration::from_secs(30)))
-            .http2_keep_alive_interval(Some(std::time::Duration::from_secs(30)))
-            .pool_idle_timeout(std::time::Duration::from_secs(30))
-            .pool_max_idle_per_host(50)
+            .tls_danger_accept_invalid_certs(cfg!(debug_assertions))
             .build()?;
 
         // TODO: remove fed-lu hack

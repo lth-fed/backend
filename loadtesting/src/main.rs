@@ -37,10 +37,10 @@ struct Args {
     #[arg(long, default_value_t = DEFAULT_CLIENTS)]
     clients: usize,
     /// Minilith API base URL.
-    #[arg(long, default_value = "http://localhost:8000/v0/")]
+    #[arg(long, default_value = "https://localhost:8050/v0/")]
     api_url: Url,
     /// fed-auth base URL.
-    #[arg(long, default_value = "http://localhost:8001/")]
+    #[arg(long, default_value = "https://localhost:8051/")]
     auth_url: Url,
     /// `PostgreSQL` connection used only to grant group memberships.
     #[arg(long, env = "DATABASE_URL")]
@@ -107,6 +107,7 @@ async fn run(mut args: Args) -> Result<()> {
     }
 
     let http = Client::builder()
+        .tls_danger_accept_invalid_certs(true)
         .redirect(reqwest::redirect::Policy::none())
         .pool_max_idle_per_host(args.clients)
         .build()

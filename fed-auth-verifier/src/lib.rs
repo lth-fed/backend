@@ -60,7 +60,7 @@ impl AuthContextProvider for AuthUrl {
     fn url() -> String {
         #[cfg(debug_assertions)]
         {
-            "http://localhost:8001/oidc/v1/certs".to_owned()
+            "https://localhost:8051/oidc/v1/certs".to_owned()
         }
         #[cfg(not(debug_assertions))]
         {
@@ -74,7 +74,7 @@ impl AuthContextProvider for TransactionsUrl {
     fn url() -> String {
         #[cfg(debug_assertions)]
         {
-            "http://localhost:8002/v0/jwks".to_owned()
+            "https://localhost:8052/v0/jwks".to_owned()
         }
         #[cfg(not(debug_assertions))]
         {
@@ -117,12 +117,15 @@ impl<Url: AuthContextProvider + 'static> JwkContext<Url> {
     ///
     /// Returns an error if it was not possible to get the verifying key.
     pub async fn new(audience: impl Into<String>) -> color_eyre::Result<Self> {
+        let client = reqwest::Client::builder()
+            .tls_danger_accept_invalid_certs(cfg!(debug_assertions))
+            .build()?;
         #[cfg(debug_assertions)]
         let retries = 1;
         #[cfg(not(debug_assertions))]
         let retries = 10;
         let resp = match retry(
-            || reqwest::get(Url::url()),
+            || client.get(Url::url()).send(),
             retries,
             std::time::Duration::from_secs(1),
         )
