@@ -549,7 +549,10 @@ impl Router {
         .fetch_optional(&self.db)
         .await?
         else {
-            return Err(MinilithEndpointError::not_found());
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "you cannot view the receipt if the ticket was transfered to you",
+                "",
+            ));
         };
 
         let user = sqlx::query!(

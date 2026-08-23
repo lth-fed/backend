@@ -2123,12 +2123,24 @@ impl Router {
         &self,
         user: User,
         Path(group_id): Path<Uuid>,
-    ) -> MinilithResult<Json<Vec<String>>> {
+    ) -> MinilithResult<Json<Vec<AdminUser>>> {
         check_direct_adminship(&self.db, user.get_id(), group_id).await?;
-        let users = sqlx::query_scalar!(
-            "select member_id from group_member_requests where group_id = $1 order by member_id",
+        let users = sqlx::query!(
+            r#"select requests.member_id, users.name as "name?"
+            from group_member_requests requests
+            inner join users on users.id = requests.member_id
+            where requests.group_id = $1
+            order by requests.member_id"#,
             group_id,
         )
+        .map(|row| AdminUser {
+            user_id: row.member_id,
+            name: row.name.and_then(|name| {
+                self.decrypt_string(name)
+                    .wrap_err_encryption("membership_requests name")
+                    .ok()
+            }),
+        })
         .fetch_all(&self.db)
         .await?;
         Ok(Json(users))
@@ -2161,6 +2173,35 @@ impl Router {
         .fetch_optional(&mut txn.executor())
         .await?;
         if accepted.is_none() {
+            return Err(MinilithEndpointError::not_found());
+        }
+        txn.commit().await?;
+        Ok(())
+    }
+
+    /// Rejects a pending membership request without creating a membership.
+    #[oai(
+        path = "/groups/:group_id/member-requests/:member_id",
+        method = "delete"
+    )]
+    async fn reject_membership_request(
+        &self,
+        user: User,
+        Path(group_id): Path<Uuid>,
+        Path(member_id): Path<String>,
+    ) -> MinilithResult<()> {
+        let mut txn = self.db.begin().await?;
+        check_direct_adminship(&mut txn.executor(), user.get_id(), group_id).await?;
+        let rejected = sqlx::query_scalar!(
+            r#"delete from group_member_requests
+            where group_id = $1 and member_id = $2
+            returning member_id"#,
+            group_id,
+            member_id,
+        )
+        .fetch_optional(&mut txn.executor())
+        .await?;
+        if rejected.is_none() {
             return Err(MinilithEndpointError::not_found());
         }
         txn.commit().await?;
