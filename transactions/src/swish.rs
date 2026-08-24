@@ -54,6 +54,8 @@ pub enum Status {
     Declined,
     Error,
     Cancelled,
+    /// Undocumented:( .
+    Created,
 }
 
 /// <https://developer.swish.nu/documentation/guides/create-a-payment-request#if-the-payment-is-successful>.

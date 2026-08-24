@@ -179,6 +179,7 @@ async fn check_next_notification(ctx: &ContextWrapper) -> MinilithResult<bool> {
             content as "content!: DIS"
         from notifications
         where send_at <= now()
+        and sent = false
         order by send_at, id
         for update skip locked"#
     )
@@ -196,20 +197,35 @@ async fn check_next_notification(ctx: &ContextWrapper) -> MinilithResult<bool> {
             title = notification.title.resolve_intl("en", ""),
             "push-notification not sent because setup failed"
         );
-        sqlx::query!("delete from notifications where id = $1", notification.id)
-            .execute(&mut transaction.executor())
-            .await?;
+        sqlx::query!(
+            "update notifications set sent = true where id = $1",
+            notification.id
+        )
+        .execute(&mut transaction.executor())
+        .await?;
         transaction.commit().await?;
         return Ok(false);
     }
 
-    // Ticket-kind allowed groups determine who can receive the notification. The closest setting
-    // on each allowed group or one of its ancestors applies, and no matching setting means no
-    // notification. Until personalized behavior is defined, both `all` and `personalized`
-    // receive every matching notification.
-    let devices = sqlx::query_file!("src/notification-recipients.sql", notification.id)
-        .fetch_all(&mut transaction.executor())
-        .await?;
+    // The view applies membership visibility and the closest notification setting on each allowed
+    // group. Until personalized behavior is defined, both `all` and `personalized` receive every
+    // matching notification.
+    let devices = sqlx::query!(
+        r#"select
+            push_devices.user_id as "user_id!",
+            push_devices.device_id as "device_id!",
+            push_devices.push_token,
+            push_devices.platform::push_platform
+                as "platform!: crate::push_notifications::PushPlatform",
+            users.language
+        from notification_recipients
+        inner join push_devices using (user_id)
+        inner join users on users.id = notification_recipients.user_id
+        where notification_recipients.notification_id = $1"#,
+        notification.id,
+    )
+    .fetch_all(&mut transaction.executor())
+    .await?;
 
     let mut sent = 0_u64;
     let mut failed = 0_u64;
@@ -264,9 +280,12 @@ async fn check_next_notification(ctx: &ContextWrapper) -> MinilithResult<bool> {
         }
     }
 
-    sqlx::query!("delete from notifications where id = $1", notification.id)
-        .execute(&mut transaction.executor())
-        .await?;
+    sqlx::query!(
+        "update notifications set sent = true where id = $1",
+        notification.id
+    )
+    .execute(&mut transaction.executor())
+    .await?;
     transaction.commit().await?;
 
     info!(

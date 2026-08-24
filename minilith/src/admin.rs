@@ -1740,6 +1740,26 @@ impl Router {
             ));
         }
 
+        let has_sent_notifications = sqlx::query_scalar!(
+            r#"select exists (
+                select 1
+                from ticket_kind_notifications notification_link
+                inner join notifications
+                    on notifications.id = notification_link.notification_id
+                where notification_link.ticket_kind_id = $1
+                and notifications.sent = true
+            )  as "exists!""#,
+            id,
+        )
+        .fetch_one(&mut txn.executor())
+        .await?;
+        if has_sent_notifications {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "cannot delete a ticket kind with sent notifications",
+                "",
+            ));
+        }
+
         let notification_ids = sqlx::query_scalar!(
             r#"delete from ticket_kind_notifications
             where ticket_kind_id = $1
@@ -1855,9 +1875,12 @@ impl Router {
         check_ticket_kind_adminship(&self.db, user.get_id(), ticket_kind_id).await?;
         let mut txn = self.db.begin().await?;
         let notification_id = sqlx::query_scalar!(
-            r#"delete from ticket_kind_notifications
-            where ticket_kind_id = $1 and id = $2
-            returning notification_id"#,
+            r#"delete from ticket_kind_notifications notification_link
+            using notifications
+            where notification_link.ticket_kind_id = $1
+            and notification_link.id = $2
+            and notifications.id = notification_link.notification_id
+            returning notification_link.notification_id"#,
             ticket_kind_id,
             kind,
         )
@@ -1875,8 +1898,7 @@ impl Router {
         Ok(())
     }
 
-    /// Lists notifications that are still scheduled for a ticket kind, ordered
-    /// by delivery time. Successfully processed notifications are not retained.
+    /// Lists notifications that are still scheduled for a ticket kind, ordered by delivery time.
     #[oai(path = "/ticket-kinds/:ticket_kind_id/notifications", method = "get")]
     async fn list_ticket_notifications(
         &self,
@@ -2712,9 +2734,12 @@ impl Router {
         check_direct_adminship(&self.db, user.get_id(), group_id).await?;
         let mut txn = self.db.begin().await?;
         let notification_id = sqlx::query_scalar!(
-            r#"delete from group_notifications
-            where group_id = $1 and id = $2
-            returning notification_id"#,
+            r#"delete from group_notifications notification_link
+            using notifications
+            where notification_link.group_id = $1
+            and notification_link.id = $2
+            and notifications.id = notification_link.notification_id
+            returning notification_link.notification_id"#,
             // for access control
             group_id,
             id,
@@ -2734,7 +2759,6 @@ impl Router {
     }
 
     /// Lists notifications that are still scheduled for a group, ordered by delivery time.
-    /// Successfully processed notifications are not retained.
     #[oai(path = "/groups/:group_id/notifications", method = "get")]
     async fn list_group_notifications(
         &self,

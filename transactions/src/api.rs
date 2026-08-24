@@ -200,7 +200,7 @@ impl Route {
             refund_reference as "refund_reference?",
             total_transaction_fee as "total_transaction_fee?",
             customer_id as "customer_id?", provider as "provider?: Provider",
-            ids.id as "reserved_id",
+            ids.id as "reserved_id?",
             --
             t.id as "id!"
             from unnest($1::uuid[]) as t(id)
@@ -570,6 +570,7 @@ impl Route {
                     .collect::<Vec<_>>(),
             )
             .mode(CheckoutSessionMode::Payment)
+            .client_reference_id(body.id.to_string())
             .success_url(stripe_success_url)
             .payment_method_types(vec![CreateCheckoutSessionPaymentMethodTypes::Card])
             .payment_intent_data(CreateCheckoutSessionPaymentIntentData {

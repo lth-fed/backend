@@ -91,7 +91,7 @@ pub async fn handle_callback_to_us(
         ));
     }
     match data.status {
-        None => {}
+        None | Some(swish::Status::Created) => {}
         Some(swish::Status::Paid) if let Some(payment_reference) = data.payment_reference => {
             send_callbacks(
                 ctx,

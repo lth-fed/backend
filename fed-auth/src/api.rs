@@ -162,7 +162,13 @@ impl MainRouter {
             }
 
             // TODO: remove hack, we fall back to E if medcheck is bad
-            Some(self.get_guild(pn, &sub).await.ok().flatten().unwrap_or(Guild::E))
+            Some(
+                self.get_guild(pn, &sub)
+                    .await
+                    .ok()
+                    .flatten()
+                    .unwrap_or(Guild::E),
+            )
         } else {
             None
         };

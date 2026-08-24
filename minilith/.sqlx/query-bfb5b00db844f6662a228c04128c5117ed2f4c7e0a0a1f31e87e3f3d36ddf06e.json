@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select\n            id,\n            title as \"title!: DIS\",\n            content as \"content!: DIS\"\n        from notifications\n        where send_at <= now()\n        order by send_at, id\n        for update skip locked",
+  "query": "select\n            id,\n            title as \"title!: DIS\",\n            content as \"content!: DIS\"\n        from notifications\n        where send_at <= now()\n        and sent = false\n        order by send_at, id\n        for update skip locked",
   "describe": {
     "columns": [
       {
@@ -28,5 +28,5 @@
       false
     ]
   },
-  "hash": "314e535f96fa0a20d5e931988cd5e6bb24518c10afd312e3d822cec8c0624507"
+  "hash": "bfb5b00db844f6662a228c04128c5117ed2f4c7e0a0a1f31e87e3f3d36ddf06e"
 }

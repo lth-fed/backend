@@ -47,6 +47,43 @@ struct Me {
     admin_group_ids: Vec<Uuid>,
 }
 
+#[derive(Debug, Object)]
+struct Notification {
+    id: Uuid,
+    title: InternationalizedString,
+    content: InternationalizedString,
+    send_at: OffsetDateTime,
+}
+
+async fn load_notification_history(
+    db: &crate::PgPool,
+    user_id: &str,
+) -> Result<Vec<Notification>, sqlx::Error> {
+    sqlx::query!(
+        r#"select
+            notifications.id,
+            notifications.title as "title!: DIS",
+            notifications.content as "content!: DIS",
+            notifications.send_at
+        from notification_recipients
+        inner join notifications
+            on notifications.id = notification_recipients.notification_id
+        where notification_recipients.user_id = $1
+        and notifications.sent = true
+        and notifications.send_at >= now() - '6 months'::interval
+        order by notifications.send_at desc, notifications.id"#,
+        user_id,
+    )
+    .map(|row| Notification {
+        id: row.id,
+        title: row.title.0,
+        content: row.content.0,
+        send_at: row.send_at,
+    })
+    .fetch_all(db)
+    .await
+}
+
 #[derive(Debug, Clone, Copy, Enum, sqlx::Type)]
 #[oai(rename_all = "lowercase")]
 #[sqlx(type_name = "notification_level", rename_all = "lowercase")]
@@ -65,6 +102,18 @@ struct GroupSetting {
 
 #[OpenApi(prefix_path = "/user")]
 impl Router {
+    /// Lists notifications from the last six months that the user is currently eligible to
+    /// receive according to their memberships and notification settings.
+    ///
+    /// # Errors
+    ///
+    /// AUTH, DB.
+    #[oai(path = "/notifications", method = "get")]
+    async fn notifications(&self, user: User) -> MinilithResult<Json<Vec<Notification>>> {
+        let notifications = load_notification_history(&self.db, user.get_id()).await?;
+        Ok(Json(notifications))
+    }
+
     /// # Errors
     ///
     /// AUTH, DB, ENC.
@@ -274,5 +323,34 @@ impl Router {
             }
             Ok(Response::new(()))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::PgPool;
+
+    async fn history_ids(db: &PgPool, user_id: &str) -> Vec<Uuid> {
+        let db = sqlx_tracing::Pool::from(db.clone());
+        load_notification_history(&db, user_id)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|notification| notification.id)
+            .collect()
+    }
+
+    #[sqlx::test(fixtures("notification_history"))]
+    async fn notification_history_uses_recipient_access_rules(db: PgPool) {
+        assert_eq!(
+            history_ids(&db, "eligible").await,
+            vec![Uuid::parse_str("30000000-0000-0000-0000-000000000001").unwrap()]
+        );
+        assert!(history_ids(&db, "muted").await.is_empty());
+        assert_eq!(
+            history_ids(&db, "private-member").await,
+            vec![Uuid::parse_str("30000000-0000-0000-0000-000000000004").unwrap()]
+        );
     }
 }

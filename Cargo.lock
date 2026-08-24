@@ -6552,6 +6552,7 @@ dependencies = [
  "async-stripe-webhook",
  "base64 0.22.1",
  "bin-common",
+ "clap",
  "color-eyre",
  "dashmap",
  "dotenvy",

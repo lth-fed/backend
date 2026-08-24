@@ -13,6 +13,7 @@ async-stripe-types = { version = "1.0.0-rc.6", features = ["redact-generated-deb
 async-stripe-webhook = { version = "1.0.0-rc.6", features = ["redact-generated-debug"] }
 base64.workspace = true
 bin-common = { path = "../bin-common" }
+clap.workspace = true
 color-eyre.workspace = true
 dashmap = "6.2.1"
 dotenvy.workspace = true

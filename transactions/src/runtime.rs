@@ -233,7 +233,8 @@ pub async fn check_timeouts(ctx: &Context) -> MinilithResult<()> {
     .await;
 
     sqlx::query!(
-        "delete from transactions using unnest($1::uuid[]) as t(id)",
+        "delete from transactions using unnest($1::uuid[]) as t(id)
+        where transactions.id = t.id",
         &cancelled_uuids
     )
     .execute(&mut txn.executor())

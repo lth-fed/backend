@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from transactions using unnest($1::uuid[]) as t(id)\n        where transactions.id = t.id",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "eb089ca5da8abed516eb03d8f0a1ee67970f0ce4895c51b1659082bd3e8085d1"
+}

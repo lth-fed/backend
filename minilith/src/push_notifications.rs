@@ -195,10 +195,12 @@ impl PushClients {
                 match self.apns.send(payload).await {
                     Ok(_) => {}
                     Err(ApnsError::ResponseError(response))
-                        if response
-                            .error
-                            .as_ref()
-                            .is_some_and(|error| error.reason == ApnsErrorReason::Unregistered) =>
+                        if response.error.as_ref().is_some_and(|error| {
+                            matches!(
+                                error.reason,
+                                ApnsErrorReason::Unregistered | ApnsErrorReason::BadDeviceToken
+                            )
+                        }) =>
                     {
                         return Ok(PushSendResult::InvalidToken);
                     }
