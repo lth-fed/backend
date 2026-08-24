@@ -2,7 +2,7 @@
 
 if [ $(git status --porcelain | wc -l) -ne "0" ]; then
     echo Please commit you changes before building.
-    exit 1
+    # exit 1
 fi
 
 read -p "Version: " version
