@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select payment_reference as \"payment_reference?\", client_id as \"client_id?\",\n            refund_reference as \"refund_reference?\",\n            total_transaction_fee as \"total_transaction_fee?\",\n            customer_id as \"customer_id?\", provider as \"provider?: Provider\",\n            ids.id as \"reserved_id\",\n            --\n            t.id as \"id!\"\n            from unnest($1::uuid[]) as t(id)\n            left join transactions on transactions.id = t.id\n            left join transaction_reserved_ids ids on ids.id = t.id",
+  "query": "select payment_reference as \"payment_reference?\", client_id as \"client_id?\",\n            refund_reference as \"refund_reference?\",\n            total_transaction_fee as \"total_transaction_fee?\",\n            customer_id as \"customer_id?\", provider as \"provider?: Provider\",\n            ids.id as \"reserved_id?\",\n            --\n            t.id as \"id!\"\n            from unnest($1::uuid[]) as t(id)\n            left join transactions on transactions.id = t.id\n            left join transaction_reserved_ids ids on ids.id = t.id",
   "describe": {
     "columns": [
       {
@@ -46,7 +46,7 @@
       },
       {
         "ordinal": 6,
-        "name": "reserved_id",
+        "name": "reserved_id?",
         "type_info": "Uuid"
       },
       {
@@ -67,9 +67,9 @@
       true,
       true,
       true,
-      true,
-      null
+      false,
+      true
     ]
   },
-  "hash": "8bb61b6e579421c896098089ae6965b1325713fce50ca109adb3d3f9381b51e0"
+  "hash": "1d72463ab20071549d38567e2ff679f2bfc4f7cd71e5ed095c94ff6e26811d77"
 }

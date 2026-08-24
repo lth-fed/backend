@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select exists (\n                select 1\n                from ticket_kind_notifications notification_link\n                inner join notifications\n                    on notifications.id = notification_link.notification_id\n                where notification_link.ticket_kind_id = $1\n                and notifications.sent = true\n            )  as \"exists!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "6daf82bacc15c73c0a08bfe9e05ca4f9b3b23fbf8d1fd111dc58e4fc342b3ff1"
+}
