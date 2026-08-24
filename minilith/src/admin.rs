@@ -1508,7 +1508,21 @@ impl Router {
                         addon.inner.id,
                     )
                     .execute(&mut txn.executor())
-                    .await?;
+                    .await
+                    .map_err(|err| {
+                        if let Some(dberr) = err.as_database_error()
+                            && dberr.message().contains("bookkeeping_prices_add_up")
+                        {
+                            MinilithEndpointError::bad_user_input(
+                                "bookkeeping_prices_add_up failed",
+                                err,
+                                "bookkeeping doesn't add upp",
+                                "bookkeeping_prices",
+                            )
+                        } else {
+                            err.into()
+                        }
+                    })?;
                 }
             }
             txn.commit().await?;
@@ -1662,7 +1676,21 @@ impl Router {
                     &option.bookkeeping_price_categories,
                 )
                 .execute(&mut txn.executor())
-                .await?;
+                .await
+                .map_err(|err| {
+                    if let Some(dberr) = err.as_database_error()
+                        && dberr.message().contains("bookkeeping_prices_add_up")
+                    {
+                        MinilithEndpointError::bad_user_input(
+                            "bookkeeping_prices_add_up failed",
+                            err,
+                            "bookkeeping doesn't add upp",
+                            "bookkeeping_prices",
+                        )
+                    } else {
+                        err.into()
+                    }
+                })?;
             }
         }
         txn.commit().await?;

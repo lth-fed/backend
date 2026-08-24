@@ -65,7 +65,7 @@ impl Deref for MainRouter {
 }
 #[OpenApi]
 impl MainRouter {
-    async fn get_guild(&self, pn: &str) -> MinilithResult<Option<Guild>> {
+    async fn get_guild(&self, pn: &str, sub: &str) -> MinilithResult<Option<Guild>> {
         let resp = self
             .reqwest_client
             .post("https://medcheck.tlth.se")
@@ -74,9 +74,9 @@ impl MainRouter {
             .body(format!("id={pn}"))
             .send()
             .await
-            .wrap_err_internal("noalert medcheck: transport error")?
+            .wrap_err_internal(format!("noalert medcheck: transport error (for {sub})"))?
             .error_for_status()
-            .wrap_err_internal("noalert medcheck: status error")?;
+            .wrap_err_internal(format!("noalert medcheck: status error (for {sub})"))?;
         let body = resp
             .text()
             .await
@@ -162,7 +162,7 @@ impl MainRouter {
             }
 
             // TODO: remove hack, we fall back to E if medcheck is bad
-            Some(self.get_guild(pn).await.ok().flatten().unwrap_or(Guild::E))
+            Some(self.get_guild(pn, &sub).await.ok().flatten().unwrap_or(Guild::E))
         } else {
             None
         };

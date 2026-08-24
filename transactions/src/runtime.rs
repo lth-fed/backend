@@ -5,7 +5,7 @@ use minilith_errors::{
     MinilithEndpointError, MinilithErrorOptionExt as _, MinilithErrorResultExt as _, MinilithResult,
 };
 use sqlx::postgres::types::PgMoney;
-use stripe_checkout::CheckoutSessionStatus;
+use stripe_checkout::{CheckoutSessionPaymentStatus, CheckoutSessionStatus};
 use uuid::Uuid;
 
 use crate::callback::{self, handle_callback_to_us};
@@ -72,10 +72,10 @@ async fn fetch_transaction_info(ctx: &Context, txn: TxnData) -> MinilithResult<C
             .await
             .wrap_err_internal("stripe: retrieve checkout")?;
             drop(client);
-            let status = match checkout.status {
-                Some(CheckoutSessionStatus::Complete) => Some(swish::Status::Paid),
-                Some(CheckoutSessionStatus::Open) | None => None,
-                _ => Some(swish::Status::Cancelled),
+            let status = match (checkout.payment_status, checkout.status) {
+                (CheckoutSessionPaymentStatus::Paid, _) => Some(swish::Status::Paid),
+                (_, Some(CheckoutSessionStatus::Expired)) => Some(swish::Status::Cancelled),
+                _ => None,
             };
             if status == Some(swish::Status::Paid) {
                 let fee = ctx.stripe_get_fee(&txn.client_id, session_id).await?;
@@ -197,7 +197,7 @@ pub async fn check_timeouts(ctx: &Context) -> MinilithResult<()> {
     let mut cancelled = Vec::new();
 
     for transaction in timed_out_transactions {
-        if ctx.cancel_transaction(&transaction).await? {
+        if ctx.cancel_transaction(&transaction).await.is_ok() {
             cancelled_uuids.push(transaction.id);
             cancelled.push(transaction);
         } else {

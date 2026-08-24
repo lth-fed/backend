@@ -2,6 +2,7 @@ use std::fmt::Display;
 use std::ops::Deref;
 use std::sync::Arc;
 
+use bin_common::Transaction;
 use fed_auth_verifier::callbacks::{TransactionCallbackInfo, TransactionInfo, TransactionState};
 use jsonwebtoken::jwk::JwkSet;
 use minilith_errors::{
@@ -148,6 +149,28 @@ fn check_client_id(auth: &ApiAuth, txn_client_id: &str) -> MinilithResult<()> {
     }
     Ok(())
 }
+async fn validate_init_id(id: Uuid, txn: &mut Transaction<'_>) -> MinilithResult<Uuid> {
+    sqlx::query!(
+        "delete from transaction_reserved_ids
+            where created < now() - '1 hour'::interval"
+    )
+    .execute(&mut txn.executor())
+    .await?;
+    let row = sqlx::query!(
+        "delete from transaction_reserved_ids
+            where id = $1",
+        id
+    )
+    .execute(&mut txn.executor())
+    .await?;
+    if row.rows_affected() != 1 {
+        return Err(MinilithEndpointError::bad_frontend_code(
+            "get an ID from /init first.",
+            "",
+        ));
+    }
+    Ok(id)
+}
 
 #[OpenApi]
 impl Route {
@@ -177,10 +200,12 @@ impl Route {
             refund_reference as "refund_reference?",
             total_transaction_fee as "total_transaction_fee?",
             customer_id as "customer_id?", provider as "provider?: Provider",
+            ids.id as "reserved_id",
             --
             t.id as "id!"
             from unnest($1::uuid[]) as t(id)
-            left join transactions on transactions.id = t.id"#,
+            left join transactions on transactions.id = t.id
+            left join transaction_reserved_ids ids on ids.id = t.id"#,
             &body.transaction_ids
         )
         .fetch_all(&self.db)
@@ -192,7 +217,9 @@ impl Route {
         }
         let mapped = transactions.into_iter().map(|row| SingleInfoResponse {
             id: row.id,
-            state: if row.client_id.is_none() {
+            state: if row.reserved_id.is_some() {
+                TransactionState::Pending
+            } else if row.client_id.is_none() {
                 TransactionState::Cancelled
             } else if row.refund_reference.is_some() {
                 TransactionState::Refunded
@@ -268,28 +295,6 @@ impl Route {
         .await?;
         Ok(Json(uuid))
     }
-    async fn validate_init_id(&self, id: Uuid) -> MinilithResult<Uuid> {
-        sqlx::query!(
-            "delete from transaction_reserved_ids
-            where created < now() - '1 hour'::interval"
-        )
-        .execute(&self.db)
-        .await?;
-        let row = sqlx::query!(
-            "delete from transaction_reserved_ids
-            where id = $1",
-            id
-        )
-        .execute(&self.db)
-        .await?;
-        if row.rows_affected() != 1 {
-            return Err(MinilithEndpointError::bad_frontend_code(
-                "get an ID from /init first.",
-                "",
-            ));
-        }
-        Ok(id)
-    }
     /// You WILL get info on the callback, the transaction will be marked paid instantly.
     ///
     /// Keep in mind to complete your transaction before calling this, else we might call your
@@ -314,8 +319,8 @@ impl Route {
             ));
         }
 
-        let transaction_id = self.validate_init_id(body.id).await?;
         let mut txn = self.db.begin().await?;
+        let transaction_id = validate_init_id(body.id, &mut txn).await?;
         sqlx::query!(
             "insert into transactions (id, customer_id, client_id, callback_url_v1,
                 timeout, provider, total_transaction_fee, callback_identifier, payment_reference)
@@ -370,7 +375,6 @@ impl Route {
             ));
         }
 
-        let uuid = self.validate_init_id(body.id).await?;
         let cb_ident = Uuid::new_v4();
         let mut amount = total_amount.to_string();
         amount.insert(amount.len() - 2, '.');
@@ -393,7 +397,7 @@ impl Route {
                 callback_identifier: swish::uuid_to_string(cb_ident),
             };
             client
-                .put(swish::payment_request_url(swish::ApiVersion::V2, uuid))
+                .put(swish::payment_request_url(swish::ApiVersion::V2, body.id))
                 .json(&swish_body)
                 .send()
                 .await
@@ -413,6 +417,7 @@ impl Route {
             .wrap_err_internal("swish gave us no PaymentRequestToken")?;
 
         let mut txn = self.db.begin().await?;
+        let uuid = validate_init_id(body.id, &mut txn).await?;
         let fees = sqlx::query!(
             "select swish_payment_fee_fixed, swish_payment_fee_fraction, swish_payment_fee_max
             from client_ids where client_id = $1",
@@ -607,9 +612,9 @@ impl Route {
 
         let url = session.url.clone().wrap_err_internal("stripe: no url")?;
 
-        let uuid = self.validate_init_id(body.id).await?;
-
         let mut txn = self.db.begin().await?;
+
+        let uuid = validate_init_id(body.id, &mut txn).await?;
 
         sqlx::query!(
             "insert into transactions (id, customer_id, client_id, callback_url_v1,

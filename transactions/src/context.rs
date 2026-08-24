@@ -253,7 +253,7 @@ impl Context {
     async fn cancel_swish_transaction(
         &self,
         transaction: &CancelTransactionData,
-    ) -> MinilithResult<bool> {
+    ) -> MinilithResult<()> {
         let patch = vec![swish::PaymentRequestPatch {
             op: swish::PaymentRequestPatchOperation::Replace,
             path: "/status".to_owned(),
@@ -273,8 +273,9 @@ impl Context {
                 "l2: failed to cancel swish payment request due to connection issues",
             );
 
+        // OK: swish api error, ERR: transport error
         let cancel_failure = match cancel_response {
-            Ok(resp) if resp.status().is_success() => return Ok(true),
+            Ok(resp) if resp.status().is_success() => return Ok(()),
             Ok(resp) => {
                 let status = resp.status();
                 let text = resp
@@ -285,12 +286,12 @@ impl Context {
 
                 if text.as_deref().is_some_and(|text| text.contains("RP04")) {
                     // Swish no longer knows about the request, so it cannot be paid.
-                    return Ok(true);
+                    return Ok(());
                 }
 
-                Some((status, text))
+                Ok((status, text))
             }
-            Err(_) => None,
+            Err(err) => Err(err),
         };
 
         // Swish rejects cancelling a request that is already in a terminal state.
@@ -318,30 +319,40 @@ impl Context {
                         ..
                     })
                 ) {
-                    return Ok(true);
+                    return Ok(());
                 }
             }
         }
 
-        // if there was connection error, just continue as normal, try to make new transaction
-        if let Some((status, text)) = cancel_failure
-            && !text.as_deref().is_some_and(|text| text.contains("RP07"))
+        if cancel_failure
+            .as_ref()
+            .is_ok_and(|(_, text)| text.as_deref().is_some_and(|text| text.contains("RP07")))
         {
-            drop(MinilithEndpointError::internal_error(
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "user in middle of paying",
+                "",
+            ));
+        }
+
+        // if there was connection error, just continue as normal, try to make new transaction
+        if let Ok((status, text)) = &cancel_failure {
+            return Err(MinilithEndpointError::internal_error(
                 "l1: swish cancel failed due to unknown reasons",
                 (status, text),
             ));
         }
-        Ok(false)
+        cancel_failure
+            .wrap_err_internal("l1: swish cancel transport")
+            .map(|_| ())
     }
 
     /// # Return
     ///
-    /// Returns `true` if cancel is guaranteed successful, applying from the instant this returns.
+    /// Returns () if cancel is guaranteed successful, applying from the instant this returns.
     pub(crate) async fn cancel_transaction(
         &self,
         transaction: &CancelTransactionData,
-    ) -> MinilithResult<bool> {
+    ) -> MinilithResult<()> {
         match transaction.provider {
             Provider::Swish => self.cancel_swish_transaction(transaction).await,
             Provider::Stripe => {
@@ -364,7 +375,7 @@ impl Context {
                     .send(&*client)
                     .await
                 else {
-                    return Ok(true);
+                    return Ok(());
                 };
 
                 // Stripe deliberately returns an error when an already-expired
@@ -389,12 +400,15 @@ impl Context {
                 };
 
                 if session.status == Some(CheckoutSessionStatus::Expired) {
-                    Ok(true)
+                    Ok(())
                 } else {
                     Err(expire_error).wrap_err_internal("stripe: cancel")
                 }
             }
-            Provider::Free => Ok(false),
+            Provider::Free => Err(MinilithEndpointError::bad_frontend_code(
+                "cannot cancel a free transaction",
+                "",
+            )),
         }
     }
 
