@@ -1450,14 +1450,6 @@ impl Router {
                 &body.allowed_group_ids,
                 &body.addons,
             );
-            if existing.purchasing_available_stop <= OffsetDateTime::now_utc()
-                && !immutable_fields_match
-            {
-                return Err(MinilithEndpointError::bad_frontend_code(
-                    "closed purchased ticket kinds only allow bookkeeping changes",
-                    "",
-                ));
-            }
             if !immutable_fields_match {
                 return Err(MinilithEndpointError::bad_frontend_code(
                     "a purchased ticket kind's structure and pricing are immutable",

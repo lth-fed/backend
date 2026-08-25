@@ -631,6 +631,21 @@ impl Router {
         let mut txn = self.db.begin().await?;
         ensure_user_may_purchase_ticket(&mut txn.executor(), user.get_id(), req.ticket_kind)
             .await?;
+        // HACK: frontend doesn't send a DELETE to /queue so we delete it here in case the user
+        // wants to queue for a different ticket kind.
+        if let Ok(flow) = lock_user_purchase_flow(&mut txn, user.get_id(), None).await
+            && flow.ticket_kind_id != req.ticket_kind
+        {
+            let ticket_kind_to_fill = flow.cancel(self, user.get_id(), &mut txn).await?;
+            unlist_user_purchase_flow(&mut txn, user.get_id()).await?;
+
+            if let Some(ticket_kind) = ticket_kind_to_fill {
+                drop(give_reservations(ticket_kind, 1, &mut txn).await);
+            }
+
+            txn.commit().await?;
+            txn = self.db.begin().await?;
+        }
         reserve_user_purchase_flow(
             &mut txn,
             &[user.get_id().to_owned()],
@@ -815,7 +830,7 @@ impl Router {
         let flow = wait_for_user_purchase_flow(&mut txn, user.get_id(), None)
             .await?
             .wrap_err_not_found()?;
-        match flow {
+        match *flow {
             PurchaseFlow::Reservation => {
                 let reservation = sqlx::query!(
                     "select ticket_kind_id, timeout
@@ -885,92 +900,13 @@ impl Router {
     async fn drop_transaction_flow(&self, user: User) -> MinilithResult<()> {
         let mut txn = self.db.begin().await?;
         let flow = lock_user_purchase_flow(&mut txn, user.get_id(), None).await?;
-        let ticket_kind_to_fill = match flow {
-            PurchaseFlow::Reservation => {
-                let row = sqlx::query!(
-                    "select ticket_kind_id, transaction_id
-                    from ticket_reservations where user_id = $1
-                    for update",
-                    user.get_id(),
-                )
-                .fetch_one(&mut txn.executor())
-                .await?;
-                // try to cancel transaction instead
-                if let Some(id) = row.transaction_id {
-                    let resp = self
-                        .transactions_post(format!("/v0/{id}/cancel"))
-                        .send()
-                        .await
-                        .wrap_err_internal(
-                            "failed to cancel transaction due to connection issues",
-                        )?;
-                    // if not found, there was no transactions
-                    if !resp.status().is_success()
-                        && resp.status() != reqwest::StatusCode::NOT_FOUND
-                    {
-                        return Err(MinilithEndpointError::internal_error(
-                            "l1: transaction cancel failed!",
-                            resp.status(),
-                        ));
-                    }
-                    // transaction is cancelled
-                }
-                let affected = sqlx::query!(
-                    "delete from ticket_reservations where user_id = $1",
-                    user.get_id(),
-                )
-                .execute(&mut txn.executor())
-                .await?;
-                ensure_affected_rows(
-                    affected.rows_affected(),
-                    1,
-                    "reservation disappeared while dropping purchase flow",
-                )?;
-                sqlx::query!(
-                    "update ticket_kinds
-                    set reserved_or_purchased_tickets = reserved_or_purchased_tickets - 1
-                    where id = $1",
-                    row.ticket_kind_id,
-                )
-                .execute(&mut txn.executor())
-                .await?;
-                Some(row.ticket_kind_id)
-            }
-            PurchaseFlow::ReleaseQueue => {
-                let affected = sqlx::query_scalar!(
-                    "delete from ticket_release_queuers where user_id = $1",
-                    user.get_id()
-                )
-                .execute(&mut txn.executor())
-                .await?;
-                ensure_affected_rows(
-                    affected.rows_affected(),
-                    1,
-                    "release queuer disappeared while dropping purchase flow",
-                )?;
-                None
-            }
-            PurchaseFlow::ReservationQueue => {
-                let affected = sqlx::query_scalar!(
-                    "delete from ticket_reservation_queuers where user_id = $1",
-                    user.get_id()
-                )
-                .execute(&mut txn.executor())
-                .await?;
-                ensure_affected_rows(
-                    affected.rows_affected(),
-                    1,
-                    "reservation queuer disappeared while dropping purchase flow",
-                )?;
-                None
-            }
-        };
+        let ticket_kind_to_fill = flow.cancel(self, user.get_id(), &mut txn).await?;
         unlist_user_purchase_flow(&mut txn, user.get_id()).await?;
-        txn.commit().await?;
 
         if let Some(ticket_kind) = ticket_kind_to_fill {
-            drop(give_reservations_in_new_transaction(&self.db, ticket_kind, 1).await);
+            drop(give_reservations(ticket_kind, 1, &mut txn).await);
         }
+        txn.commit().await?;
         Ok(())
     }
     /// Try to lock in this reservation by purchasing the ticket.
@@ -1013,7 +949,7 @@ impl Router {
         let mut txn = self.db.begin().await?;
         let flow =
             lock_user_purchase_flow(&mut txn, user.get_id(), body.ticket_kind.into()).await?;
-        if !matches!(flow, PurchaseFlow::Reservation) {
+        if !matches!(*flow, PurchaseFlow::Reservation) {
             return Err(MinilithEndpointError::bad_frontend_code(
                 "you don't have a reservation right now",
                 "",
@@ -1039,13 +975,25 @@ impl Router {
                 .send()
                 .await
                 .wrap_err_internal("failed to cancel transaction")?;
-            if resp.status() != reqwest::StatusCode::NOT_FOUND
-                && let Err(error) = resp.error_for_status_ref()
-            {
-                return Err(MinilithEndpointError::internal_error(
-                    "l1: failed to cancel transaction due to status code",
-                    error,
-                ));
+            match resp.status() {
+                reqwest::StatusCode::NOT_FOUND => {
+                    // it's already cancelled
+                }
+                reqwest::StatusCode::FORBIDDEN => {
+                    return Err(MinilithEndpointError::bad_user_input(
+                        "tried to cancel when disallowed",
+                        txn_id,
+                        "cannot cancel your current transaction at this point",
+                        "cancel",
+                    ));
+                }
+                _ if let Err(error) = resp.error_for_status() => {
+                    return Err(MinilithEndpointError::internal_error(
+                        "l1: transaction cancel failed!",
+                        error
+                    ));
+                }
+                _ => {}
             }
             sqlx::query!(
                 "update ticket_reservations set transaction_id = null where user_id = $1",
@@ -1414,7 +1362,9 @@ impl Router {
         body: Json<ValidateRequest>,
     ) -> MinilithResult<Json<ValidateResponse>> {
         let now = OffsetDateTime::now_utc();
-        let leeway = time::Duration::MINUTE;
+        // HACK: some people are insane and don't have accurate time on their phone, so we have to
+        // increase leeway before we implement server side time adjustment
+        let leeway = 5*time::Duration::MINUTE;
         if body.created_at < now.saturating_sub(leeway)
             || body.created_at > now.saturating_add(leeway)
         {
@@ -1609,7 +1559,7 @@ impl Router {
                         );
                         continue;
                     };
-                    if flow != PurchaseFlow::Reservation {
+                    if *flow != PurchaseFlow::Reservation {
                         return Err(MinilithEndpointError::internal_error(
                             "cancelled transaction did not have a reservation purchase flow",
                             flow,
@@ -1742,6 +1692,122 @@ enum PurchaseFlow {
     ReservationQueue,
     Reservation,
 }
+impl PurchaseFlow {
+    /// # Returns
+    ///
+    /// Ticket kind to fill.
+    async fn cancel(
+        self,
+        ctx: &ContextWrapper,
+        user_id: &str,
+        txn: &mut Transaction<'_>,
+    ) -> MinilithResult<Option<Uuid>> {
+        let to_reserve = match self {
+            PurchaseFlow::Reservation => {
+                let row = sqlx::query!(
+                    "select ticket_kind_id, transaction_id
+                    from ticket_reservations where user_id = $1
+                    for update",
+                    user_id,
+                )
+                .fetch_one(&mut txn.executor())
+                .await?;
+                // try to cancel transaction instead
+                if let Some(id) = row.transaction_id {
+                    let resp = ctx
+                        .transactions_post(format!("/v0/{id}/cancel"))
+                        .send()
+                        .await
+                        .wrap_err_internal(
+                            "failed to cancel transaction due to connection issues",
+                        )?;
+                    match resp.status() {
+                        reqwest::StatusCode::NOT_FOUND => {
+                            // it's already cancelled
+                        }
+                        reqwest::StatusCode::FORBIDDEN => {
+                            return Err(MinilithEndpointError::bad_user_input(
+                                "tried to cancel when disallowed",
+                                id,
+                                "cannot cancel your current transaction at this point",
+                                "cancel",
+                            ));
+                        }
+                        status if !status.is_success() => {
+                            return Err(MinilithEndpointError::internal_error(
+                                "l1: transaction cancel failed!",
+                                resp.status(),
+                            ));
+                        }
+                        _ => {}
+                    }
+                    // transaction is cancelled
+                }
+                let affected = sqlx::query!(
+                    "delete from ticket_reservations where user_id = $1",
+                    user_id,
+                )
+                .execute(&mut txn.executor())
+                .await?;
+                ensure_affected_rows(
+                    affected.rows_affected(),
+                    1,
+                    "reservation disappeared while dropping purchase flow",
+                )?;
+                sqlx::query!(
+                    "update ticket_kinds
+                    set reserved_or_purchased_tickets = reserved_or_purchased_tickets - 1
+                    where id = $1",
+                    row.ticket_kind_id,
+                )
+                .execute(&mut txn.executor())
+                .await?;
+                Some(row.ticket_kind_id)
+            }
+            PurchaseFlow::ReleaseQueue => {
+                let affected = sqlx::query_scalar!(
+                    "delete from ticket_release_queuers where user_id = $1",
+                    user_id
+                )
+                .execute(&mut txn.executor())
+                .await?;
+                ensure_affected_rows(
+                    affected.rows_affected(),
+                    1,
+                    "release queuer disappeared while dropping purchase flow",
+                )?;
+                None
+            }
+            PurchaseFlow::ReservationQueue => {
+                let affected = sqlx::query_scalar!(
+                    "delete from ticket_reservation_queuers where user_id = $1",
+                    user_id
+                )
+                .execute(&mut txn.executor())
+                .await?;
+                ensure_affected_rows(
+                    affected.rows_affected(),
+                    1,
+                    "reservation queuer disappeared while dropping purchase flow",
+                )?;
+                None
+            }
+        };
+        Ok(to_reserve)
+    }
+}
+
+#[derive(Debug)]
+struct PurchaseFlowWithKind {
+    ticket_kind_id: Uuid,
+    flow: PurchaseFlow,
+}
+impl Deref for PurchaseFlowWithKind {
+    type Target = PurchaseFlow;
+    fn deref(&self) -> &Self::Target {
+        &self.flow
+    }
+}
 
 #[derive(Debug)]
 struct PurchaseFlowRow {
@@ -1754,33 +1820,39 @@ struct PurchaseFlowRow {
 fn decode_purchase_flow(
     row: PurchaseFlowRow,
     ticket_kind: Option<Uuid>,
-) -> MinilithResult<PurchaseFlow> {
+) -> MinilithResult<PurchaseFlowWithKind> {
     if ticket_kind.is_some_and(|ticket_kind| ticket_kind != row.ticket_kind_id) {
         return Err(MinilithEndpointError::bad_frontend_code(
             "tried to continue purchase flow with different ticket kind",
             "",
         ));
     }
-    match (
+    let flow = match (
         row.release_queue.is_some(),
         row.reservation_queue.is_some(),
         row.reservation.is_some(),
     ) {
-        (true, false, false) => Ok(PurchaseFlow::ReleaseQueue),
-        (false, true, false) => Ok(PurchaseFlow::ReservationQueue),
-        (false, false, true) => Ok(PurchaseFlow::Reservation),
-        _ => Err(MinilithEndpointError::internal_error(
-            "user has invalid purchase flow state",
-            row,
-        )),
-    }
+        (true, false, false) => PurchaseFlow::ReleaseQueue,
+        (false, true, false) => PurchaseFlow::ReservationQueue,
+        (false, false, true) => PurchaseFlow::Reservation,
+        _ => {
+            return Err(MinilithEndpointError::internal_error(
+                "user has invalid purchase flow state",
+                row,
+            ));
+        }
+    };
+    Ok(PurchaseFlowWithKind {
+        ticket_kind_id: row.ticket_kind_id,
+        flow,
+    })
 }
 
 async fn lock_user_purchase_flow(
     db: &mut Transaction<'_>,
     user_id: &str,
     ticket_kind: Option<Uuid>,
-) -> MinilithResult<PurchaseFlow> {
+) -> MinilithResult<PurchaseFlowWithKind> {
     let row = sqlx::query_as!(
         PurchaseFlowRow,
         "select ticket_kind_id, reservation, release_queue, reservation_queue
@@ -1812,7 +1884,7 @@ async fn wait_for_user_purchase_flow(
     db: &mut Transaction<'_>,
     user_id: &str,
     ticket_kind: Option<Uuid>,
-) -> MinilithResult<Option<PurchaseFlow>> {
+) -> MinilithResult<Option<PurchaseFlowWithKind>> {
     let row = sqlx::query_as!(
         PurchaseFlowRow,
         "select ticket_kind_id, reservation, release_queue, reservation_queue
@@ -2375,7 +2447,7 @@ pub async fn update_misplaced_queuer(
                 user_id,
             )
         })?;
-    if flow != PurchaseFlow::ReleaseQueue {
+    if *flow != PurchaseFlow::ReleaseQueue {
         return Err(MinilithEndpointError::internal_error(
             "misplaced release queuer has wrong purchase-flow state",
             flow,
@@ -2654,7 +2726,7 @@ async fn pay_for_reservation(
         check_missing_paid_reservation(txn, transaction_id).await?;
         return Ok(None);
     };
-    if flow != PurchaseFlow::Reservation {
+    if *flow != PurchaseFlow::Reservation {
         return Err(MinilithEndpointError::internal_error(
             "paid transaction did not have a reservation purchase flow",
             flow,

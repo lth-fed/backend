@@ -121,10 +121,7 @@ impl MinilithEndpointError {
         }))
     }
     /// This resource wasn't found. Is arguably [`Self::bad_frontend_code`]. Should they be merged?
-    #[track_caller]
     pub fn not_found() -> Self {
-        // to get the trace
-        error!("Not found.");
         Self::NotFound(Json(MinilithError {
             message: "resource not found, try reloading app".into(),
             field: None,
@@ -309,7 +306,7 @@ impl<T> MinilithErrorOptionExt<T> for Option<T> {
     }
     #[track_caller]
     fn wrap_err_not_found(self) -> MinilithResult<T> {
-        self.ok_or_else(|| MinilithEndpointError::not_found())
+        self.ok_or_else(MinilithEndpointError::not_found)
     }
     #[track_caller]
     fn wrap_err_internal(self, error_message: impl AsRef<str>) -> MinilithResult<T> {
