@@ -633,18 +633,24 @@ impl Router {
             .await?;
         // HACK: frontend doesn't send a DELETE to /queue so we delete it here in case the user
         // wants to queue for a different ticket kind.
-        if let Ok(flow) = lock_user_purchase_flow(&mut txn, user.get_id(), None).await
-            && flow.ticket_kind_id != req.ticket_kind
-        {
-            let ticket_kind_to_fill = flow.cancel(self, user.get_id(), &mut txn).await?;
-            unlist_user_purchase_flow(&mut txn, user.get_id()).await?;
+        match lock_user_purchase_flow(&mut txn, user.get_id(), None).await {
+            Ok(flow) if flow.ticket_kind_id != req.ticket_kind => {
+                let ticket_kind_to_fill = flow.cancel(self, user.get_id(), &mut txn).await?;
+                unlist_user_purchase_flow(&mut txn, user.get_id()).await?;
 
-            if let Some(ticket_kind) = ticket_kind_to_fill {
-                drop(give_reservations(ticket_kind, 1, &mut txn).await);
+                if let Some(ticket_kind) = ticket_kind_to_fill {
+                    drop(give_reservations(ticket_kind, 1, &mut txn).await);
+                }
+
+                txn.commit().await?;
+                return Err(MinilithEndpointError::bad_frontend_code(
+                    "your current flow is cancelled, press the button again to place in this queue",
+                    "",
+                ));
             }
-
-            txn.commit().await?;
-            txn = self.db.begin().await?;
+            // continue as before
+            Ok(_) | Err(MinilithEndpointError::NotFound(_)) => {}
+            Err(error) => return Err(error),
         }
         reserve_user_purchase_flow(
             &mut txn,
@@ -990,7 +996,7 @@ impl Router {
                 _ if let Err(error) = resp.error_for_status() => {
                     return Err(MinilithEndpointError::internal_error(
                         "l1: transaction cancel failed!",
-                        error
+                        error,
                     ));
                 }
                 _ => {}
@@ -1364,7 +1370,7 @@ impl Router {
         let now = OffsetDateTime::now_utc();
         // HACK: some people are insane and don't have accurate time on their phone, so we have to
         // increase leeway before we implement server side time adjustment
-        let leeway = 5*time::Duration::MINUTE;
+        let leeway = 5 * time::Duration::MINUTE;
         if body.created_at < now.saturating_sub(leeway)
             || body.created_at > now.saturating_add(leeway)
         {
