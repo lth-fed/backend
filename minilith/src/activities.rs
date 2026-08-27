@@ -85,6 +85,8 @@ pub struct Activity {
     pub hosts: Vec<Host>,
     /// If there are any tickets for this event.
     pub tickets_exist: bool,
+    /// Some if any tickets are purchasable.
+    pub earliest_purchasable_ticket_release: Option<OffsetDateTime>,
 }
 #[derive(Object)]
 struct BriefActivity {
@@ -99,6 +101,7 @@ struct BriefActivity {
     image_url: String,
     /// If there are any tickets for this event.
     is_hidden: bool,
+    earliest_purchasable_ticket_release: Option<OffsetDateTime>,
 }
 
 #[derive(Object)]
@@ -178,6 +181,7 @@ impl Router {
             time_end: activity.time_end,
             image_url: activity.url,
             is_hidden: activity.is_hidden,
+            earliest_purchasable_ticket_release: activity.earliest_ticket_release,
         })
         .fetch_all(&self.context.db)
         .await?;
@@ -221,8 +225,7 @@ impl Router {
                 creator_id,
                 is_hidden,
                 is_hidden_for_other_admins,
-                (select exists (
-                    select 1
+                (select purchasing_available_start
                     from ticket_kinds tk
                     inner join ticket_kind_allowed_groups g on g.ticket_kind_id = tk.id
                     inner join groups ag on ag.id = g.group_id
@@ -231,7 +234,16 @@ impl Router {
                     where tk.activity_id = $1
                     and max_tickets > 0
                     and m.user_id = $2
-                )) as "can_see_ticket!"
+                    and purchasing_available_start > now()
+                    order by purchasing_available_start
+                    limit 1
+                ) as "earliest_ticket_release?",
+                (select exists (
+                    select 1
+                    from ticket_kinds tk
+                    where tk.activity_id = $1
+                    and max_tickets > 0
+                )) as "tickets_exist!"
             from activities
             inner join images on images.id = image_id
             where activities.id = $1;
@@ -284,7 +296,8 @@ impl Router {
             is_hidden_for_other_admins: activity.is_hidden_for_other_admins,
             max_tickets: activity.max_tickets,
             hosts,
-            tickets_exist: activity.can_see_ticket,
+            tickets_exist: activity.tickets_exist,
+            earliest_purchasable_ticket_release: activity.earliest_ticket_release,
         };
 
         Ok(Json(activity))

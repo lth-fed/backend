@@ -1,5 +1,3 @@
-YOU MAY NOT HAVE SEVERAL INSTANCES OF THIS BECAUSE OF THE SAML REQUEST AUTH ID CACHE.
-
 You may need to run `createdb -h localhost -p 5432 -U postgres auth` when first starting this.
 
 You need to have `xmlsec1` installed to run this.

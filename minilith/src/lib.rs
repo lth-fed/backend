@@ -18,6 +18,7 @@ const CORS_ALLOWED_ORIGINS: [&str; 4] = [
 
 pub mod activities;
 pub mod admin;
+mod api;
 pub mod context;
 pub mod group;
 pub mod healthcheck;
@@ -41,6 +42,9 @@ pub type DbInternationalizedString = sqlx::types::Json<InternationalizedString>;
 #[serde(transparent)]
 pub struct InternationalizedString(HashMap<String, String>);
 impl InternationalizedString {
+    fn empty() -> Self {
+        Self(HashMap::new())
+    }
     /// # Panics
     ///
     /// None.
@@ -111,6 +115,9 @@ pub async fn get_endpoint(
                 context: Arc::clone(&context),
             },
             activities::Router {
+                context: Arc::clone(&context),
+            },
+            api::Router {
                 context: Arc::clone(&context),
             },
             group::Router {

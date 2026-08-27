@@ -1044,6 +1044,32 @@ impl Router {
         Ok(Json(verifiers))
     }
 
+    /// Counts distinct current ticket owners who have at least one validation
+    /// for this activity. The caller must directly administer an accepted host.
+    #[oai(
+        path = "/activities/:activity_id/verified-ticket-holders",
+        method = "get"
+    )]
+    async fn verified_ticket_holders(
+        &self,
+        user: User,
+        Path(activity_id): Path<Uuid>,
+    ) -> MinilithResult<Json<i64>> {
+        check_activity_adminship(&self.db, user.get_id(), activity_id).await?;
+        let count = sqlx::query_scalar!(
+            r#"select count(distinct pt.owner_id) as "count!"
+            from purchased_ticket_validations
+            inner join purchased_tickets pt
+                on pt.id = purchased_ticket_validations.purchased_ticket_id
+            inner join ticket_kinds on ticket_kinds.id = pt.ticket_kind_id
+            where ticket_kinds.activity_id = $1"#,
+            activity_id,
+        )
+        .fetch_one(&self.db)
+        .await?;
+        Ok(Json(count))
+    }
+
     /// Grants a user permission to validate tickets for an activity. The user
     /// must already have an account.
     #[oai(

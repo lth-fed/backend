@@ -377,6 +377,7 @@ struct Validation {
 #[derive(Object)]
 struct ValidateResponse {
     verified: bool,
+    ticket_kind_name: IS,
     owner_id: Option<String>,
     owner_name: Option<String>,
     has_been_transfered: bool,
@@ -388,6 +389,7 @@ impl ValidateResponse {
     pub fn not_valid() -> Self {
         Self {
             verified: false,
+            ticket_kind_name: IS::empty(),
             owner_id: None,
             owner_name: None,
             has_been_transfered: false,
@@ -720,60 +722,6 @@ impl Router {
                 txn.commit().await?;
                 return Ok(Json(PurchaseStatus::Reserved));
             }
-            // if row.reserved_or_purchased_tickets < row.max_tickets && row.count == 0 {
-            //     // give reservation
-            //     // copied from reserve_ticket_capacity to make it 1 query instead
-            //     let affected = sqlx::query_scalar!(
-            //         r#"with capacity as materialized (
-            //             select greatest(least(
-            //                 $2,
-            //                 kind.max_tickets - kind.reserved_or_purchased_tickets,
-            //                 activities.max_tickets
-            //                 - kind.reserved_or_purchased_tickets
-            //                 - coalesce((
-            //                     select sum(greatest(
-            //                         all_kinds.reserved_or_purchased_tickets,
-            //                         all_kinds.min_tickets
-            //                     ))::int
-            //                     from ticket_kinds all_kinds
-            //                     where all_kinds.activity_id = activities.id
-            //                         and all_kinds.id != kind.id
-            //                 ), 0)
-            //             ), 0)::int as granted
-            //             from ticket_kinds kind
-            //             inner join activities on activities.id = kind.activity_id
-            //             where kind.id = $1
-            //         ), updated as (
-            //             update ticket_kinds
-            //             set reserved_or_purchased_tickets =
-            //                 reserved_or_purchased_tickets + capacity.granted
-            //             from capacity
-            //             where ticket_kinds.id = $1
-            //             returning ticket_kinds.id
-            //         )
-            //         insert into ticket_reservations
-            //             (user_id, ticket_kind_id, transaction_id, timeout)
-            //         select $3, $1, null, now() + $4
-            //         from updated"#,
-            //         req.ticket_kind,
-            //         1,
-            //         user.get_id(),
-            //         new_timeout_interval()
-            //     )
-            //     .execute(&mut txn.executor())
-            //     .await?;
-            //
-            //     if affected.rows_affected() != 1 {
-            //         return Err(MinilithEndpointError::bad_frontend_code(
-            //             "no tickets left",
-            //             "",
-            //         ));
-            //     }
-            //     set_user_purchase_flow_reservation(&mut txn, user.get_id()).await?;
-            //
-            //     txn.commit().await?;
-            //     return Ok(Json(PurchaseStatus::Reserved));
-            // }
 
             let affected = sqlx::query!(
                 "with placement as (
@@ -1378,7 +1326,7 @@ impl Router {
         }
         let Some(row) = sqlx::query!(
             "select owner_id, purchaser_id, owner.name as oname, purchaser.name as pname,
-            ticket_kind_id
+            ticket_kind_id, kind.name as \"ticket_kind_name: DIS\"
             from purchased_tickets 
             inner join ticket_kinds kind on kind.id = purchased_tickets.ticket_kind_id
             inner join activity_verifiers on activity_verifiers.activity_id = kind.activity_id
@@ -1473,6 +1421,7 @@ impl Router {
         .await?;
         Ok(Json(ValidateResponse {
             verified: true,
+            ticket_kind_name: row.ticket_kind_name.0,
             has_been_transfered: row.owner_id != row.purchaser_id,
             owner_id: Some(row.owner_id),
             owner_name: Some(
@@ -2724,6 +2673,7 @@ async fn pay_for_reservation(
         return Ok(None);
     };
 
+    // todo: collapse with statement above to make atomic
     let Some(flow) =
         wait_for_user_purchase_flow(txn, &candidate.user_id, Some(candidate.ticket_kind_id))
             .await?
