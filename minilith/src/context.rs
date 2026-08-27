@@ -140,7 +140,7 @@ impl Context {
 
         let s3_access_key = std::env::var("S3_ACCESS_KEY")?;
         let s3_secret_key = std::env::var("S3_SECRET_KEY")?;
-        let s3_url = if debug {
+        let s3_url = if cfg!(debug_assertions) {
             "http://localhost:9000"
         } else {
             "http://fed-s3:9000"
