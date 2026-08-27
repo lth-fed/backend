@@ -83,10 +83,13 @@ impl Context {
 
         let transactions_token = std::env::var("TRANSACTIONS_TOKEN")
             .wrap_err("Error: Missing env variable: 'TRANSACTIONS_TOKEN'.")?;
-        #[cfg(debug_assertions)]
-        let transactions_api = "https://localhost:8052";
-        #[cfg(not(debug_assertions))]
-        let transactions_api = "https://transactions.teknologappen.se";
+        let default_transactions_api = if cfg!(debug_assertions) {
+            "https://localhost:8052"
+        } else {
+            "https://transactions.teknologappen.se"
+        };
+        let transactions_api = std::env::var("TRANSACTIONS_API")
+            .unwrap_or_else(|_| default_transactions_api.to_owned());
 
         let client = reqwest::Client::builder()
             .tls_danger_accept_invalid_certs(cfg!(debug_assertions))

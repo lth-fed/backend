@@ -72,6 +72,9 @@ impl AuthContextProvider for AuthUrl {
 pub struct TransactionsUrl;
 impl AuthContextProvider for TransactionsUrl {
     fn url() -> String {
+        if let Ok(url) = std::env::var("TRANSACTIONS_JWKS_URL") {
+            return url;
+        }
         #[cfg(debug_assertions)]
         {
             "https://localhost:8052/v0/jwks".to_owned()

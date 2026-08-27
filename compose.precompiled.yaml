@@ -13,6 +13,7 @@ services:
   # TODO: eventually replace with host-hosted Postgres, it's suboptimal to have it in a container.
   fed-postgres:
     restart: unless-stopped
+    image: "postgres:18"
     volumes:
       - postgres-storage:/var/lib/postgres
     healthcheck:
@@ -87,6 +88,8 @@ services:
       DATABASE_URL: "postgres://postgres:postgres@fed-postgres:5432/fed"
       ENCRYPTION_KEY: "EJuu3Odzba5dSzL/huWKwM9ifVjfpsSmy32vxltpQKU="
       TRANSACTIONS_TOKEN: "hehe-super-secure"
+      TRANSACTIONS_API: "http://transactions:8002"
+      TRANSACTIONS_JWKS_URL: "http://transactions:8002/v0/jwks"
 
       S3_ACCESS_KEY: "rustfs"
       S3_SECRET_KEY: "rustfs"
@@ -95,6 +98,8 @@ services:
       fed-postgres:
         condition: service_healthy
       fed-s3:
+        condition: service_started
+      transactions:
         condition: service_started
 
   minilith-seed:
@@ -106,6 +111,8 @@ services:
       DATABASE_URL: "postgres://postgres:postgres@fed-postgres:5432/fed"
       ENCRYPTION_KEY: "EJuu3Odzba5dSzL/huWKwM9ifVjfpsSmy32vxltpQKU="
       TRANSACTIONS_TOKEN: "hehe-super-secure"
+      TRANSACTIONS_API: "http://transactions:8002"
+      TRANSACTIONS_JWKS_URL: "http://transactions:8002/v0/jwks"
       S3_ACCESS_KEY: "rustfs"
       S3_SECRET_KEY: "rustfs"
       S3_PUBLIC_URL: "http://fed-s3:9000/image"
