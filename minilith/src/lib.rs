@@ -9,13 +9,6 @@ use poem::middleware::{Cors, OpenTelemetryMetrics, OpenTelemetryTracing};
 use poem::{Endpoint, EndpointExt as _, Route};
 use poem_openapi::OpenApiService;
 
-const CORS_ALLOWED_ORIGINS: [&str; 4] = [
-    "https://app.teknologappen.se",
-    "https://admin.teknologappen.se",
-    "http://localhost:5173",
-    "http://localhost:5175",
-];
-
 pub mod activities;
 pub mod admin;
 mod api;
@@ -161,8 +154,15 @@ pub async fn get_endpoint(
 }
 
 fn minilith_cors() -> Cors {
+    let mut allowed_origins = vec![
+        "https://app.teknologappen.se",
+        "https://admin.teknologappen.se",
+    ];
+    if cfg!(debug_assertions) || std::env::var("DEBUG").as_deref() == Ok("1") {
+        allowed_origins.extend(["http://localhost:5173", "http://localhost:5175"]);
+    }
     Cors::new()
-        .allow_origins(CORS_ALLOWED_ORIGINS)
+        .allow_origins(allowed_origins)
         .allow_method(Method::GET)
         .allow_method(Method::POST)
         .allow_method(Method::PUT)

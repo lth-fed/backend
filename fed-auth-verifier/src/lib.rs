@@ -58,12 +58,9 @@ pub trait AuthContextProvider: Clone {
 pub struct AuthUrl;
 impl AuthContextProvider for AuthUrl {
     fn url() -> String {
-        #[cfg(debug_assertions)]
-        {
+        if cfg!(debug_assertions) || std::env::var("DEBUG").as_deref() == Ok("1") {
             "https://localhost:8051/oidc/v1/certs".to_owned()
-        }
-        #[cfg(not(debug_assertions))]
-        {
+        } else {
             "https://api.auth.teknologappen.se/oidc/v1/certs".to_owned()
         }
     }
@@ -72,15 +69,9 @@ impl AuthContextProvider for AuthUrl {
 pub struct TransactionsUrl;
 impl AuthContextProvider for TransactionsUrl {
     fn url() -> String {
-        if let Ok(url) = std::env::var("TRANSACTIONS_JWKS_URL") {
-            return url;
-        }
-        #[cfg(debug_assertions)]
-        {
+        if cfg!(debug_assertions) || std::env::var("DEBUG").as_deref() == Ok("1") {
             "https://localhost:8052/v0/jwks".to_owned()
-        }
-        #[cfg(not(debug_assertions))]
-        {
+        } else {
             "https://transactions.teknologappen.se/v0/jwks".to_owned()
         }
     }

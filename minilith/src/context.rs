@@ -8,8 +8,6 @@ use chacha20::cipher::KeyIvInit as _;
 use chacha20::cipher::StreamCipher as _;
 use color_eyre::Section as _;
 use color_eyre::eyre::Context as _;
-#[cfg(not(debug_assertions))]
-use color_eyre::eyre::ContextCompat as _;
 use minilith_errors::{
     AlertLevel, EmailClient, MinilithEndpointError, MinilithResult, alert, configure_alert_email,
 };
@@ -83,16 +81,16 @@ impl Context {
 
         let transactions_token = std::env::var("TRANSACTIONS_TOKEN")
             .wrap_err("Error: Missing env variable: 'TRANSACTIONS_TOKEN'.")?;
-        let default_transactions_api = if cfg!(debug_assertions) {
+        let debug = cfg!(debug_assertions) || std::env::var("DEBUG").as_deref() == Ok("1");
+        let default_transactions_api = if debug {
             "https://localhost:8052"
         } else {
             "https://transactions.teknologappen.se"
         };
-        let transactions_api = std::env::var("TRANSACTIONS_API")
-            .unwrap_or_else(|_| default_transactions_api.to_owned());
+        let transactions_api = default_transactions_api.to_owned();
 
         let client = reqwest::Client::builder()
-            .tls_danger_accept_invalid_certs(cfg!(debug_assertions))
+            .tls_danger_accept_invalid_certs(debug)
             .build()?;
 
         let push_clients = if is_test {
@@ -142,10 +140,11 @@ impl Context {
 
         let s3_access_key = std::env::var("S3_ACCESS_KEY")?;
         let s3_secret_key = std::env::var("S3_SECRET_KEY")?;
-        #[cfg(debug_assertions)]
-        let s3_url = "http://localhost:9000";
-        #[cfg(not(debug_assertions))]
-        let s3_url = "http://fed-s3:9000";
+        let s3_url = if debug {
+            "http://localhost:9000"
+        } else {
+            "http://fed-s3:9000"
+        };
         let s3_image_bucket = s3::Bucket::new(
             "image",
             s3::Region::Custom {
