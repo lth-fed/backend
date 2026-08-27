@@ -27,4 +27,8 @@ for service in fed-auth transactions minilith; do
         "${CONTAINER_REGISTRY}/${service}:${CONTAINER_TAG}" \
         "docker.io/esekmacapar/${service}:${CONTAINER_TAG}"
     podman push "docker.io/esekmacapar/${service}:${CONTAINER_TAG}"
+    podman tag \
+        "${CONTAINER_REGISTRY}/${service}:${CONTAINER_TAG}" \
+        "docker.io/esekmacapar/${service}:latest"
+    podman push "docker.io/esekmacapar/${service}:latest"
 done

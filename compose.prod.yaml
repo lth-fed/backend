@@ -3,9 +3,6 @@ name: fed-production
 include:
   - compose.base.yaml
 
-volumes:
-  postgres-data:
-
 networks:
   traefik:
     external: true

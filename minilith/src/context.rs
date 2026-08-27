@@ -57,11 +57,7 @@ impl Context {
             None
         } else {
             configure_alert_email(EmailClient::new("ALERT")?)?;
-            let email_client = EmailClient::new("MAIL")?;
-            #[cfg(not(debug_assertions))]
-            let email_client =
-                Some(email_client.wrap_err("`MAIL_*` email configuration is required")?);
-            email_client
+            EmailClient::new("MAIL")?
         };
 
         let db = if let Some(db) = test_db {
