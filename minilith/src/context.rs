@@ -81,8 +81,11 @@ impl Context {
 
         let transactions_token = std::env::var("TRANSACTIONS_TOKEN")
             .wrap_err("Error: Missing env variable: 'TRANSACTIONS_TOKEN'.")?;
-        let debug = cfg!(debug_assertions) || std::env::var("DEBUG").as_deref() == Ok("1");
-        let default_transactions_api = if debug {
+        let debug = cfg!(debug_assertions);
+        let compose_debug = std::env::var("DEBUG").as_deref() == Ok("1");
+        let default_transactions_api = if compose_debug {
+            "https://transactions:8052"
+        } else if debug {
             "https://localhost:8052"
         } else {
             "https://transactions.teknologappen.se"
@@ -90,7 +93,7 @@ impl Context {
         let transactions_api = default_transactions_api.to_owned();
 
         let client = reqwest::Client::builder()
-            .tls_danger_accept_invalid_certs(debug)
+            .tls_danger_accept_invalid_certs(debug || compose_debug)
             .build()?;
 
         let push_clients = if is_test {
@@ -140,7 +143,9 @@ impl Context {
 
         let s3_access_key = std::env::var("S3_ACCESS_KEY")?;
         let s3_secret_key = std::env::var("S3_SECRET_KEY")?;
-        let s3_url = if cfg!(debug_assertions) {
+        let s3_url = if compose_debug {
+            "http://fed-s3:9000"
+        } else if debug {
             "http://localhost:9000"
         } else {
             "http://fed-s3:9000"

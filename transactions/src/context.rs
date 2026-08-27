@@ -330,7 +330,7 @@ impl Context {
         {
             return Err(MinilithEndpointError::bad_frontend_code(
                 "user in middle of paying",
-                "",
+                (transaction.id, cancel_failure),
             ));
         }
 

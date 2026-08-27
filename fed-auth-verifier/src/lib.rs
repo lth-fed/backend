@@ -58,7 +58,9 @@ pub trait AuthContextProvider: Clone {
 pub struct AuthUrl;
 impl AuthContextProvider for AuthUrl {
     fn url() -> String {
-        if cfg!(debug_assertions) || std::env::var("DEBUG").as_deref() == Ok("1") {
+        if std::env::var("DEBUG").as_deref() == Ok("1") {
+            "https://fed-auth:8051/oidc/v1/certs".to_owned()
+        } else if cfg!(debug_assertions) {
             "https://localhost:8051/oidc/v1/certs".to_owned()
         } else {
             "https://api.auth.teknologappen.se/oidc/v1/certs".to_owned()
@@ -69,7 +71,9 @@ impl AuthContextProvider for AuthUrl {
 pub struct TransactionsUrl;
 impl AuthContextProvider for TransactionsUrl {
     fn url() -> String {
-        if cfg!(debug_assertions) || std::env::var("DEBUG").as_deref() == Ok("1") {
+        if std::env::var("DEBUG").as_deref() == Ok("1") {
+            "https://transactions:8052/v0/jwks".to_owned()
+        } else if cfg!(debug_assertions) {
             "https://localhost:8052/v0/jwks".to_owned()
         } else {
             "https://transactions.teknologappen.se/v0/jwks".to_owned()
@@ -112,7 +116,9 @@ impl<Url: AuthContextProvider + 'static> JwkContext<Url> {
     /// Returns an error if it was not possible to get the verifying key.
     pub async fn new(audience: impl Into<String>) -> color_eyre::Result<Self> {
         let client = reqwest::Client::builder()
-            .tls_danger_accept_invalid_certs(cfg!(debug_assertions))
+            .tls_danger_accept_invalid_certs(
+                cfg!(debug_assertions) || std::env::var("DEBUG").as_deref() == Ok("1"),
+            )
             .build()?;
         #[cfg(debug_assertions)]
         let retries = 1;
