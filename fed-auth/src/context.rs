@@ -2,7 +2,7 @@ use std::ops::Deref;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use bin_common::{Transaction, setup_db};
+use bin_common::{DebugConfig, Transaction, setup_db};
 use ed25519_dalek::pkcs8::DecodePrivateKey as _;
 use jsonwebtoken::jwk::JwkSet;
 use poem_openapi::Object;
@@ -19,7 +19,7 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::filter::LevelFilter;
 
 use crate::oidc::CALLBACK_TOKEN_VALID_FOR;
-use crate::{PgPool, WEBSITE_DOMAIN, jwt, saml2};
+use crate::{PgPool, jwt, saml2};
 
 #[derive(Clone, Debug, sqlx::Type)]
 pub(crate) struct AuthSession {
@@ -93,6 +93,9 @@ pub(crate) struct Context {
     pub db: PgPool,
     pub reqwest_client: reqwest::Client,
     pub email_client: Option<EmailClient>,
+    pub debug: DebugConfig,
+    pub api_domain: &'static str,
+    pub website_domain: &'static str,
 
     // TODO: remove fed-lu hack
     pub fed_lu: FedLuConfig,
@@ -131,6 +134,19 @@ impl Context {
     /// services.
     pub async fn new(test_db: Option<PgPool>) -> color_eyre::Result<Self> {
         let _: Result<PathBuf, dotenvy::Error> = dotenvy::dotenv();
+        let debug = DebugConfig::from_env();
+        let api_domain = if debug.service_urls {
+            "http://localhost:8001"
+        } else if cfg!(debug_assertions) {
+            "https://localhost:8051"
+        } else {
+            "https://api.auth.teknologappen.se"
+        };
+        let website_domain = if debug.enabled {
+            "http://localhost:5174"
+        } else {
+            "https://auth.teknologappen.se"
+        };
 
         let email_client = if test_db.is_some() {
             None
@@ -164,7 +180,7 @@ impl Context {
         };
 
         let client = reqwest::Client::builder()
-            .tls_danger_accept_invalid_certs(cfg!(debug_assertions))
+            .tls_danger_accept_invalid_certs(debug.enabled)
             .build()?;
 
         // TODO: remove fed-lu hack
@@ -176,7 +192,7 @@ impl Context {
             client_secret: std::env::var("FED_LU_CLIENT_SECRET").ok(),
         };
 
-        let (sp, saml_pk) = saml2::get_service_provider().await?;
+        let (sp, saml_pk) = saml2::get_service_provider(api_domain).await?;
 
         // so they are grouped with the usual poem errors:
         // https://docs.rs/poem/latest/src/poem/middleware/opentelemetry_metrics.rs.html
@@ -185,6 +201,9 @@ impl Context {
             db,
             reqwest_client: client,
             email_client,
+            debug,
+            api_domain,
+            website_domain,
             fed_lu,
             private_key,
             jwks,
@@ -341,7 +360,8 @@ impl Context {
     ) -> Result<String, ()> {
         if session.redirect_requires_datasharing && !session.datasharing_confirmed {
             Ok(format!(
-                "{WEBSITE_DOMAIN}/confirm-datasharing/?code={code}&provider={}",
+                "{}/confirm-datasharing/?code={code}&provider={}",
+                self.website_domain,
                 session
                     .redirect_uri
                     .split('/')
@@ -390,8 +410,8 @@ impl Context {
             }
             if additional_personal_information {
                 return Ok(format!(
-                    "{WEBSITE_DOMAIN}/personal-information/?code={code}&sub={}",
-                    session.user.sub
+                    "{}/personal-information/?code={code}&sub={}",
+                    self.website_domain, session.user.sub
                 ));
             }
 

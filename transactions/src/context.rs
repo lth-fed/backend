@@ -2,7 +2,7 @@ use std::ops::Deref;
 use std::path::PathBuf;
 
 use base64::Engine as _;
-use bin_common::{PgPool, setup_db};
+use bin_common::{DebugConfig, PgPool, setup_db};
 use color_eyre::Section as _;
 use color_eyre::eyre::WrapErr as _;
 use ed25519_dalek::pkcs8::DecodePrivateKey as _;
@@ -161,6 +161,7 @@ impl ClientStore<stripe::Client> {
 #[derive(Debug)]
 pub struct Context {
     pub db: PgPool,
+    pub debug: DebugConfig,
 
     pub swish_clients: ClientStore<SwishClient>,
     pub stripe_clients: ClientStore<stripe::Client>,
@@ -194,6 +195,7 @@ impl Context {
     /// Returns any errors stemming from setting up the DB or other services.
     pub async fn new(test_db: Option<PgPool>) -> color_eyre::Result<Self> {
         let _: Result<PathBuf, dotenvy::Error> = dotenvy::dotenv();
+        let debug = DebugConfig::from_env();
 
         drop(rustls::crypto::ring::default_provider().install_default());
 
@@ -217,13 +219,14 @@ impl Context {
         };
 
         let client = reqwest::Client::builder()
-            .tls_danger_accept_invalid_certs(cfg!(debug_assertions))
+            .tls_danger_accept_invalid_certs(debug.enabled)
             .build()?;
 
         let typst_world = OurWonderfulTypstWorldBase::default();
 
         let context = Self {
             db,
+            debug,
 
             swish_clients: ClientStore::default(),
             stripe_clients: ClientStore::default(),
@@ -264,6 +267,7 @@ impl Context {
             .patch(swish::payment_request_url(
                 swish::ApiVersion::V1,
                 transaction.id,
+                self.debug.enabled,
             ))
             .header("content-type", "application/json-patch+json")
             .json(&patch)
@@ -300,6 +304,7 @@ impl Context {
             .get(swish::payment_request_url(
                 swish::ApiVersion::V1,
                 transaction.id,
+                self.debug.enabled,
             ))
             .send()
             .await

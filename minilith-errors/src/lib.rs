@@ -4,6 +4,7 @@ use std::sync::OnceLock;
 
 use color_eyre::eyre::Context as _;
 use lettre::AsyncTransport as _;
+use opentelemetry::KeyValue;
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Object};
 use tracing::error;
@@ -325,6 +326,8 @@ impl<T> MinilithErrorOptionExt<T> for Option<T> {
 pub struct EmailClient {
     from: lettre::Address,
     transport: lettre::AsyncSmtpTransport<lettre::Tokio1Executor>,
+    metrics: opentelemetry::metrics::Counter<u64>,
+    metrics_error: opentelemetry::metrics::Counter<u64>,
 }
 
 impl Debug for EmailClient {
@@ -383,7 +386,11 @@ impl EmailClient {
             ])
             .build();
 
-        Ok(Some(Self { from, transport }))
+        let meter = opentelemetry::global::meter("minilith-errors");
+        let metrics = meter.u64_counter("email").build();
+        let metrics_error = meter.u64_counter("email-errors").build();
+
+        Ok(Some(Self { from, transport, metrics, metrics_error }))
     }
 
     /// Sends one HTML-only message to every supplied recipient.
@@ -418,6 +425,16 @@ impl EmailClient {
             return Ok(());
         }
 
+        let mut labels = Vec::with_capacity(4);
+        labels.push(KeyValue::new(
+            "email.request.from".to_owned(),
+            from_name.to_owned(),
+        ));
+        labels.push(KeyValue::new(
+            "email.request.subject".to_owned(),
+            subject.to_owned(),
+        ));
+
         let message = message
             .body(html.into())
             .wrap_err_internal("email: failed to format email")?;
@@ -433,11 +450,24 @@ impl EmailClient {
                 Err(err) => err,
             };
             if tries >= max_tries {
+                labels.push(KeyValue::new(
+                    "email.response.status_code",
+                    err.status()
+                        .map_or(String::new(), |status| status.to_string()),
+                ));
+                labels.push(KeyValue::new("email.response.error", err.to_string()));
+                self.metrics.add(1, &labels);
+                self.metrics_error.add(1, &labels);
                 return Err(err).wrap_err_internal("email: failed to send email")?;
             }
             tokio::time::sleep(wait).await;
             wait *= 2;
         };
+        labels.push(KeyValue::new(
+            "email.response.status_code",
+            response.code().to_string(),
+        ));
+        self.metrics.add(1, &labels);
         if !response.is_positive() {
             // we can't alert here, that could cause loops
             // alert(
@@ -445,6 +475,7 @@ impl EmailClient {
             //     format!("failed to send email: {:?}", response.code()),
             // );
             error!("email: Failed to send email: {:?}", response.code());
+            self.metrics_error.add(1, &labels);
         }
         Ok(())
     }

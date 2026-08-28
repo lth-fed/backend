@@ -100,8 +100,18 @@ pub async fn get_endpoint(
         runtime::spawn(&context);
     }
 
-    let auth_context = JwkContext::<AuthUrl>::new("teknologappen").await?;
-    let transaction_context = JwkContext::<TransactionsUrl>::new("esek").await?;
+    let auth_context = JwkContext::<AuthUrl>::new(
+        "teknologappen",
+        context.debug.enabled,
+        context.debug.service_urls,
+    )
+    .await?;
+    let transaction_context = JwkContext::<TransactionsUrl>::new(
+        "esek",
+        context.debug.enabled,
+        context.debug.service_urls,
+    )
+    .await?;
     let api_service = OpenApiService::new(
         (
             admin::Router {
@@ -137,7 +147,7 @@ pub async fn get_endpoint(
     let ui = api_service.swagger_ui();
     let spec = api_service.spec_endpoint();
 
-    let cors = minilith_cors();
+    let cors = minilith_cors(context.debug);
 
     Ok(Route::new()
         .nest(
@@ -153,13 +163,16 @@ pub async fn get_endpoint(
         .with(cors))
 }
 
-fn minilith_cors() -> Cors {
+fn minilith_cors(debug: bin_common::DebugConfig) -> Cors {
     let mut allowed_origins = vec![
         "https://app.teknologappen.se",
         "https://admin.teknologappen.se",
     ];
-    if cfg!(debug_assertions) || std::env::var("DEBUG").as_deref() == Ok("1") {
+    if debug.enabled {
         allowed_origins.extend(["http://localhost:5173", "http://localhost:5175"]);
+    }
+    if debug.service_urls {
+        allowed_origins.extend(["http://frontend:5173", "http://admin-frontend:5175"]);
     }
     Cors::new()
         .allow_origins(allowed_origins)

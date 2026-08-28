@@ -51,14 +51,14 @@ pub fn eddsa_to_jwk(key: &VerifyingKey) -> Jwk {
 pub trait AuthContextProvider: Clone {
     /// This MUST be an url which returns a set of Json Web Keys.
     /// This MUST use HTTPS in production.
-    fn url() -> String;
+    fn url(service_urls: bool) -> String;
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct AuthUrl;
 impl AuthContextProvider for AuthUrl {
-    fn url() -> String {
-        if std::env::var("DEBUG").as_deref() == Ok("1") {
+    fn url(service_urls: bool) -> String {
+        if service_urls {
             "https://fed-auth:8051/oidc/v1/certs".to_owned()
         } else if cfg!(debug_assertions) {
             "https://localhost:8051/oidc/v1/certs".to_owned()
@@ -70,8 +70,8 @@ impl AuthContextProvider for AuthUrl {
 #[derive(Clone, Copy, Debug)]
 pub struct TransactionsUrl;
 impl AuthContextProvider for TransactionsUrl {
-    fn url() -> String {
-        if std::env::var("DEBUG").as_deref() == Ok("1") {
+    fn url(service_urls: bool) -> String {
+        if service_urls {
             "https://transactions:8052/v0/jwks".to_owned()
         } else if cfg!(debug_assertions) {
             "https://localhost:8052/v0/jwks".to_owned()
@@ -102,6 +102,7 @@ async fn retry<T, E, Fut: Future<Output = Result<T, E>>>(
 pub struct JwkContext<Url: Clone> {
     jwks: JwkSet,
     validation: Validation,
+    debug: bool,
     #[cfg(debug_assertions)]
     testing: bool,
     phantom: PhantomData<Url>,
@@ -114,28 +115,26 @@ impl<Url: AuthContextProvider + 'static> JwkContext<Url> {
     /// # Errors
     ///
     /// Returns an error if it was not possible to get the verifying key.
-    pub async fn new(audience: impl Into<String>) -> color_eyre::Result<Self> {
+    pub async fn new(
+        audience: impl Into<String>,
+        debug: bool,
+        service_urls: bool,
+    ) -> color_eyre::Result<Self> {
         let client = reqwest::Client::builder()
-            .tls_danger_accept_invalid_certs(
-                cfg!(debug_assertions) || std::env::var("DEBUG").as_deref() == Ok("1"),
-            )
+            .tls_danger_accept_invalid_certs(debug)
             .build()?;
-        #[cfg(debug_assertions)]
-        let retries = 1;
-        #[cfg(not(debug_assertions))]
-        let retries = 10;
+        let retries = if debug { 1 } else { 10 };
         let resp = match retry(
-            || client.get(Url::url()).send(),
+            || client.get(Url::url(service_urls)).send(),
             retries,
             std::time::Duration::from_secs(1),
         )
         .await
         {
             Ok(resp) => resp,
-            #[allow(unused_variables, reason = "cfg")]
             Err(err) => {
                 #[cfg(debug_assertions)]
-                {
+                if debug {
                     use tracing::warn;
 
                     if std::any::TypeId::of::<Url>() == std::any::TypeId::of::<AuthUrl>() {
@@ -149,25 +148,24 @@ impl<Url: AuthContextProvider + 'static> JwkContext<Url> {
                     if std::any::TypeId::of::<Url>() == std::any::TypeId::of::<TransactionsUrl>() {
                         warn!("All transaction callbacks will be allowed.");
                     }
-                    return Ok(Self::from_jwks(audience, JwkSet { keys: vec![] }));
+                    return Ok(Self::from_jwks(audience, JwkSet { keys: vec![] }, debug));
                 }
-                #[cfg(not(debug_assertions))]
                 return Err(err.into());
             }
         };
         if resp.status() != poem::http::StatusCode::OK {
             return Err(color_eyre::eyre::Error::msg(format!(
                 "failed getting verifying key on url: {} with error {}",
-                Url::url(),
+                Url::url(service_urls),
                 resp.status()
             )));
         }
         let bytes = resp.bytes().await?;
         let jwks: JwkSet = serde_json::from_slice(&bytes)?;
-        Ok(Self::from_jwks(audience, jwks))
+        Ok(Self::from_jwks(audience, jwks, debug))
     }
     /// If audience is empty, it's not checked. Audience is your `client_id`.
-    pub fn from_jwks(audience: impl Into<String>, jwks: JwkSet) -> Self {
+    pub fn from_jwks(audience: impl Into<String>, jwks: JwkSet, debug: bool) -> Self {
         let mut validation = Validation::new(Algorithm::EdDSA);
         validation.validate_nbf = true;
         let aud = audience.into();
@@ -179,7 +177,8 @@ impl<Url: AuthContextProvider + 'static> JwkContext<Url> {
 
         Self {
             #[cfg(debug_assertions)]
-            testing: jwks.keys.is_empty(),
+            testing: debug && jwks.keys.is_empty(),
+            debug,
             jwks,
             validation,
             phantom: PhantomData,
@@ -287,8 +286,7 @@ impl User {
         }
 
         let data = decode_jwt::<Claims>(&token.token, context)?;
-        #[cfg(not(debug_assertions))]
-        if data.claims.sub.starts_with("test:") {
+        if !context.debug && data.claims.sub.starts_with("test:") {
             use minilith_errors::MinilithEndpointError;
 
             return Err(MinilithEndpointError::unauthorized(

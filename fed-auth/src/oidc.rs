@@ -23,7 +23,7 @@ use tracing::{error, warn};
 use uuid::Uuid;
 
 use crate::context::CallbackUrl;
-use crate::{API_DOMAIN, Context, ContextWrapper, WEBSITE_DOMAIN, jwt};
+use crate::{Context, ContextWrapper, jwt};
 
 const TEKNOLOGAPPEN_ALLOWED_DOMAINS: &[&str] = &[
     "https://app.teknologappen.se",
@@ -46,30 +46,50 @@ fn eq_uri_domain(uri: &Uri, domain: &str) -> bool {
     let (scheme, authority) = domain.split_once("://").unwrap_or(("", ""));
     uri.scheme_str() == Some(scheme) && uri.authority().is_some_and(|auth| auth == authority)
 }
-fn is_allowed_domain(client_id: &str, domain: &Uri) -> bool {
-    #[cfg(debug_assertions)]
-    if eq_uri_domain(domain, "http://localhost:5173")
-        || eq_uri_domain(domain, "http://localhost:5175")
-        || eq_uri_domain(domain, "http://localhost:8000")
-        || eq_uri_domain(domain, "https://localhost:8050")
-        || eq_uri_domain(domain, API_DOMAIN)
-        || eq_uri_domain(domain, WEBSITE_DOMAIN)
-    {
+fn is_debug_domain(context: &Context, domain: &Uri) -> bool {
+    if !context.debug.enabled {
+        return false;
+    }
+
+    let localhost_domains = [
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://localhost:5175",
+        "http://localhost:8000",
+        "http://localhost:8001",
+        "https://localhost:8050",
+        "https://localhost:8051",
+    ];
+    let service_domains = [
+        "http://frontend:5173",
+        "http://auth-frontend:5174",
+        "http://admin-frontend:5175",
+        "http://minilith:8000",
+        "https://minilith:8050",
+        "http://fed-auth:8001",
+        "https://fed-auth:8051",
+    ];
+
+    localhost_domains
+        .iter()
+        .any(|allowed| eq_uri_domain(domain, allowed))
+        || (context.debug.service_urls
+            && service_domains
+                .iter()
+                .any(|allowed| eq_uri_domain(domain, allowed)))
+        || eq_uri_domain(domain, context.api_domain)
+        || eq_uri_domain(domain, context.website_domain)
+}
+fn is_allowed_domain(context: &Context, client_id: &str, domain: &Uri) -> bool {
+    if is_debug_domain(context, domain) {
         return true;
     }
     ALLOWED_DOMAINS.iter().any(|(cid, allowed)| {
         *cid == client_id && allowed.iter().any(|allowed| eq_uri_domain(domain, allowed))
     })
 }
-fn is_teknologappen_domain(domain: &Uri) -> bool {
-    #[cfg(debug_assertions)]
-    if eq_uri_domain(domain, "http://localhost:5173")
-        || eq_uri_domain(domain, "http://localhost:5175")
-        || eq_uri_domain(domain, "http://localhost:8000")
-        || eq_uri_domain(domain, "https://localhost:8050")
-        || eq_uri_domain(domain, API_DOMAIN)
-        || eq_uri_domain(domain, WEBSITE_DOMAIN)
-    {
+fn is_teknologappen_domain(context: &Context, domain: &Uri) -> bool {
+    if is_debug_domain(context, domain) {
         return true;
     }
     TEKNOLOGAPPEN_ALLOWED_DOMAINS
@@ -444,7 +464,7 @@ impl MainRouter {
             row.client_id,
             ACCESS_TOKEN_VALID_FOR,
             IdTokenClaims {
-                iss: API_DOMAIN.to_owned(),
+                iss: self.api_domain.to_owned(),
                 sub: user_id,
                 auth_time: (row.auth_time - OffsetDateTime::UNIX_EPOCH)
                     .whole_seconds()
@@ -530,7 +550,7 @@ impl MainRouter {
             &session.session.client_id,
             ACCESS_TOKEN_VALID_FOR,
             IdTokenClaims {
-                iss: API_DOMAIN.to_owned(),
+                iss: self.api_domain.to_owned(),
                 sub: session.user.sub.clone(),
                 auth_time: (row.auth_time - OffsetDateTime::UNIX_EPOCH)
                     .whole_seconds()
@@ -600,7 +620,7 @@ impl MainRouter {
             body.nonce,
             body.server_callback.map(|cb| cb.callback_url_v1),
             body.code_challenge,
-            !is_teknologappen_domain(redirect_uri)
+            !is_teknologappen_domain(self, redirect_uri)
         )
         .execute(&self.db)
         .await
@@ -689,7 +709,10 @@ impl MainRouter {
             // this redirects back with one specified provider
             return Response::new(AuthorizeResponse::redirect())
                 .status(StatusCode::FOUND)
-                .header("location", format!("{WEBSITE_DOMAIN}/providers/?{params}"));
+                .header(
+                    "location",
+                    format!("{}/providers/?{params}", self.website_domain),
+                );
         }
         let provider = first_provider;
 
@@ -714,7 +737,7 @@ impl MainRouter {
             );
         }
 
-        if !is_allowed_domain(&body.client_id, &redirect_uri) {
+        if !is_allowed_domain(self, &body.client_id, &redirect_uri) {
             error!(
                 client_id = body.client_id,
                 redirect_uri = ru,
@@ -740,7 +763,7 @@ impl MainRouter {
                     &ctx,
                 );
             };
-            if !is_allowed_domain(&body.client_id, &cb_url) {
+            if !is_allowed_domain(self, &body.client_id, &cb_url) {
                 error!(
                     client_id = body.client_id,
                     server_callback = ?body.server_callback,
@@ -804,7 +827,7 @@ impl MainRouter {
                 let params = serde_urlencoded::to_string([
                     (
                         "redirect_uri",
-                        format!("{API_DOMAIN}/oidc/v1/fed-lu/callback"),
+                        format!("{}/oidc/v1/fed-lu/callback", self.api_domain),
                     ),
                     ("state", code.clone()),
                 ])
@@ -816,13 +839,12 @@ impl MainRouter {
             }
             "email" => {
                 let code = Uuid::new_v4();
-                let redirect = format!("{WEBSITE_DOMAIN}/providers/email/?code={code}");
+                let redirect = format!("{}/providers/email/?code={code}", self.website_domain);
                 (code.to_string(), redirect)
             }
-            #[cfg(debug_assertions)]
-            "test" => {
+            "test" if self.debug.enabled => {
                 let code = Uuid::new_v4();
-                let redirect = format!("{WEBSITE_DOMAIN}/providers/test/?code={code}");
+                let redirect = format!("{}/providers/test/?code={code}", self.website_domain);
                 (code.to_string(), redirect)
             }
             _ => {
@@ -946,7 +968,7 @@ impl MainRouter {
         let ctx = OAuth2ErrorCtx(ru, self, "/oidc/v1/confirm-datasharing");
         if headers
             .get("origin")
-            .is_some_and(|origin| origin != WEBSITE_DOMAIN)
+            .is_some_and(|origin| origin != self.website_domain)
         {
             return oauth2error_redirect(
                 OAuth2ErrorKind::InvalidRequest,

@@ -578,12 +578,12 @@ async fn seed_activities(ctx: &ContextWrapper, namespace: SeedNamespace) -> colo
 
 async fn seed(ctx: &ContextWrapper, override_prod: bool) -> color_eyre::Result<()> {
     seed_image(ctx).await?;
-    if cfg!(debug_assertions) || override_prod {
+    if ctx.debug.enabled || override_prod {
         seed_group_namespace(ctx, MAIN_NAMESPACE).await?;
     }
     seed_group_namespace(ctx, EXTERNAL_VALIDATION_NAMESPACE).await?;
     seed_users(ctx).await?;
-    if cfg!(debug_assertions) || override_prod {
+    if ctx.debug.enabled || override_prod {
         seed_activities(ctx, MAIN_NAMESPACE).await?;
     }
     seed_activities(ctx, EXTERNAL_VALIDATION_NAMESPACE).await?;

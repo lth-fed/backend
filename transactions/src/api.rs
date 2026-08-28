@@ -397,7 +397,11 @@ impl Route {
                 callback_identifier: swish::uuid_to_string(cb_ident),
             };
             client
-                .put(swish::payment_request_url(swish::ApiVersion::V2, body.id))
+                .put(swish::payment_request_url(
+                    swish::ApiVersion::V2,
+                    body.id,
+                    self.context.debug.enabled,
+                ))
                 .json(&swish_body)
                 .send()
                 .await

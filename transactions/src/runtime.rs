@@ -28,7 +28,11 @@ async fn fetch_transaction_info(ctx: &Context, txn: TxnData) -> MinilithResult<C
                 return Ok(ControlFlow::Continue(()));
             };
             let Ok(resp) = client
-                .get(swish::payment_request_url(swish::ApiVersion::V1, txn.id))
+                .get(swish::payment_request_url(
+                    swish::ApiVersion::V1,
+                    txn.id,
+                    ctx.debug.enabled,
+                ))
                 .send()
                 .await
                 .wrap_err_internal(

@@ -17,6 +17,23 @@ use tracing_subscriber::util::SubscriberInitExt as _;
 pub type PgPool = sqlx_tracing::Pool<Postgres>;
 pub type Transaction<'a> = sqlx_tracing::Transaction<'a, Postgres>;
 
+#[derive(Clone, Copy, Debug)]
+pub struct DebugConfig {
+    pub enabled: bool,
+    pub service_urls: bool,
+}
+
+impl DebugConfig {
+    #[must_use]
+    pub fn from_env() -> Self {
+        let service_urls = std::env::var("DEBUG").as_deref() == Ok("1");
+        Self {
+            enabled: cfg!(debug_assertions) || service_urls,
+            service_urls,
+        }
+    }
+}
+
 /// # Errors
 ///
 /// Fails if DB communication or migration fails.
@@ -56,14 +73,12 @@ pub fn get_otel(
     service_name: &'static str,
     test: bool,
 ) -> color_eyre::Result<opentelemetry_sdk::trace::SdkTracerProvider> {
+    let debug = DebugConfig::from_env();
     let resource = opentelemetry_sdk::Resource::builder()
         .with_service_name(service_name)
         .with_attributes([opentelemetry::KeyValue::new(
             "deployment.environment.name",
-            #[cfg(debug_assertions)]
-            "dev",
-            #[cfg(not(debug_assertions))]
-            "production",
+            if debug.enabled { "dev" } else { "production" },
         )])
         .build();
 

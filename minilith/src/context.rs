@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use base64::Engine as _;
-use bin_common::setup_db;
+use bin_common::{DebugConfig, setup_db};
 use chacha20::ChaCha20;
 use chacha20::cipher::KeyIvInit as _;
 use chacha20::cipher::StreamCipher as _;
@@ -27,6 +27,7 @@ pub type ContextWrapper = Arc<Context>;
 #[derive(Debug)]
 pub struct Context {
     pub db: PgPool,
+    pub debug: DebugConfig,
     encryption_key: [u8; 32],
 
     transactions_api: String,
@@ -81,11 +82,10 @@ impl Context {
 
         let transactions_token = std::env::var("TRANSACTIONS_TOKEN")
             .wrap_err("Error: Missing env variable: 'TRANSACTIONS_TOKEN'.")?;
-        let debug = cfg!(debug_assertions);
-        let compose_debug = std::env::var("DEBUG").as_deref() == Ok("1");
-        let default_transactions_api = if compose_debug {
+        let debug = DebugConfig::from_env();
+        let default_transactions_api = if debug.service_urls {
             "https://transactions:8052"
-        } else if debug {
+        } else if cfg!(debug_assertions) {
             "https://localhost:8052"
         } else {
             "https://transactions.teknologappen.se"
@@ -93,7 +93,7 @@ impl Context {
         let transactions_api = default_transactions_api.to_owned();
 
         let client = reqwest::Client::builder()
-            .tls_danger_accept_invalid_certs(debug || compose_debug)
+            .tls_danger_accept_invalid_certs(debug.enabled)
             .build()?;
 
         let push_clients = if is_test {
@@ -101,8 +101,7 @@ impl Context {
         } else {
             match PushClients::from_env().await {
                 Ok(None) => {
-                    #[cfg(not(debug_assertions))]
-                    {
+                    if !debug.enabled {
                         alert(
                             AlertLevel::L2,
                             "push-notifications credentials not available",
@@ -117,11 +116,12 @@ impl Context {
                 Ok(Some(push_clients)) => match push_clients.verify_credentials().await {
                     Ok(()) => Some(push_clients),
                     Err(error) => {
-                        #[cfg(not(debug_assertions))]
-                        alert(
-                            AlertLevel::L2,
-                            "push-notifications credential test failed. See logs",
-                        );
+                        if !debug.enabled {
+                            alert(
+                                AlertLevel::L2,
+                                "push-notifications credential test failed. See logs",
+                            );
+                        }
                         error!(
                             ?error,
                             "push-notification sending disabled because its credential test failed"
@@ -130,8 +130,9 @@ impl Context {
                     }
                 },
                 Err(error) => {
-                    #[cfg(not(debug_assertions))]
-                    alert(AlertLevel::L2, "push-notifications setup failed. See logs");
+                    if !debug.enabled {
+                        alert(AlertLevel::L2, "push-notifications setup failed. See logs");
+                    }
                     error!(
                         ?error,
                         "push-notification sending disabled because setup failed"
@@ -143,12 +144,12 @@ impl Context {
 
         let s3_access_key = std::env::var("S3_ACCESS_KEY")?;
         let s3_secret_key = std::env::var("S3_SECRET_KEY")?;
-        let s3_url = if compose_debug {
-            "http://fed-s3:9000"
-        } else if debug {
-            "http://localhost:9000"
+        let (s3_url, s3_console_url) = if debug.service_urls {
+            ("http://fed-s3:9000", "http://fed-s3:9001")
+        } else if cfg!(debug_assertions) {
+            ("http://localhost:9000", "http://localhost:9001")
         } else {
-            "http://fed-s3:9000"
+            ("http://fed-s3:9000", "http://fed-s3:9001")
         };
         let s3_image_bucket = s3::Bucket::new(
             "image",
@@ -177,12 +178,11 @@ impl Context {
                     alert(AlertLevel::L2, "s3: no image bucket!");
                     warn!("No s3 image bucket exists! Please create one.");
                 }
-                #[cfg(debug_assertions)]
-                Err(error) => {
+                Err(error) if debug.enabled => {
                     warn!(
                         ?error,
                         "Could not connect to s3 bucket. Continuing without suppoort. \
-                    Add account at console: http://localhost:9001 \
+                    Add account at console: {s3_console_url} \
                     password&user is rustfsadmin. Save as env vars."
                     );
                 }
@@ -194,8 +194,9 @@ impl Context {
 
         let context = Self {
             db,
+            debug,
             encryption_key,
-            transactions_api: transactions_api.to_owned(),
+            transactions_api,
             transactions_client: client,
             transactions_token,
 

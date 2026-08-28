@@ -1482,36 +1482,12 @@ impl Router {
                 }
                 TransactionState::Cancelled => {
                     let mut txn = self.db.begin().await?;
-                    let Some(candidate) = sqlx::query!(
-                        "select user_id, ticket_kind_id
-                        from ticket_reservations
-                        where transaction_id = $1",
+                    let Some(flow) = wait_for_user_purchase_flow_on_transaction_id(
+                        &mut txn,
                         data.transaction_id,
                     )
-                    .fetch_optional(&mut txn.executor())
                     .await?
                     else {
-                        // error!(
-                        //     transaction_id = %data.transaction_id,
-                        //     "transaction which we do not track is cancelled"
-                        // );
-                        // alert(
-                        //     AlertLevel::L2,
-                        //     "transaction which we do not track is cancelled",
-                        // );
-                        continue;
-                    };
-                    let Some(flow) = wait_for_user_purchase_flow(
-                        &mut txn,
-                        &candidate.user_id,
-                        Some(candidate.ticket_kind_id),
-                    )
-                    .await?
-                    else {
-                        error!(
-                            transaction_id = %data.transaction_id,
-                            "cancelled transaction no longer has a purchase flow"
-                        );
                         continue;
                     };
                     if *flow != PurchaseFlow::Reservation {
@@ -1850,6 +1826,27 @@ async fn wait_for_user_purchase_flow(
     .await?;
     row.map(|row| decode_purchase_flow(row, ticket_kind))
         .transpose()
+}
+/// Internal jobs wait for the flow lock instead of dropping a transaction
+/// callback or repeatedly selecting the same worker job.
+async fn wait_for_user_purchase_flow_on_transaction_id(
+    db: &mut Transaction<'_>,
+    transaction_id: Uuid,
+) -> MinilithResult<Option<PurchaseFlowWithKind>> {
+    let row = sqlx::query_as!(
+        PurchaseFlowRow,
+        "with reservation as (
+            select user_id from ticket_reservations
+            where transaction_id = $1
+        )
+        select ticket_kind_id, reservation, release_queue, reservation_queue
+        from reservation
+        inner join users_in_purchase_flow flow on flow.user_id = reservation.user_id for update",
+        transaction_id
+    )
+    .fetch_optional(&mut db.executor())
+    .await?;
+    row.map(|row| decode_purchase_flow(row, None)).transpose()
 }
 
 fn ensure_affected_rows(
@@ -2661,22 +2658,7 @@ async fn pay_for_reservation(
     txn: &mut Transaction<'_>,
     transaction_id: Uuid,
 ) -> MinilithResult<Option<Uuid>> {
-    let Some(candidate) = sqlx::query!(
-        "select id, user_id, ticket_kind_id from ticket_reservations
-        where transaction_id = $1",
-        transaction_id
-    )
-    .fetch_optional(&mut txn.executor())
-    .await?
-    else {
-        check_missing_paid_reservation(txn, transaction_id).await?;
-        return Ok(None);
-    };
-
-    // todo: collapse with statement above to make atomic
-    let Some(flow) =
-        wait_for_user_purchase_flow(txn, &candidate.user_id, Some(candidate.ticket_kind_id))
-            .await?
+    let Some(flow) = wait_for_user_purchase_flow_on_transaction_id(txn, transaction_id).await?
     else {
         // A concurrent callback may have completed while this one waited.
         check_missing_paid_reservation(txn, transaction_id).await?;

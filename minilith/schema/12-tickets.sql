@@ -134,7 +134,7 @@ create table ticket_reservations (
     user_id text not null unique references users(id),
     ticket_kind_id uuid not null references ticket_kinds(id),
     -- could be null before transaction is initiated
-    transaction_id uuid,
+    transaction_id uuid unique,
     -- remove after this!
     -- or if transaction is currently happening and not cancellable wait for max an hour or smth
     timeout timestamptz not null,

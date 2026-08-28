@@ -17,10 +17,11 @@ use samael::traits::ToXml as _;
 use xmltree::XMLNode;
 
 use crate::context::{ValidatedAuthSession, ValidatedUser};
-use crate::{API_DOMAIN, Context, ContextWrapper};
+use crate::{Context, ContextWrapper};
 
-pub async fn get_service_provider()
--> color_eyre::Result<(ServiceProvider, openssl::pkey::PKey<openssl::pkey::Private>)> {
+pub async fn get_service_provider(
+    api_domain: &str,
+) -> color_eyre::Result<(ServiceProvider, openssl::pkey::PKey<openssl::pkey::Private>)> {
     // let resp = reqwest::get("https://idpv4.lu.se/idp/shibboleth")
     let resp = reqwest::get("https://mocksaml.com/api/saml/metadata")
         .await?
@@ -43,7 +44,7 @@ pub async fn get_service_provider()
     let saml_cert = samael::crypto::CertificateDer::from(saml_cert);
 
     let sp = ServiceProviderBuilder::default()
-        .entity_id(format!("{API_DOMAIN}/saml2/"))
+        .entity_id(format!("{api_domain}/saml2/"))
         .key(saml_pk.clone())
         .certificate(saml_cert)
         .allow_idp_initiated(false)
@@ -57,9 +58,9 @@ pub async fn get_service_provider()
             telephone_numbers: None,
         })
         .idp_metadata(idp_metadata)
-        .acs_url(format!("{API_DOMAIN}/saml2/acs"))
+        .acs_url(format!("{api_domain}/saml2/acs"))
         // doesn't actually exist but is required by samael to exist
-        .slo_url(format!("{API_DOMAIN}/saml2/slo"))
+        .slo_url(format!("{api_domain}/saml2/slo"))
         .build()?;
     Ok((sp, saml_pk))
 }

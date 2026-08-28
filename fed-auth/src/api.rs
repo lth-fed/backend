@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::context::{ValidatedAuthSession, ValidatedUser};
 use crate::oidc::ACCESS_TOKEN_VALID_FOR;
-use crate::{Context, ContextWrapper, WEBSITE_DOMAIN, jwt};
+use crate::{Context, ContextWrapper, jwt};
 
 #[derive(Object, Clone)]
 pub(crate) struct EmailLoginRequest {
@@ -121,7 +121,7 @@ impl MainRouter {
     ) -> MinilithResult<PlainText<String>> {
         if headers
             .get("origin")
-            .is_some_and(|origin| origin != WEBSITE_DOMAIN)
+            .is_some_and(|origin| origin != self.website_domain)
         {
             return Err(MinilithEndpointError::bad_frontend_code(
                 "origin has to be from our domain",
@@ -205,7 +205,7 @@ impl MainRouter {
     ) -> MinilithResult<()> {
         if headers
             .get("origin")
-            .is_some_and(|origin| origin != WEBSITE_DOMAIN)
+            .is_some_and(|origin| origin != self.website_domain)
         {
             return Err(MinilithEndpointError::bad_frontend_code(
                 "origin has to be from our domain",
@@ -216,7 +216,10 @@ impl MainRouter {
             return Err(MinilithEndpointError::unauthorized("code not valid", ""));
         }
         let token = Uuid::new_v4();
-        let link = format!("{WEBSITE_DOMAIN}/providers/email/approve/?token={token}");
+        let link = format!(
+            "{}/providers/email/approve/?token={token}",
+            self.website_domain
+        );
         if let Some(email_client) = &self.email_client {
             let (from_name, subject, description) = match body.language {
                 EmailLanguage::En => (
@@ -266,7 +269,7 @@ impl MainRouter {
     ) -> MinilithResult<PlainText<String>> {
         if headers
             .get("origin")
-            .is_some_and(|origin| origin != WEBSITE_DOMAIN)
+            .is_some_and(|origin| origin != self.website_domain)
         {
             return Err(MinilithEndpointError::bad_frontend_code(
                 "origin has to be from our domain",
@@ -311,7 +314,7 @@ impl MainRouter {
     ) -> MinilithResult<PlainText<String>> {
         if headers
             .get("origin")
-            .is_some_and(|origin| origin != WEBSITE_DOMAIN)
+            .is_some_and(|origin| origin != self.website_domain)
         {
             return Err(MinilithEndpointError::bad_frontend_code(
                 "origin has to be from our domain",
