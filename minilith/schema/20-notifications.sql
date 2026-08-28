@@ -1,7 +1,7 @@
 create type push_platform as enum ('ios', 'android');
 
 create table push_devices (
-    device_id uuid primary key,
+    device_id text primary key,
     user_id text not null references users (id) on delete cascade,
     push_token text not null,
     platform push_platform not null,

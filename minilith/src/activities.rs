@@ -234,7 +234,6 @@ impl Router {
                     where tk.activity_id = $1
                     and max_tickets > 0
                     and m.user_id = $2
-                    and purchasing_available_start > now()
                     order by purchasing_available_start
                     limit 1
                 ) as "earliest_ticket_release?",

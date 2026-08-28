@@ -261,11 +261,11 @@ pub enum PushPlatform {
 struct RegisterRequest {
     platform: PushPlatform,
     push_token: String,
-    device_id: Uuid,
+    device_id: String,
 }
 #[derive(Object)]
 struct DeregisterRequest {
-    device_id: Uuid,
+    device_id: String,
 }
 
 #[OpenApi(prefix_path = "/push")]

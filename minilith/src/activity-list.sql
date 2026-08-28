@@ -98,7 +98,6 @@ select a.id,
         where tk.activity_id = a.id
         and max_tickets > 0
         and m.user_id = $1
-        and purchasing_available_start > now()
         order by purchasing_available_start
         limit 1
     ) as "earliest_ticket_release?"
