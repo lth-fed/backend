@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::ops::Deref;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -58,8 +59,8 @@ impl Deref for ValidatedAuthSession {
 pub enum CallbackUrlVersion<'a> {
     V1 { url: &'a str },
 }
-impl CallbackUrlVersion<'_> {
-    pub fn url(&self) -> &str {
+impl<'a> CallbackUrlVersion<'a> {
+    pub fn url(&self) -> &'a str {
         match self {
             Self::V1 { url } => url,
         }
@@ -74,6 +75,27 @@ impl CallbackUrl {
         CallbackUrlVersion::V1 {
             url: &self.callback_url_v1,
         }
+    }
+
+    fn url_for_request(&self, debug: DebugConfig) -> Cow<'_, str> {
+        let url = self.as_latest().url();
+        if !debug.service_urls {
+            return Cow::Borrowed(url);
+        }
+
+        let Ok(mut parsed) = reqwest::Url::parse(url) else {
+            return Cow::Borrowed(url);
+        };
+        let is_local_minilith = matches!(parsed.host_str(), Some("localhost" | "127.0.0.1"))
+            && matches!(
+                (parsed.scheme(), parsed.port_or_known_default()),
+                ("http", Some(8000)) | ("https", Some(8050))
+            );
+        if !is_local_minilith || parsed.set_host(Some("minilith")).is_err() {
+            return Cow::Borrowed(url);
+        }
+
+        Cow::Owned(parsed.into())
     }
 }
 
@@ -383,10 +405,11 @@ impl Context {
                 )
                 .map_err(|_| ())?;
                 match cb_url.as_latest() {
-                    CallbackUrlVersion::V1 { url } => {
+                    CallbackUrlVersion::V1 { .. } => {
+                        let url = cb_url.url_for_request(self.debug);
                         let resp = self
                             .reqwest_client
-                            .post(url)
+                            .post(url.as_ref())
                             .body(token)
                             .send()
                             .await
@@ -432,5 +455,44 @@ impl Context {
             };
             Ok(url)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bin_common::DebugConfig;
+
+    use super::CallbackUrl;
+
+    #[test]
+    fn compose_callbacks_use_the_minilith_service_name() {
+        let callback = CallbackUrl {
+            callback_url_v1: "http://localhost:8000/v0/user/auth-callback/v1".to_owned(),
+        };
+        let debug = DebugConfig {
+            enabled: true,
+            service_urls: true,
+        };
+
+        assert_eq!(
+            callback.url_for_request(debug),
+            "http://minilith:8000/v0/user/auth-callback/v1"
+        );
+    }
+
+    #[test]
+    fn host_debug_callbacks_keep_localhost() {
+        let callback = CallbackUrl {
+            callback_url_v1: "http://localhost:8000/v0/user/auth-callback/v1".to_owned(),
+        };
+        let debug = DebugConfig {
+            enabled: true,
+            service_urls: false,
+        };
+
+        assert_eq!(
+            callback.url_for_request(debug),
+            "http://localhost:8000/v0/user/auth-callback/v1"
+        );
     }
 }
