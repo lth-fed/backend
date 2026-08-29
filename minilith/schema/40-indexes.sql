@@ -14,6 +14,8 @@ create index ticket_kind_by_activity on ticket_kinds using hash (activity_id);
 create index ticket_kind_allowed_groups_by_group on ticket_kind_allowed_groups using hash (group_id);
 create index ticket_kind_allowed_groups_by_ticket_kind
     on ticket_kind_allowed_groups using hash (ticket_kind_id);
+create index ticket_kind_transfer_groups_by_ticket_kind
+    on ticket_kind_transfer_groups using hash (ticket_kind_id);
 create index ticket_kind_notifications_by_notification
     on ticket_kind_notifications using hash (notification_id);
 create index ticket_kind_notifications_by_ticket_kind

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into ticket_kind_transfer_groups (ticket_kind_id, group_id)\n            values ($1, $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "25836560f0caa729f046714b5e93e1f7441f8054bdc141491dd6dd7beee08395"
+}

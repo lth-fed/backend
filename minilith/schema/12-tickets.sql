@@ -22,11 +22,8 @@ create table ticket_kinds (
     reserved_or_purchased_tickets integer not null
     check (reserved_or_purchased_tickets >= 0 and reserved_or_purchased_tickets <= max_tickets),
     -- to disable, make the range empty
-    -- to allow transfer without bounds, just set this to a REALLY long interval
     allow_transfer_ticket_start timestamptz not null,
     allow_transfer_ticket_stop timestamptz not null,
-    -- allows tickets to be transferred to users which do not pass the `ticket_kind_allowed_groups` check
-    allow_transfer_ticket_bypass_allowed_groups boolean not null,
     -- when this is set nothing is allowed to be changed, except the bookkeeping on table:options & purchasing_available
     has_been_purchased boolean not null,
     has_been_released boolean not null
@@ -34,6 +31,12 @@ create table ticket_kinds (
 -- which groups are allowed to buy this ticket kind
 create table ticket_kind_allowed_groups (
     ticket_kind_id uuid not null references ticket_kinds(id),
+    group_id uuid not null references groups(id),
+    primary key (group_id, ticket_kind_id)
+);
+-- recipients may be members of these groups or any of their descendants
+create table ticket_kind_transfer_groups (
+    ticket_kind_id uuid not null references ticket_kinds(id) on delete cascade,
     group_id uuid not null references groups(id),
     primary key (group_id, ticket_kind_id)
 );

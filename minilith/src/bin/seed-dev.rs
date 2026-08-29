@@ -536,9 +536,9 @@ async fn seed_activities(ctx: &ContextWrapper, namespace: SeedNamespace) -> colo
                      purchasing_available_start, purchasing_available_stop,
                      max_tickets, min_tickets, reserved_or_purchased_tickets,
                      allow_transfer_ticket_start, allow_transfer_ticket_stop,
-                     allow_transfer_ticket_bypass_allowed_groups, has_been_purchased, has_been_released)
+                     has_been_purchased, has_been_released)
                  values ($1, $2, $3, $4,
-                         $5, $6, $7, 0, 0, $5, $6, false, false, $5 < now() and $6 > now())
+                         $5, $6, $7, 0, 0, $5, $6, false, $5 < now() and $6 > now())
                  on conflict (id) do update set
                     name = excluded.name,
                     price = excluded.price,
@@ -561,6 +561,16 @@ async fn seed_activities(ctx: &ContextWrapper, namespace: SeedNamespace) -> colo
             .execute(&ctx.db)
             .await
             .wrap_err_with(|| format!("seed ticket kind {ticket_kind_id}"))?;
+
+            sqlx::query!(
+                "insert into ticket_kind_transfer_groups (ticket_kind_id, group_id)
+                 values ($1, $2) on conflict do nothing",
+                ticket_kind_id,
+                root_id,
+            )
+            .execute(&ctx.db)
+            .await
+            .wrap_err("seed ticket transfer group")?;
 
             sqlx::query!(
                 "insert into ticket_kind_allowed_groups (ticket_kind_id, group_id)

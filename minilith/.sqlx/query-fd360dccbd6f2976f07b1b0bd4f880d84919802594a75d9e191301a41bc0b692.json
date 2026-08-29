@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select\n                name as \"name!: DIS\", activity_id, price,\n                purchasing_available_start, purchasing_available_stop,\n                max_tickets, min_tickets, reserved_or_purchased_tickets,\n                allow_transfer_ticket_start, allow_transfer_ticket_stop,\n                allow_transfer_ticket_bypass_allowed_groups,\n                has_been_purchased,\n                has_been_released\n            from ticket_kinds where id = $1",
+  "query": "select\n                name as \"name!: DIS\", activity_id, price,\n                purchasing_available_start, purchasing_available_stop,\n                max_tickets, min_tickets, reserved_or_purchased_tickets,\n                allow_transfer_ticket_start, allow_transfer_ticket_stop,\n                has_been_purchased,\n                has_been_released\n            from ticket_kinds where id = $1",
   "describe": {
     "columns": [
       {
@@ -55,16 +55,11 @@
       },
       {
         "ordinal": 10,
-        "name": "allow_transfer_ticket_bypass_allowed_groups",
-        "type_info": "Bool"
-      },
-      {
-        "ordinal": 11,
         "name": "has_been_purchased",
         "type_info": "Bool"
       },
       {
-        "ordinal": 12,
+        "ordinal": 11,
         "name": "has_been_released",
         "type_info": "Bool"
       }
@@ -86,9 +81,8 @@
       false,
       false,
       false,
-      false,
       false
     ]
   },
-  "hash": "bceb2504c5feb7308d749d4f74fc5351e3da23ebc7d5b1a92beb7bae0ecb6acf"
+  "hash": "fd360dccbd6f2976f07b1b0bd4f880d84919802594a75d9e191301a41bc0b692"
 }

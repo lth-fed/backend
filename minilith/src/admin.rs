@@ -42,6 +42,28 @@ impl Deref for Router {
     }
 }
 
+async fn replace_ticket_kind_transfer_groups(
+    txn: &mut bin_common::Transaction<'_>,
+    ticket_kind_id: Uuid,
+    group_ids: &[Uuid],
+) -> MinilithResult<()> {
+    sqlx::query!(
+        "delete from ticket_kind_transfer_groups where ticket_kind_id = $1",
+        ticket_kind_id,
+    )
+    .execute(&mut txn.executor())
+    .await?;
+    sqlx::query!(
+        r#"insert into ticket_kind_transfer_groups (ticket_kind_id, group_id)
+        select $1, group_id from unnest($2::uuid[]) selected(group_id)"#,
+        ticket_kind_id,
+        group_ids,
+    )
+    .execute(&mut txn.executor())
+    .await?;
+    Ok(())
+}
+
 #[derive(Object, Debug)]
 pub struct ExternalSaleCategory {
     /// Use `"null"` for if it's not alcohol.
@@ -118,7 +140,8 @@ struct PutTicketKind {
     min_tickets: i32,
     allow_transfer_ticket_start: OffsetDateTime,
     allow_transfer_ticket_stop: OffsetDateTime,
-    allow_transfer_ticket_bypass_allowed_groups: bool,
+    /// Recipients may belong to any selected group or one of its descendants.
+    transfer_group_ids: Vec<Uuid>,
     allowed_group_ids: Vec<Uuid>,
     addons: Vec<AvailableAddon>,
 }
@@ -1422,6 +1445,8 @@ impl Router {
 
         body.allowed_group_ids.sort_unstable();
         body.allowed_group_ids.dedup();
+        body.transfer_group_ids.sort_unstable();
+        body.transfer_group_ids.dedup();
         let existing = if existing_id.is_some() {
             Some(
                 TicketRouter {
@@ -1492,8 +1517,7 @@ impl Router {
                     max_tickets = $5,
                     min_tickets = $6,
                     allow_transfer_ticket_start = $7,
-                    allow_transfer_ticket_stop = $8,
-                    allow_transfer_ticket_bypass_allowed_groups = $9
+                    allow_transfer_ticket_stop = $8
                 where id = $1"#,
                 id,
                 body.purchasing_available_start,
@@ -1503,10 +1527,10 @@ impl Router {
                 body.min_tickets,
                 body.allow_transfer_ticket_start,
                 body.allow_transfer_ticket_stop,
-                body.allow_transfer_ticket_bypass_allowed_groups,
             )
             .execute(&mut txn.executor())
             .await?;
+            replace_ticket_kind_transfer_groups(&mut txn, id, &body.transfer_group_ids).await?;
             for addon in &body.addons {
                 for option in &addon.options {
                     let prices: Vec<PgMoney> = option
@@ -1577,10 +1601,9 @@ impl Router {
                 purchasing_available_start, purchasing_available_stop,
                 max_tickets, min_tickets, reserved_or_purchased_tickets,
                 allow_transfer_ticket_start, allow_transfer_ticket_stop,
-                allow_transfer_ticket_bypass_allowed_groups,
                 has_been_purchased, has_been_released
             ) values (
-                $1, $2, $3, $4, $5, $6, $7, $8, 0, $9, $10, $11, false, false
+                $1, $2, $3, $4, $5, $6, $7, $8, 0, $9, $10, false, false
             )
             on conflict (id) do update set
                 name = excluded.name,
@@ -1590,9 +1613,7 @@ impl Router {
                 max_tickets = excluded.max_tickets,
                 min_tickets = excluded.min_tickets,
                 allow_transfer_ticket_start = excluded.allow_transfer_ticket_start,
-                allow_transfer_ticket_stop = excluded.allow_transfer_ticket_stop,
-                allow_transfer_ticket_bypass_allowed_groups =
-                    excluded.allow_transfer_ticket_bypass_allowed_groups"#,
+                allow_transfer_ticket_stop = excluded.allow_transfer_ticket_stop"#,
             id,
             body.activity_id,
             body.name.to_json_value(),
@@ -1603,10 +1624,11 @@ impl Router {
             body.min_tickets,
             body.allow_transfer_ticket_start,
             body.allow_transfer_ticket_stop,
-            body.allow_transfer_ticket_bypass_allowed_groups,
         )
         .execute(&mut txn.executor())
         .await?;
+
+        replace_ticket_kind_transfer_groups(&mut txn, id, &body.transfer_group_ids).await?;
 
         // ========
         // Allowed groups

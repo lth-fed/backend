@@ -52,7 +52,6 @@ impl Router {
                 purchasing_available_start, purchasing_available_stop,
                 max_tickets, min_tickets, reserved_or_purchased_tickets,
                 allow_transfer_ticket_start, allow_transfer_ticket_stop,
-                allow_transfer_ticket_bypass_allowed_groups,
                 has_been_purchased,
                 has_been_released
             from ticket_kinds where id = $1",
@@ -72,11 +71,10 @@ impl Router {
             reserved_or_purchased_tickets: row.reserved_or_purchased_tickets,
             allow_transfer_ticket_start: row.allow_transfer_ticket_start,
             allow_transfer_ticket_stop: row.allow_transfer_ticket_stop,
-            allow_transfer_ticket_bypass_allowed_groups: row
-                .allow_transfer_ticket_bypass_allowed_groups,
             has_been_purchased: row.has_been_purchased,
             has_been_released: row.has_been_released,
             allowed_group_ids: Vec::new(),
+            transfer_group_ids: Vec::new(),
             available_addons: Vec::new(),
         })
         .fetch_optional(&self.db)
@@ -85,6 +83,14 @@ impl Router {
 
         ticket_kind.allowed_group_ids = sqlx::query_scalar!(
             r#"select group_id from ticket_kind_allowed_groups
+            where ticket_kind_id = $1 order by group_id"#,
+            id,
+        )
+        .fetch_all(&self.db)
+        .await?;
+
+        ticket_kind.transfer_group_ids = sqlx::query_scalar!(
+            r#"select group_id from ticket_kind_transfer_groups
             where ticket_kind_id = $1 order by group_id"#,
             id,
         )
@@ -296,7 +302,8 @@ pub struct Kind {
     pub reserved_or_purchased_tickets: i32,
     pub allow_transfer_ticket_start: OffsetDateTime,
     pub allow_transfer_ticket_stop: OffsetDateTime,
-    pub allow_transfer_ticket_bypass_allowed_groups: bool,
+    /// A recipient must belong to one of these groups or a descendant.
+    pub transfer_group_ids: Vec<Uuid>,
     pub has_been_purchased: bool,
     pub has_been_released: bool,
     pub allowed_group_ids: Vec<Uuid>,
@@ -1164,9 +1171,9 @@ impl Router {
         Ok(Json(response))
     }
 
-    /// You must own the ticket, and can if `Kind.allow_transfer_ticket_bypass_allowed_groups ==
-    /// false` only transfer it to other users who could buy this ticket. This must also be called
-    /// between `Kind.allow_transfer_ticket_start` and `Kind.allow_transfer_ticket_stop`.
+    /// You must own the ticket. The recipient must belong to one of the kind's transfer groups or
+    /// a descendant, and this must be called between `Kind.allow_transfer_ticket_start` and
+    /// `Kind.allow_transfer_ticket_stop`.
     /// Check these values by fetching the data of the Kind using `/v0/tickets/ticket-kind/<uuid>`
     #[oai(path = "/transfer", method = "post")]
     async fn transfer(&self, auth: User, body: Json<TransferRequest>) -> MinilithResult<()> {
@@ -1232,8 +1239,7 @@ impl Router {
         // The ownership check is repeated while locking the ticket. It may have
         // changed while the flow locks above were being acquired.
         let row = sqlx::query!(
-            "select allow_transfer_ticket_bypass_allowed_groups,
-            allow_transfer_ticket_start, allow_transfer_ticket_stop
+            "select allow_transfer_ticket_start, allow_transfer_ticket_stop
             from purchased_tickets
             inner join ticket_kinds kind on kind.id = purchased_tickets.ticket_kind_id
             where purchased_tickets.id = $1 and owner_id = $2
@@ -1252,9 +1258,8 @@ impl Router {
                 "",
             ));
         }
-        if !row.allow_transfer_ticket_bypass_allowed_groups {
-            ensure_user_may_purchase_ticket(&mut txn.executor(), &to_user, ticket_kind).await?;
-        }
+        ensure_user_may_receive_transferred_ticket(&mut txn.executor(), &to_user, ticket_kind)
+            .await?;
         let affected = sqlx::query!(
             "update purchased_tickets set owner_id = $2 where id = $1",
             body.purchased_ticket_id,
@@ -2936,6 +2941,42 @@ async fn ensure_user_may_purchase_ticket(
     Ok(())
 }
 
+/// Transfer groups include all descendant groups in the path tree. An empty
+/// transfer-group set therefore permits no recipient.
+async fn ensure_user_may_receive_transferred_ticket(
+    db: impl PgExecutor<'_>,
+    user_id: &str,
+    ticket_kind: Uuid,
+) -> MinilithResult<()> {
+    let may_receive = sqlx::query_scalar!(
+        r#"select exists (
+            select 1
+            from group_memberships
+            inner join groups member_group on member_group.id = group_memberships.group_id
+            inner join ticket_kind_transfer_groups transfer
+                on transfer.ticket_kind_id = $1
+            inner join groups transfer_group on transfer_group.id = transfer.group_id
+                and transfer_group.path @> member_group.path
+            where group_memberships.user_id = $2
+        ) as "may_receive!""#,
+        ticket_kind,
+        user_id,
+    )
+    .fetch_one(db)
+    .await?;
+
+    if !may_receive {
+        return Err(MinilithEndpointError::bad_user_input(
+            "transfer",
+            "",
+            "recipient is not a member of an allowed transfer group or descendant",
+            "to_user",
+        ));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3259,6 +3300,56 @@ mod tests {
         assert!(
             txn.commit().await.is_err(),
             "the deferred state constraint should reject a state-less flow"
+        );
+    }
+
+    #[sqlx::test(fixtures("ticket_capacity"))]
+    async fn transfer_groups_include_descendant_members(db: sqlx::PgPool) {
+        let ticket_kind = Uuid::parse_str("00000000-0000-0000-0000-000000000004").unwrap();
+        let root = Uuid::parse_str("00000000-0000-0000-0000-000000000002").unwrap();
+        let child = Uuid::parse_str("00000000-0000-0000-0000-000000000006").unwrap();
+        sqlx::query!(
+            "insert into groups (id, path, name, description, logo_id, limit_membership_visibility)
+            values ($1, 'root.child', '{}'::jsonb, '{}'::jsonb, $2, false)",
+            child,
+            Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap(),
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+        sqlx::query!(
+            "insert into group_memberships (user_id, group_id) values ($1, $2)",
+            "test:purchase-flow-1",
+            child,
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+        sqlx::query!(
+            "insert into ticket_kind_transfer_groups (ticket_kind_id, group_id)
+            values ($1, $2)",
+            ticket_kind,
+            root,
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+
+        ensure_user_may_receive_transferred_ticket(&db, "test:purchase-flow-1", ticket_kind)
+            .await
+            .unwrap();
+
+        sqlx::query!(
+            "delete from ticket_kind_transfer_groups where ticket_kind_id = $1",
+            ticket_kind,
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+        assert!(
+            ensure_user_may_receive_transferred_ticket(&db, "test:purchase-flow-1", ticket_kind,)
+                .await
+                .is_err()
         );
     }
 }

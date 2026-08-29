@@ -1,7 +1,7 @@
 use std::ops::Deref;
 
 use minilith_errors::MinilithResult;
-use poem_openapi::{OpenApi, payload::Json, Object};
+use poem_openapi::{Object, OpenApi, payload::Json};
 use time::OffsetDateTime;
 
 use crate::context::ContextWrapper;
@@ -27,6 +27,8 @@ impl Router {
     #[oai(path = "/time", method = "get")]
     #[allow(clippy::unused_async, reason = "poem requires it")]
     async fn health_check(&self) -> MinilithResult<Json<Now>> {
-        Ok(Json(Now{utc: OffsetDateTime::now_utc()}))
+        Ok(Json(Now {
+            utc: OffsetDateTime::now_utc(),
+        }))
     }
 }

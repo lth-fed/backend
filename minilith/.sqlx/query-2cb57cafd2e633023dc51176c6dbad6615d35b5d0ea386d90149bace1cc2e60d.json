@@ -60,16 +60,11 @@
       },
       {
         "ordinal": 11,
-        "name": "allow_transfer_ticket_bypass_allowed_groups",
-        "type_info": "Bool"
-      },
-      {
-        "ordinal": 12,
         "name": "has_been_purchased",
         "type_info": "Bool"
       },
       {
-        "ordinal": 13,
+        "ordinal": 12,
         "name": "has_been_released",
         "type_info": "Bool"
       }
@@ -80,7 +75,6 @@
       ]
     },
     "nullable": [
-      false,
       false,
       false,
       false,

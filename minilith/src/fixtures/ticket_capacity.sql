@@ -42,18 +42,17 @@ insert into ticket_kinds (
     purchasing_available_start, purchasing_available_stop,
     max_tickets, min_tickets, reserved_or_purchased_tickets,
     allow_transfer_ticket_start, allow_transfer_ticket_stop,
-    allow_transfer_ticket_bypass_allowed_groups,
     has_been_purchased, has_been_released
 ) values
 (
     '00000000-0000-0000-0000-000000000004',
     '00000000-0000-0000-0000-000000000003',
     '{}'::jsonb, 0::money, now(), now() + interval '1 hour',
-    3, 0, 0, now(), now() + interval '1 hour', false, false, false
+    3, 0, 0, now(), now() + interval '1 hour', false, false
 ),
 (
     '00000000-0000-0000-0000-000000000005',
     '00000000-0000-0000-0000-000000000003',
     '{}'::jsonb, 0::money, now(), now() + interval '1 hour',
-    3, 0, 0, now(), now() + interval '1 hour', false, false, false
+    3, 0, 0, now(), now() + interval '1 hour', false, false
 );

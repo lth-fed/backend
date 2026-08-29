@@ -390,7 +390,12 @@ impl EmailClient {
         let metrics = meter.u64_counter("email").build();
         let metrics_error = meter.u64_counter("email-errors").build();
 
-        Ok(Some(Self { from, transport, metrics, metrics_error }))
+        Ok(Some(Self {
+            from,
+            transport,
+            metrics,
+            metrics_error,
+        }))
     }
 
     /// Sends one HTML-only message to every supplied recipient.

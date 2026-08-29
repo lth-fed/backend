@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select group_id from ticket_kind_transfer_groups\n            where ticket_kind_id = $1 order by group_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "group_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "02015b3c94c315036a94d8f638a8aba84f3b9206377810327531dcdf93129038"
+}
