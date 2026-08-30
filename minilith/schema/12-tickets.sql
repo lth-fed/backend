@@ -91,7 +91,11 @@ create table users_in_purchase_flow (
     ),
     constraint purchase_flow_has_at_most_one_state check (
         num_nonnulls(release_queue, reservation_queue, reservation) <= 1
-    )
+    ),
+
+    lock_id uuid,
+    locked_at timestamptz,
+    constraint lock_matches check ((lock_id is null) = (locked_at is null))
 );
 
 -- people who have started queuing to buy a ticket

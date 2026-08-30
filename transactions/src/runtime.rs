@@ -201,6 +201,10 @@ pub async fn check_timeouts(ctx: &Context) -> MinilithResult<()> {
     let mut cancelled = Vec::new();
 
     for transaction in timed_out_transactions {
+        // holds a DB connection over HTTP requests, though this is fine since it's max one per
+        // instance:)
+        //
+        // should probably be fixed though TODO
         if ctx.cancel_transaction(&transaction).await.is_ok() {
             cancelled_uuids.push(transaction.id);
             cancelled.push(transaction);
@@ -221,6 +225,16 @@ pub async fn check_timeouts(ctx: &Context) -> MinilithResult<()> {
         }
     }
 
+    sqlx::query!(
+        "delete from transactions using unnest($1::uuid[]) as t(id)
+        where transactions.id = t.id",
+        &cancelled_uuids
+    )
+    .execute(&mut txn.executor())
+    .await?;
+
+    txn.commit().await?;
+
     callback::send_callbacks(
         ctx,
         cancelled.iter().map(|row| CallbackEvent {
@@ -235,16 +249,6 @@ pub async fn check_timeouts(ctx: &Context) -> MinilithResult<()> {
         }),
     )
     .await;
-
-    sqlx::query!(
-        "delete from transactions using unnest($1::uuid[]) as t(id)
-        where transactions.id = t.id",
-        &cancelled_uuids
-    )
-    .execute(&mut txn.executor())
-    .await?;
-
-    txn.commit().await?;
 
     Ok(())
 }

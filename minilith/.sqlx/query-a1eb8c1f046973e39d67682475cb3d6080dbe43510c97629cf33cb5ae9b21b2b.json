@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "with reservation as (\n            select user_id from ticket_reservations\n            where transaction_id = $1\n        )\n        select ticket_kind_id, reservation, release_queue, reservation_queue\n        from reservation\n        inner join users_in_purchase_flow flow on flow.user_id = reservation.user_id for update",
+  "query": "select ticket_kind_id, reservation, release_queue, reservation_queue,\n        lock_id, locked_at\n        from users_in_purchase_flow where user_id = $1 for update",
   "describe": {
     "columns": [
       {
@@ -22,19 +22,31 @@
         "ordinal": 3,
         "name": "reservation_queue",
         "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "lock_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 5,
+        "name": "locked_at",
+        "type_info": "Timestamptz"
       }
     ],
     "parameters": {
       "Left": [
-        "Uuid"
+        "Text"
       ]
     },
     "nullable": [
       false,
       true,
       true,
+      true,
+      true,
       true
     ]
   },
-  "hash": "633f4bdaab7d8324722ca87cbeac8f87262bf2e4914c0b568e42ec3c5e5ea781"
+  "hash": "a1eb8c1f046973e39d67682475cb3d6080dbe43510c97629cf33cb5ae9b21b2b"
 }

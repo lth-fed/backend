@@ -316,7 +316,7 @@ pub fn spawn(ctx: &ContextWrapper) {
 
             let now = time::OffsetDateTime::now_utc();
             // next minute on xx:58
-            // TODO: revert to :00, this is because the frontend jitters at :00 - :10 and in :00 -
+            // TODO(frontend-hack: 25/08/2026): revert to :00, this is because the frontend jitters at :00 - :10 and in :00 -
             // :01 we may still be actively releasing it.
             #[allow(clippy::unwrap_used, reason = "bruh")]
             let mut next = now

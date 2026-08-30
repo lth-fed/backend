@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select ticket_kind_id, reservation, release_queue, reservation_queue\n        from users_in_purchase_flow where user_id = $1 for update nowait",
+  "query": "select ticket_kind_id, reservation, release_queue, reservation_queue,\n        lock_id, locked_at\n        from users_in_purchase_flow where user_id = $1 for update nowait",
   "describe": {
     "columns": [
       {
@@ -22,6 +22,16 @@
         "ordinal": 3,
         "name": "reservation_queue",
         "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "lock_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 5,
+        "name": "locked_at",
+        "type_info": "Timestamptz"
       }
     ],
     "parameters": {
@@ -33,8 +43,10 @@
       false,
       true,
       true,
+      true,
+      true,
       true
     ]
   },
-  "hash": "c630ab3fb38f77efd78538278070ff60040d74dc62f7fae559bde0f810b335b5"
+  "hash": "aeffee5b235d3e57ec749b0c740fad91b66e367f8c016cf84de0b62250f67418"
 }
