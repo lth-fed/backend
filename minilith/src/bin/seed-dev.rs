@@ -70,8 +70,9 @@ const EXTERNAL_VALIDATION_NAMESPACE: SeedNamespace = SeedNamespace {
 /// re-uploading the same placeholder per row.
 async fn seed_image(ctx: &ContextWrapper) -> color_eyre::Result<()> {
     sqlx::query!(
-        "insert into images (id, size, url) values ($1, 0, 'https://icelk.dev/tappen-icon.png') on conflict do nothing",
-        LOGO_IMG
+        "insert into images (id, size, url) values ($1, 0, $2) on conflict do nothing",
+        LOGO_IMG,
+        "https://picsum.photos/seed/group-logo/512/512"
     )
     .execute(&ctx.db)
     .await

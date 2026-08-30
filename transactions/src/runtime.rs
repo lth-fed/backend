@@ -114,7 +114,7 @@ async fn fetch_transaction_info(ctx: &Context, txn: TxnData) -> MinilithResult<C
 ///
 /// DB errors.
 pub async fn initial_checks(ctx: &Arc<Context>) -> MinilithResult<()> {
-    crate::fortnox::recover_stale_jobs(ctx).await?;
+    // crate::fortnox::recover_stale_jobs(ctx).await?;
 
     let unpaid_transactions = sqlx::query_as!(
         TxnData,
@@ -154,29 +154,29 @@ pub fn spawn(ctx: &Arc<Context>) {
         }
     });
 
-    let fortnox_context = Arc::clone(ctx);
-    tokio::spawn(async move {
-        let mut jobs = tokio::time::interval(std::time::Duration::from_secs(2));
-        let mut stale_jobs = tokio::time::interval(std::time::Duration::from_mins(10));
-        // `interval` ticks immediately. Startup recovery already ran in `initial_checks`.
-        stale_jobs.tick().await;
-        loop {
-            tokio::select! {
-                _ = jobs.tick() => {
-                    let res = crate::fortnox::process_next_job(&fortnox_context)
-                        .await
-                        .wrap_err_internal("l2: error from runtime->process_next_fortnox_job");
-                    drop(res);
-                }
-                _ = stale_jobs.tick() => {
-                    let res = crate::fortnox::recover_stale_jobs(&fortnox_context)
-                        .await
-                        .wrap_err_internal("l2: error from runtime->recover_stale_fortnox_jobs");
-                    drop(res);
-                }
-            }
-        }
-    });
+    // let fortnox_context = Arc::clone(ctx);
+    // tokio::spawn(async move {
+    //     let mut jobs = tokio::time::interval(std::time::Duration::from_secs(2));
+    //     let mut stale_jobs = tokio::time::interval(std::time::Duration::from_mins(10));
+    //     // `interval` ticks immediately. Startup recovery already ran in `initial_checks`.
+    //     stale_jobs.tick().await;
+    //     loop {
+    //         tokio::select! {
+    //             _ = jobs.tick() => {
+    //                 let res = crate::fortnox::process_next_job(&fortnox_context)
+    //                     .await
+    //                     .wrap_err_internal("l2: error from runtime->process_next_fortnox_job");
+    //                 drop(res);
+    //             }
+    //             _ = stale_jobs.tick() => {
+    //                 let res = crate::fortnox::recover_stale_jobs(&fortnox_context)
+    //                     .await
+    //                     .wrap_err_internal("l2: error from runtime->recover_stale_fortnox_jobs");
+    //                 drop(res);
+    //             }
+    //         }
+    //     }
+    // });
 }
 
 /// # Errors

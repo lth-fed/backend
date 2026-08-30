@@ -119,19 +119,19 @@ pub async fn handle_callback_to_us(
             )
             .execute(&mut db_transaction.executor())
             .await?;
-            sqlx::query!(
-                "insert into fortnox_voucher_jobs (transaction_id)
-                select transactions.id
-                from transactions
-                inner join client_ids using (client_id)
-                where transactions.id = $1
-                    and transactions.provider = 'swish'
-                    and client_ids.fortnox_client_id is not null
-                on conflict (transaction_id) do nothing",
-                data.id
-            )
-            .execute(&mut db_transaction.executor())
-            .await?;
+            // sqlx::query!(
+            //     "insert into fortnox_voucher_jobs (transaction_id)
+            //     select transactions.id
+            //     from transactions
+            //     inner join client_ids using (client_id)
+            //     where transactions.id = $1
+            //         and transactions.provider = 'swish'
+            //         and client_ids.fortnox_client_id is not null
+            //     on conflict (transaction_id) do nothing",
+            //     data.id
+            // )
+            // .execute(&mut db_transaction.executor())
+            // .await?;
             db_transaction.commit().await?;
         }
         Some(swish::Status::Paid) => {

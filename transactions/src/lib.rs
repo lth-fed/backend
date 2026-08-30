@@ -20,7 +20,7 @@ use self::context::Context;
 pub mod api;
 pub mod callback;
 pub mod context;
-mod fortnox;
+// mod fortnox;
 pub mod receipt;
 pub mod runtime;
 pub mod swish;
