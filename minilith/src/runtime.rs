@@ -106,18 +106,19 @@ async fn send_ticket_release_notification(
     mut title: impl FnMut(&IS) -> serde_json::Value,
     description: serde_json::Value,
 ) -> MinilithResult<()> {
-    debug_assert!(minus_start > minus_end, "otherwise none is ever sent");
+    debug_assert!(minus_start < minus_end, "otherwise none is ever sent");
     let mut txn = ctx.db.begin().await?;
     // this makes it idempotent
-    let Some(row) = sqlx::query!(
+    let rows = sqlx::query!(
         "select kind.id, kind.name as \"name!: DIS\"
         from ticket_kinds kind
-        left outer join ticket_kind_notifications notif
-            on notif.ticket_kind_id = kind.id
-        where purchasing_available_start > (now() - $2::interval)
-        and purchasing_available_start < (now() - $3::interval)
-        and notif.id = $1
-        and notif.notification_id is null
+        where purchasing_available_start > (now() + $2::interval)
+        and purchasing_available_start < (now() + $3::interval)
+        and max_tickets > 0
+        and not exists (
+            select 1 from ticket_kind_notifications
+            where id = $1 and ticket_kind_id = kind.id
+        )
         for update of kind skip locked",
         id,
         PgInterval {
@@ -131,28 +132,28 @@ async fn send_ticket_release_notification(
             months: 0,
         },
     )
-    .fetch_optional(&mut txn.executor())
-    .await?
-    else {
-        return Ok(());
-    };
-
-    sqlx::query!(
-        r#"with notif as (
-            insert into notifications (id, title, content, send_at)
-            values (uuidv4(), $1, $2, now())
-            returning id
-        )
-        insert into ticket_kind_notifications (id, ticket_kind_id, notification_id) 
-        select $3, $4, notif.id as notification_id
-        from notif"#,
-        title(&row.name),
-        description,
-        id,
-        row.id
-    )
-    .execute(&mut txn.executor())
+    .fetch_all(&mut txn.executor())
     .await?;
+
+    for row in rows {
+        // todo: insert into activity notification with send-at key
+        sqlx::query!(
+            r#"with notif as (
+                insert into notifications (id, title, content, send_at)
+                values (uuidv4(), $1, $2, now())
+                returning id
+            )
+            insert into ticket_kind_notifications (id, ticket_kind_id, notification_id) 
+            select $3, $4, notif.id as notification_id
+            from notif"#,
+            title(&row.name),
+            description,
+            id,
+            row.id
+        )
+        .execute(&mut txn.executor())
+        .await?;
+    }
 
     txn.commit().await?;
 
@@ -345,15 +346,22 @@ pub fn spawn(ctx: &ContextWrapper) {
     let notification_ctx = Arc::clone(ctx);
     tokio::spawn(async move {
         loop {
+            // drop since MinilithEndpointError already logs & sends alert
             drop(send_ticket_release_notification(
                 &notification_ctx,
-                16,
                 14,
+                16,
                 "pre-release",
                 |title| {
                     serde_json::json!({
-                        "sv": format!("Biljetterna till {} släpps snart!", title.resolve_intl("sv", "")),
-                        "en": format!("The tickets to {} are released soon!", title.resolve_intl("en", "")),
+                        "sv": format!(
+                            "Biljetterna till {} släpps snart!",
+                            title.resolve_intl("sv", "")
+                        ),
+                        "en": format!(
+                            "The tickets to {} are released soon!",
+                            title.resolve_intl("en", "")
+                        ),
                     })
                 },
                 serde_json::json!({
@@ -364,13 +372,13 @@ pub fn spawn(ctx: &ContextWrapper) {
             drop(
                 send_ticket_release_notification(
                     &notification_ctx,
-                    1,
                     0,
+                    1,
                     "release",
                     |_| {
                         serde_json::json!({
-                            "sv": format!("Biljetterna är släppta!"),
-                            "en": format!("The tickets are released!"),
+                            "sv": "Biljetterna är släppta!",
+                            "en": "The tickets are released!",
                         })
                     },
                     serde_json::json!({
