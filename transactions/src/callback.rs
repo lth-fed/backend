@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
-use minilith_errors::{MinilithEndpointError, MinilithResult};
+use minilith_errors::{AlertLevel, MinilithEndpointError, MinilithResult, alert};
 use serde::Serialize;
-use tracing::warn;
+use tracing::{error, warn};
 use uuid::Uuid;
 
 use crate::context::Context;
@@ -74,13 +74,26 @@ pub async fn handle_callback_to_us(
     data: swish::Callback,
     validate_callback_identifier: Option<Uuid>,
 ) -> MinilithResult<()> {
-    let transaction = sqlx::query!(
+    let Some(transaction) = sqlx::query!(
         "select id, callback_identifier, callback_url_v1, client_id
         from transactions where id = $1",
         data.id
     )
-    .fetch_one(&ctx.db)
-    .await?;
+    .fetch_optional(&ctx.db)
+    .await?
+    else {
+        if data.status == Some(swish::Status::Paid) {
+            error!(
+                ?data,
+                "We don't have a transaction a callback told us they paid for!"
+            );
+            alert(
+                AlertLevel::L1,
+                "We don't have a transaction a callback told us they paid for!",
+            );
+        }
+        return Ok(());
+    };
 
     if validate_callback_identifier
         .is_some_and(|callback_identifier| callback_identifier != transaction.callback_identifier)
