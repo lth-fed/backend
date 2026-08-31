@@ -122,7 +122,7 @@ create table ticket_release_queuers (
 --     start the worker.
 -- The worker should start after the biljettsläpp if there were more people interested than there was tickets
 create table ticket_reservation_placement_tails (
-    ticket_kind_id uuid primary key references ticket_kinds(id),
+    ticket_kind_id uuid primary key references ticket_kinds(id) on delete cascade,
     placement_tail integer not null
 );
 create table ticket_reservation_queuers (

@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n                purchasing_available_start,\n                has_been_released,\n                max_tickets,\n                exists (\n                    select 1 from purchased_tickets where ticket_kind_id = $1\n                ) as \"has_buyers!\"\n            from ticket_kinds\n            where id = $1\n            for update",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "purchasing_available_start",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 1,
+        "name": "has_been_released",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 2,
+        "name": "max_tickets",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "has_buyers!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "61073e71a6be9bf9b5e6af8b09089a8684b55293228454ee4d4b0ff110155687"
+}

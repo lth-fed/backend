@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into users_in_purchase_flow (user_id, ticket_kind_id) select user_id, $2 as ticket_kind_id\n        from unnest($1::text[]) as t(user_id)\n        order by user_id",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d417c86c821bea96ab9986ff864758c2075bde90b9b5f9fea465f68c3fc9fd53"
+}

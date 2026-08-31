@@ -1739,7 +1739,8 @@ impl Router {
 
     /// Deletes a ticket kind only while it is still safe to withdraw: it must
     /// have no buyers, never have been released, and release must be more than
-    /// twenty minutes away.
+    /// twenty minutes away. Zero-capacity kinds are exempt from those checks,
+    /// allowing synthetic activity-visibility kinds to be removed.
     #[oai(path = "/ticket-kinds/:id", method = "delete")]
     async fn delete_ticket_kind(&self, user: User, Path(id): Path<Uuid>) -> MinilithResult<()> {
         check_ticket_kind_adminship(&self.db, user.get_id(), id).await?;
@@ -1748,6 +1749,7 @@ impl Router {
             r#"select
                 purchasing_available_start,
                 has_been_released,
+                max_tickets,
                 exists (
                     select 1 from purchased_tickets where ticket_kind_id = $1
                 ) as "has_buyers!"
@@ -1765,14 +1767,15 @@ impl Router {
                 "",
             ));
         }
-        if ticket.has_been_released {
+        if ticket.max_tickets != 0 && ticket.has_been_released {
             return Err(MinilithEndpointError::bad_frontend_code(
                 "cannot delete a ticket kind that has been released",
                 "",
             ));
         }
-        if ticket.purchasing_available_start
-            <= OffsetDateTime::now_utc() + time::Duration::minutes(20)
+        if ticket.max_tickets != 0
+            && ticket.purchasing_available_start
+                <= OffsetDateTime::now_utc() + time::Duration::minutes(20)
         {
             return Err(MinilithEndpointError::bad_frontend_code(
                 "cannot delete a ticket kind less than twenty minutes before release",
