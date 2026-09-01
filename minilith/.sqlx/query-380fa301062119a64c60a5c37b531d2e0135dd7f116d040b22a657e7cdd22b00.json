@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select opt.id, opt.idx, opt.name as \"name!: DIS\", opt.price,\n            bookkeeping_prices as \"bp!: Vec<i64>\", bookkeeping_price_categories,\n            add.id as add_id\n            from purchased_tickets\n            inner join ticket_kinds kind on purchased_tickets.ticket_kind_id = kind.id\n            inner join ticket_addons add on add.ticket_kind_id = kind.id \n            inner join ticket_addon_options opt on opt.ticket_addon_id = add.id\n            where purchased_tickets.owner_id = $1 or purchased_tickets.purchaser_id = $1",
+  "query": "select opt.id, opt.idx, opt.name as \"name!: DIS\", opt.price,\n        bookkeeping_prices as \"bp!: Vec<i64>\", bookkeeping_price_categories,\n        add.id as add_id\n        from purchased_tickets\n        inner join ticket_kinds kind on purchased_tickets.ticket_kind_id = kind.id\n        inner join ticket_addons add on add.ticket_kind_id = kind.id \n        inner join ticket_addon_options opt on opt.ticket_addon_id = add.id\n        where purchased_tickets.owner_id = $1 or purchased_tickets.purchaser_id = $1",
   "describe": {
     "columns": [
       {
@@ -54,5 +54,5 @@
       false
     ]
   },
-  "hash": "13fee322a462519915da55ddbdf03b329592c91b2d3bb0a1bfd08c9c3e6afb9a"
+  "hash": "380fa301062119a64c60a5c37b531d2e0135dd7f116d040b22a657e7cdd22b00"
 }

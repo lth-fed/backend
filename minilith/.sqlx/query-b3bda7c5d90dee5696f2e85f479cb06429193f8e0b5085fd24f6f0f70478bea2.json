@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select id, name as \"name: DIS\",\n            multiple_alternatives, has_text_field, required\n            from ticket_addons\n            where ticket_kind_id = $1\n            order by ticket_addons.idx",
+  "query": "select id, name as \"name: DIS\",\n        multiple_alternatives, has_text_field, required\n        from ticket_addons\n        where ticket_kind_id = $1\n        order by ticket_addons.idx",
   "describe": {
     "columns": [
       {
@@ -42,5 +42,5 @@
       false
     ]
   },
-  "hash": "feb74fafece5dc1fc02a048205a72aec5e361e39cda0a516c9aff7eeaec6413e"
+  "hash": "b3bda7c5d90dee5696f2e85f479cb06429193f8e0b5085fd24f6f0f70478bea2"
 }

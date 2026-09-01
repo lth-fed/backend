@@ -129,6 +129,7 @@ pub(crate) async fn load_ticket_kind_unchecked(
     Ok(ticket_kind)
 }
 
+/// Loads a ticket kind after verifying that the user may view its activity.
 pub(super) async fn get_ticket_kind(
     ctx: &ContextWrapper,
     user_id: &str,

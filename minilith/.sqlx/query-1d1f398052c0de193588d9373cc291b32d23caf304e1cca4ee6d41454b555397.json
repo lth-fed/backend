@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select group_id from ticket_kind_allowed_groups\n            where ticket_kind_id = $1 order by group_id",
+  "query": "select group_id from ticket_kind_transfer_groups\n        where ticket_kind_id = $1 order by group_id",
   "describe": {
     "columns": [
       {
@@ -18,5 +18,5 @@
       false
     ]
   },
-  "hash": "3ce7453430ff04c6c85dcf1af80bfd35ff63e9e727bc92a0a2028cd7ac86fb06"
+  "hash": "1d1f398052c0de193588d9373cc291b32d23caf304e1cca4ee6d41454b555397"
 }

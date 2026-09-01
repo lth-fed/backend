@@ -44,7 +44,9 @@ impl Router {
         user: User,
         Path(id): Path<Uuid>,
     ) -> MinilithResult<Json<Kind>> {
-        catalog::get_ticket_kind(self, user.get_id(), id).await.map(Json)
+        catalog::get_ticket_kind(self, user.get_id(), id)
+            .await
+            .map(Json)
     }
 
     /// Places the user in the queue for this `ticket_kind`.
