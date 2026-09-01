@@ -1,10 +1,28 @@
+use std::collections::HashMap;
+
+use fed_auth_verifier::User;
+use minilith_errors::{MinilithErrorOptionExt as _, MinilithErrorResultExt as _};
+use poem_openapi::payload::{Binary, Response};
+use uuid::Uuid;
+
+use super::models::{
+    Addon, AddonOption, AvailableAddon, Kind, PurchasedAddon, PurchasedTicket, TicketBase,
+};
+use crate::{
+    ContextWrapper, DbInternationalizedString as DIS, MinilithEndpointError, MinilithResult,
+    activities::Location, transactions,
+};
+
 /// Loads a ticket kind without checking activity access. Callers must
 /// authorize the request before returning the value to a client.
 #[allow(
     clippy::too_many_lines,
     reason = "keeps the existing ticket-kind query and mapping in one reusable loader"
 )]
-pub(crate) async fn load_ticket_kind_unchecked(&self, id: Uuid) -> MinilithResult<Kind> {
+pub(crate) async fn load_ticket_kind_unchecked(
+    ctx: &ContextWrapper,
+    id: Uuid,
+) -> MinilithResult<Kind> {
     let mut ticket_kind = sqlx::query!(
         "select
             name as \"name!: DIS\", activity_id, price,
@@ -36,7 +54,7 @@ pub(crate) async fn load_ticket_kind_unchecked(&self, id: Uuid) -> MinilithResul
         transfer_group_ids: Vec::new(),
         available_addons: Vec::new(),
     })
-    .fetch_optional(&self.db)
+    .fetch_optional(&ctx.db)
     .await?
     .wrap_err_not_found()?;
 
@@ -45,7 +63,7 @@ pub(crate) async fn load_ticket_kind_unchecked(&self, id: Uuid) -> MinilithResul
         where ticket_kind_id = $1 order by group_id"#,
         id,
     )
-    .fetch_all(&self.db)
+    .fetch_all(&ctx.db)
     .await?;
 
     ticket_kind.transfer_group_ids = sqlx::query_scalar!(
@@ -53,7 +71,7 @@ pub(crate) async fn load_ticket_kind_unchecked(&self, id: Uuid) -> MinilithResul
         where ticket_kind_id = $1 order by group_id"#,
         id,
     )
-    .fetch_all(&self.db)
+    .fetch_all(&ctx.db)
     .await?;
 
     let options: HashMap<Uuid, Vec<AddonOption>> = sqlx::query!(
@@ -80,7 +98,7 @@ pub(crate) async fn load_ticket_kind_unchecked(&self, id: Uuid) -> MinilithResul
             },
         )
     })
-    .fetch_all(&self.context.db)
+    .fetch_all(&ctx.db)
     .await?
     .into_iter()
     .fold(HashMap::new(), |mut map, (addon_id, option)| {
@@ -105,13 +123,29 @@ pub(crate) async fn load_ticket_kind_unchecked(&self, id: Uuid) -> MinilithResul
         },
         options: options.get(&row.id).cloned().unwrap_or_default(),
     })
-    .fetch_all(&self.context.db)
+    .fetch_all(&ctx.db)
     .await?;
 
     Ok(ticket_kind)
 }
 
-pub(crate) async fn my_tickets(&self, user: User) -> MinilithResult<Vec<PurchasedTicket>> {
+pub(super) async fn get_ticket_kind(
+    ctx: &ContextWrapper,
+    user_id: &str,
+    id: Uuid,
+) -> MinilithResult<Kind> {
+    let ticket_kind = load_ticket_kind_unchecked(ctx, id).await?;
+
+    ctx.test_activity_access(user_id, &ticket_kind.activity_id())
+        .await?;
+    Ok(ticket_kind)
+}
+
+#[allow(clippy::too_many_lines, reason = "linear ticket and add-on mapping")]
+pub(super) async fn my_tickets(
+    ctx: &ContextWrapper,
+    user: User,
+) -> MinilithResult<Vec<PurchasedTicket>> {
     let id = user.get_id();
 
     let available_options: HashMap<Uuid, Vec<AddonOption>> = sqlx::query!(
@@ -138,7 +172,7 @@ pub(crate) async fn my_tickets(&self, user: User) -> MinilithResult<Vec<Purchase
             },
         )
     })
-    .fetch_all(&self.db)
+    .fetch_all(&ctx.db)
     .await?
     .into_iter()
     .fold(HashMap::new(), |mut map, (addon_id, option)| {
@@ -185,7 +219,7 @@ pub(crate) async fn my_tickets(&self, user: User) -> MinilithResult<Vec<Purchase
             },
         )
     })
-    .fetch_all(&self.context.db)
+    .fetch_all(&ctx.db)
     .await?
     .into_iter()
     .fold(HashMap::new(), |mut map, (ticket_id, addon)| {
@@ -232,15 +266,15 @@ pub(crate) async fn my_tickets(&self, user: User) -> MinilithResult<Vec<Purchase
         purchased_addons: addons.remove(&ticket.id).unwrap_or_default(),
         owned_by_me: ticket.owned_by_me,
     })
-    .fetch_all(&self.context.db)
+    .fetch_all(&ctx.db)
     .await?;
 
-    Ok(Json(tickets))
+    Ok(tickets)
 }
-async fn receipt(
-    &self,
+pub(super) async fn receipt(
+    ctx: &ContextWrapper,
     auth: User,
-    Path(id): Path<Uuid>,
+    id: Uuid,
 ) -> MinilithResult<Response<Binary<poem::Body>>> {
     let Some(transaction_id) = sqlx::query_scalar!(
         "select transaction_id
@@ -250,7 +284,7 @@ async fn receipt(
         id,
         auth.get_id(),
     )
-    .fetch_optional(&self.db)
+    .fetch_optional(&ctx.db)
     .await?
     else {
         return Err(MinilithEndpointError::bad_frontend_code(
@@ -264,17 +298,17 @@ async fn receipt(
             from users where id = $1",
         auth.get_id()
     )
-    .fetch_one(&self.db)
+    .fetch_one(&ctx.db)
     .await?;
 
-    let lang = self
+    let lang = ctx
         .decrypt_string(user.language)
         .wrap_err_encryption("user.language")?;
     let receipt_lang = match lang.get(..2) {
         Some("sv") => transactions::Language::Swedish,
         _ => transactions::Language::English,
     };
-    let name = self
+    let name = ctx
         .decrypt_string(user.name)
         .wrap_err_encryption("user.name")?;
 
@@ -282,7 +316,7 @@ async fn receipt(
         language: receipt_lang,
         customer_name: name.clone(),
     };
-    let resp = self
+    let resp = ctx
         .transactions_post(format!("/v0/{transaction_id}/receipt"))
         .json(&data)
         .send()

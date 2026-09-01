@@ -25,7 +25,7 @@ use crate::group::admin::{
     check_ticket_kind_adminship, create_adminship_change,
 };
 use crate::group::{self, Group};
-use crate::ticket::{AvailableAddon, Router as TicketRouter};
+use crate::ticket::{self, AvailableAddon};
 use crate::{
     DbInternationalizedString as DIS, InternationalizedString, MinilithErrorOptionExt as _,
     MinilithResult, report, transactions,
@@ -1318,12 +1318,12 @@ impl Router {
                 .await?;
         let mut tickets = Vec::new();
         let mut kinds = HashMap::with_capacity(ticket_kinds.len());
-        let router = TicketRouter {
-            context: Arc::clone(&self.context),
-        };
         for kind in &ticket_kinds {
             tickets.extend(self.purchased_tickets(user.clone(), Path(*kind)).await?.0);
-            kinds.insert(*kind, router.load_ticket_kind_unchecked(*kind).await?);
+            kinds.insert(
+                *kind,
+                ticket::load_ticket_kind_unchecked(self, *kind).await?,
+            );
         }
         let router = ActivityRouter {
             context: Arc::clone(&self.context),
@@ -1618,20 +1618,14 @@ impl Router {
         body.transfer_group_ids.sort_unstable();
         body.transfer_group_ids.dedup();
         let existing = if existing_id.is_some() {
-            Some(
-                TicketRouter {
-                    context: Arc::clone(&self.context),
-                }
-                .load_ticket_kind_unchecked(id)
-                .await?,
-            )
+            Some(ticket::load_ticket_kind_unchecked(self, id).await?)
         } else {
             None
         };
 
         let already_reserved = existing
             .as_ref()
-            .map_or(0, crate::ticket::Kind::reserved_or_purchased_tickets);
+            .map_or(0, ticket::Kind::reserved_or_purchased_tickets);
         if body.max_tickets < already_reserved {
             return Err(MinilithEndpointError::bad_frontend_code(
                 "ticket kind max_tickets is below its reservation count",

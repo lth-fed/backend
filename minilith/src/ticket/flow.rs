@@ -1,6 +1,17 @@
+use std::ops::Deref;
+
+use bin_common::Transaction;
+use minilith_errors::{AlertLevel, MinilithErrorOptionExt as _, alert};
+use sqlx::types::time::OffsetDateTime;
+use tracing::error;
+use uuid::Uuid;
+
+use super::ensure_affected_rows;
+use crate::{ContextWrapper, MinilithEndpointError, MinilithResult};
+
 /// `user_ids` and `skip_activity_check` must be the same length. If no checks are to be done,
 /// `skip_activity_check.len()` can be 0.
-async fn reserve_user_purchase_flow(
+pub(super) async fn reserve_user_purchase_flow(
     db: &mut Transaction<'_>,
     user_ids: &[String],
     ticket_kind: Uuid,
@@ -58,7 +69,7 @@ async fn reserve_user_purchase_flow(
     Ok(())
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PurchaseFlow {
+pub(super) enum PurchaseFlow {
     ReleaseQueue,
     ReservationQueue,
     Reservation,
@@ -71,7 +82,7 @@ impl PurchaseFlow {
         clippy::too_many_lines,
         reason = "it's linear and one can fold the match arms in one's editor"
     )]
-    async fn cancel<'a>(
+    pub(super) async fn cancel<'a>(
         self,
         ctx: &'a ContextWrapper,
         user_id: &str,
@@ -197,7 +208,7 @@ impl PurchaseFlow {
 }
 
 #[derive(Debug)]
-struct PurchaseFlowWithKind {
+pub(super) struct PurchaseFlowWithKind {
     ticket_kind_id: Uuid,
     flow: PurchaseFlow,
 }
@@ -205,6 +216,11 @@ impl Deref for PurchaseFlowWithKind {
     type Target = PurchaseFlow;
     fn deref(&self) -> &Self::Target {
         &self.flow
+    }
+}
+impl PurchaseFlowWithKind {
+    pub(super) fn ticket_kind_id(&self) -> Uuid {
+        self.ticket_kind_id
     }
 }
 
@@ -299,7 +315,7 @@ async fn process_purchase_flow(
 }
 
 /// Can only be for cancel for now.
-async fn attach_operation_lock_to_flow(
+pub(super) async fn attach_operation_lock_to_flow(
     db: &mut Transaction<'_>,
     user_id: &str,
     lock_id: Uuid,
@@ -316,7 +332,7 @@ async fn attach_operation_lock_to_flow(
 }
 /// You need to call [`lock_user_purchase_flow`] directly before this or similar to validate the
 /// `lock_id`.
-async fn detach_operation_lock_to_flow(
+pub(super) async fn detach_operation_lock_to_flow(
     db: &mut Transaction<'_>,
     user_id: &str,
 ) -> MinilithResult<()> {
@@ -329,7 +345,7 @@ async fn detach_operation_lock_to_flow(
     .await?;
     Ok(())
 }
-async fn lock_user_purchase_flow(
+pub(super) async fn lock_user_purchase_flow(
     db: &mut Transaction<'_>,
     user_id: &str,
     ticket_kind: Option<Uuid>,
@@ -363,7 +379,7 @@ async fn lock_user_purchase_flow(
 
 /// Internal jobs wait for the flow lock instead of dropping a transaction
 /// callback or repeatedly selecting the same worker job.
-async fn wait_for_user_purchase_flow(
+pub(super) async fn wait_for_user_purchase_flow(
     db: &mut Transaction<'_>,
     user_id: &str,
     ticket_kind: Option<Uuid>,
@@ -390,7 +406,7 @@ async fn wait_for_user_purchase_flow(
 /// callback or repeatedly selecting the same worker job.
 ///
 /// This invalidates the current operation on this flow.
-async fn invalidate_wait_for_user_purchase_flow_on_transaction_id(
+pub(super) async fn invalidate_wait_for_user_purchase_flow_on_transaction_id(
     db: &mut Transaction<'_>,
     transaction_id: Uuid,
 ) -> MinilithResult<Option<PurchaseFlowWithKind>> {
@@ -415,7 +431,7 @@ async fn invalidate_wait_for_user_purchase_flow_on_transaction_id(
 }
 /// Internal jobs wait for the flow lock instead of dropping a transaction
 /// callback or repeatedly selecting the same worker job.
-async fn wait_for_user_purchase_flow_on_transaction_id(
+pub(super) async fn wait_for_user_purchase_flow_on_transaction_id(
     db: &mut Transaction<'_>,
     transaction_id: Uuid,
 ) -> MinilithResult<Option<PurchaseFlowWithKind>> {
@@ -437,7 +453,7 @@ async fn wait_for_user_purchase_flow_on_transaction_id(
     row.map(|row| decode_purchase_flow(row, None)).transpose()
 }
 
-async fn set_user_purchase_flow_release_queue(
+pub(super) async fn set_user_purchase_flow_release_queue(
     db: &mut Transaction<'_>,
     user_id: &str,
 ) -> MinilithResult<()> {
@@ -458,7 +474,7 @@ async fn set_user_purchase_flow_release_queue(
         "failed to initialize release-queue purchase flow",
     )
 }
-async fn set_user_purchase_flow_reservation_queue(
+pub(super) async fn set_user_purchase_flow_reservation_queue(
     db: &mut Transaction<'_>,
     user_id: &str,
 ) -> MinilithResult<()> {
@@ -479,7 +495,7 @@ async fn set_user_purchase_flow_reservation_queue(
         "failed to initialize reservation-queue purchase flow",
     )
 }
-async fn set_user_purchase_flow_reservation(
+pub(super) async fn set_user_purchase_flow_reservation(
     db: &mut Transaction<'_>,
     user_id: &str,
 ) -> MinilithResult<()> {
@@ -500,14 +516,14 @@ async fn set_user_purchase_flow_reservation(
         "failed to initialize reservation purchase flow",
     )
 }
-async fn unlist_user_purchase_flow(
+pub(super) async fn unlist_user_purchase_flow(
     db: &mut Transaction<'_>,
     user_id: impl Into<String>,
 ) -> MinilithResult<()> {
     unlist_users_purchase_flow(db, &[user_id.into()]).await
 }
 
-async fn unlist_users_purchase_flow(
+pub(super) async fn unlist_users_purchase_flow(
     db: &mut Transaction<'_>,
     user_ids: &[String],
 ) -> MinilithResult<()> {

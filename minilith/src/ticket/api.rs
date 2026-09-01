@@ -1,15 +1,22 @@
-#[derive(Debug, Clone)]
-pub struct Router {
-    pub context: ContextWrapper,
-}
+use fed_auth_verifier::User;
+use poem_openapi::{
+    OpenApi,
+    param::Path,
+    payload::{Binary, Json, Response},
+};
+use uuid::Uuid;
 
-impl Deref for Router {
-    type Target = ContextWrapper;
-
-    fn deref(&self) -> &Self::Target {
-        &self.context
-    }
-}
+use super::transfer::TransferRequest;
+use super::validation::{ValidateActivity, ValidateRequest, ValidateResponse};
+use super::{
+    Router, catalog,
+    models::{
+        BuyTicketRequest, BuyTicketResponse, Kind, PurchaseStatus, PurchasedTicket, QueueRequest,
+        QueueResponse,
+    },
+    purchase, queue, transfer, validation,
+};
+use crate::MinilithResult;
 
 #[OpenApi(prefix_path = "/tickets")]
 impl Router {
@@ -37,12 +44,7 @@ impl Router {
         user: User,
         Path(id): Path<Uuid>,
     ) -> MinilithResult<Json<Kind>> {
-        let ticket_kind = self.load_ticket_kind_unchecked(id).await?;
-
-        self.test_activity_access(user.get_id(), &ticket_kind.activity_id())
-            .await?;
-
-        Ok(Json(ticket_kind))
+        catalog::get_ticket_kind(self, user.get_id(), id).await.map(Json)
     }
 
     /// Places the user in the queue for this `ticket_kind`.
@@ -67,7 +69,7 @@ impl Router {
         user: User,
         req: Json<QueueRequest>,
     ) -> MinilithResult<Json<PurchaseStatus>> {
-        queue::queue(user, req).await
+        queue::queue(self, user, req.0).await.map(Json)
     }
     /// Get the status of the queue. If 404 & user has started transacting, this means the purchase
     /// went through!
@@ -77,7 +79,7 @@ impl Router {
     /// - 404 not found when the user is not queued (neither reservation queue nor release queue)
     #[oai(path = "/queue", method = "get")]
     async fn queue_status(&self, user: User) -> MinilithResult<Json<QueueResponse>> {
-        queue::status(self, user).await
+        queue::status(self, user).await.map(Json)
     }
     /// Cancel the reservation or drop out of queue if the user is no longer interested in buying
     /// it (e.g. realize they are broke).
@@ -115,9 +117,9 @@ impl Router {
     async fn begin_purchase(
         &self,
         user: User,
-        Json(mut body): Json<BuyTicketRequest>,
+        body: Json<BuyTicketRequest>,
     ) -> MinilithResult<Json<BuyTicketResponse>> {
-        purchase::begin(self, user, body).await.map(Json)
+        purchase::begin(self, user, body.0).await.map(Json)
     }
 
     /// You must own the ticket. The recipient must belong to one of the kind's transfer groups or
@@ -126,7 +128,7 @@ impl Router {
     /// Check these values by fetching the data of the Kind using `/v0/tickets/ticket-kind/<uuid>`
     #[oai(path = "/transfer", method = "post")]
     async fn transfer(&self, auth: User, body: Json<TransferRequest>) -> MinilithResult<()> {
-        transfer::transfer(self, auth, body).await
+        transfer::transfer(self, auth, body.0).await
     }
 
     #[oai(path = "/validate", method = "get")]
@@ -149,7 +151,7 @@ impl Router {
         auth: User,
         body: Json<ValidateRequest>,
     ) -> MinilithResult<Json<ValidateResponse>> {
-        validation::validate(auth, body.0).await.map(Json)
+        validation::validate(self, auth, body.0).await.map(Json)
     }
 
     /// `/v0/tickets/callback`

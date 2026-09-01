@@ -1,12 +1,37 @@
+use fed_auth_verifier::User;
+use minilith_errors::MinilithErrorOptionExt as _;
+use sqlx::types::time::OffsetDateTime;
 
-async fn queue(&self, user: User, req: Json<QueueRequest>) -> MinilithResult<Json<PurchaseStatus>> {
-    let mut txn = self.db.begin().await?;
+use super::{
+    access::ensure_user_may_purchase_ticket,
+    allocation::{give_reservations, new_timeout_interval, reserve_ticket_capacity},
+    ensure_affected_rows,
+    flow::{
+        PurchaseFlow, lock_user_purchase_flow, reserve_user_purchase_flow,
+        set_user_purchase_flow_release_queue, set_user_purchase_flow_reservation,
+        set_user_purchase_flow_reservation_queue, unlist_user_purchase_flow,
+        wait_for_user_purchase_flow,
+    },
+    models::{PurchaseStatus, QueueRequest, QueueResponse},
+};
+use crate::{ContextWrapper, MinilithEndpointError, MinilithResult};
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "keeps the three purchase-flow transitions and their lock order together"
+)]
+pub(super) async fn queue(
+    ctx: &ContextWrapper,
+    user: User,
+    req: QueueRequest,
+) -> MinilithResult<PurchaseStatus> {
+    let mut txn = ctx.db.begin().await?;
     ensure_user_may_purchase_ticket(&mut txn.executor(), user.get_id(), req.ticket_kind).await?;
     // TODO(frontend-hack: 25/08/2026): frontend doesn't send a DELETE to /queue so we delete it here in case the user
     // wants to queue for a different ticket kind.
     match lock_user_purchase_flow(&mut txn, user.get_id(), None, None).await {
-        Ok(flow) if flow.ticket_kind_id != req.ticket_kind => {
-            let (mut txn, ticket_kind_to_fill) = flow.cancel(self, user.get_id(), txn).await?;
+        Ok(flow) if flow.ticket_kind_id() != req.ticket_kind => {
+            let (mut txn, ticket_kind_to_fill) = flow.cancel(ctx, user.get_id(), txn).await?;
             unlist_user_purchase_flow(&mut txn, user.get_id()).await?;
 
             if let Some(ticket_kind) = ticket_kind_to_fill {
@@ -86,7 +111,7 @@ async fn queue(&self, user: User, req: Json<QueueRequest>) -> MinilithResult<Jso
             set_user_purchase_flow_reservation(&mut txn, user.get_id()).await?;
 
             txn.commit().await?;
-            return Ok(Json(PurchaseStatus::Reserved));
+            return Ok(PurchaseStatus::Reserved);
         }
 
         let affected = sqlx::query!(
@@ -114,7 +139,7 @@ async fn queue(&self, user: User, req: Json<QueueRequest>) -> MinilithResult<Jso
         )?;
         set_user_purchase_flow_reservation_queue(&mut txn, user.get_id()).await?;
         txn.commit().await?;
-        Ok(Json(PurchaseStatus::ReservationQueued))
+        Ok(PurchaseStatus::ReservationQueued)
     } else {
         let affected = sqlx::query!(
             "insert into ticket_release_queuers (user_id, ticket_kind_id, started_queueing) \
@@ -135,11 +160,11 @@ async fn queue(&self, user: User, req: Json<QueueRequest>) -> MinilithResult<Jso
         ensure_affected_rows(affected.rows_affected(), 1, "failed to enter release queue")?;
         set_user_purchase_flow_release_queue(&mut txn, user.get_id()).await?;
         txn.commit().await?;
-        Ok(Json(PurchaseStatus::ReleaseQueued))
+        Ok(PurchaseStatus::ReleaseQueued)
     }
 }
-async fn status(&self, user: User) -> MinilithResult<Json<QueueResponse>> {
-    let mut txn = self.db.begin().await?;
+pub(super) async fn status(ctx: &ContextWrapper, user: User) -> MinilithResult<QueueResponse> {
+    let mut txn = ctx.db.begin().await?;
     let flow = wait_for_user_purchase_flow(&mut txn, user.get_id(), None, None)
         .await?
         .wrap_err_not_found()?;
@@ -153,12 +178,12 @@ async fn status(&self, user: User) -> MinilithResult<Json<QueueResponse>> {
             )
             .fetch_one(&mut txn.executor())
             .await?;
-            Ok(Json(QueueResponse {
+            Ok(QueueResponse {
                 ticket_kind: reservation.ticket_kind_id,
                 placement: Some(0),
                 timeout: Some(reservation.timeout),
                 start_transaction_before: Some(reservation.timeout - 1 * time::Duration::MINUTE),
-            }))
+            })
         }
         PurchaseFlow::ReservationQueue => {
             let reservation_queue = sqlx::query!(
@@ -171,7 +196,7 @@ async fn status(&self, user: User) -> MinilithResult<Json<QueueResponse>> {
             )
             .fetch_one(&mut txn.executor())
             .await?;
-            Ok(Json(QueueResponse {
+            Ok(QueueResponse {
                 ticket_kind: reservation_queue.ticket_kind_id,
                 placement: Some(
                     (reservation_queue.placement - reservation_queue.reserved_or_purchased_tickets)
@@ -179,7 +204,7 @@ async fn status(&self, user: User) -> MinilithResult<Json<QueueResponse>> {
                 ),
                 timeout: None,
                 start_transaction_before: None,
-            }))
+            })
         }
         PurchaseFlow::ReleaseQueue => {
             let queuer = sqlx::query_scalar!(
@@ -188,19 +213,19 @@ async fn status(&self, user: User) -> MinilithResult<Json<QueueResponse>> {
             )
             .fetch_one(&mut txn.executor())
             .await?;
-            Ok(Json(QueueResponse {
+            Ok(QueueResponse {
                 ticket_kind: queuer,
                 placement: None,
                 timeout: None,
                 start_transaction_before: None,
-            }))
+            })
         }
     }
 }
-async fn drop_transaction_flow(&self, user: User) -> MinilithResult<()> {
-    let mut txn = self.db.begin().await?;
+pub(super) async fn drop_transaction_flow(ctx: &ContextWrapper, user: User) -> MinilithResult<()> {
+    let mut txn = ctx.db.begin().await?;
     let flow = lock_user_purchase_flow(&mut txn, user.get_id(), None, None).await?;
-    let (mut txn, ticket_kind_to_fill) = flow.cancel(self, user.get_id(), txn).await?;
+    let (mut txn, ticket_kind_to_fill) = flow.cancel(ctx, user.get_id(), txn).await?;
     unlist_user_purchase_flow(&mut txn, user.get_id()).await?;
 
     if let Some(ticket_kind) = ticket_kind_to_fill {

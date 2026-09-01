@@ -1,7 +1,20 @@
+use std::ops::ControlFlow;
+
+use bin_common::{PgPool, Transaction};
+use rand::random;
+use sqlx::postgres::types::PgInterval;
+use uuid::Uuid;
+
+use super::{
+    ensure_affected_rows,
+    flow::{unlist_user_purchase_flow, unlist_users_purchase_flow},
+};
+use crate::MinilithResult;
+
 /// # Panics
 ///
 /// Never.
-fn new_timeout_interval() -> PgInterval {
+pub(super) fn new_timeout_interval() -> PgInterval {
     let minute_in_microseconds = 1_000_000_f64 * 60_f64;
     #[allow(
         clippy::cast_possible_truncation,
@@ -18,7 +31,7 @@ fn new_timeout_interval() -> PgInterval {
 /// ticket-kind and activity-wide limits. Locking the activity row serializes
 /// reservations made concurrently for different ticket kinds of the same
 /// activity.
-async fn reserve_ticket_capacity(
+pub(super) async fn reserve_ticket_capacity(
     db: &mut Transaction<'_>,
     ticket_kind: Uuid,
     requested: i32,
@@ -90,7 +103,7 @@ async fn reserve_ticket_capacity(
 /// # Errors
 ///
 /// Failures from cancelling transactions.
-pub async fn remove_reservation(db: &PgPool) -> MinilithResult<ControlFlow<()>> {
+pub(super) async fn remove_reservation(db: &PgPool) -> MinilithResult<ControlFlow<()>> {
     let mut txn = db.begin().await?;
     // Lock the flow first; child reservation rows are always locked second.
     let removed_reservation = sqlx::query!(
@@ -150,7 +163,7 @@ pub async fn remove_reservation(db: &PgPool) -> MinilithResult<ControlFlow<()>> 
 /// # Errors
 ///
 /// None:) only db.
-pub async fn give_reservations(
+pub(super) async fn give_reservations(
     ticket_kind: Uuid,
     fetch_n: i32,
     db: &mut Transaction<'_>,
@@ -239,7 +252,7 @@ pub async fn give_reservations(
     )
 }
 
-async fn give_reservations_in_new_transaction(
+pub(super) async fn give_reservations_in_new_transaction(
     db: &PgPool,
     ticket_kind: Uuid,
     fetch_n: i32,
@@ -251,7 +264,7 @@ async fn give_reservations_in_new_transaction(
 }
 /// Clear reservation queue when there are no more tickets.
 /// We use `purchased_tickets` since they never decrease so the lock on it doesn't matter!
-async fn remove_queuers_when_sold_out(db: &mut Transaction<'_>) -> MinilithResult<()> {
+pub(super) async fn remove_queuers_when_sold_out(db: &mut Transaction<'_>) -> MinilithResult<()> {
     let queuers = sqlx::query_scalar!(
         r#"select flow.user_id
         from users_in_purchase_flow flow

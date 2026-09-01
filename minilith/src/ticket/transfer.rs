@@ -1,10 +1,27 @@
+use fed_auth_verifier::User;
+use minilith_errors::MinilithErrorOptionExt as _;
+use poem_openapi::Object;
+use sqlx::types::time::OffsetDateTime;
+use uuid::Uuid;
+
+use super::{
+    access::ensure_user_may_receive_transferred_ticket,
+    ensure_affected_rows,
+    flow::{reserve_user_purchase_flow, unlist_user_purchase_flow},
+};
+use crate::{ContextWrapper, MinilithEndpointError, MinilithResult};
+
 #[derive(Object)]
-struct TransferRequest {
+pub(super) struct TransferRequest {
     purchased_ticket_id: Uuid,
     to_user: String,
 }
 
-async fn transfer(&self, auth: User, body: Json<TransferRequest>) -> MinilithResult<()> {
+pub(super) async fn transfer(
+    ctx: &ContextWrapper,
+    auth: User,
+    body: TransferRequest,
+) -> MinilithResult<()> {
     let to_user = if body.to_user.contains(':') {
         body.to_user.clone()
     } else {
@@ -14,7 +31,7 @@ async fn transfer(&self, auth: User, body: Json<TransferRequest>) -> MinilithRes
             body.to_user
         )
     };
-    let mut txn = self.db.begin().await?;
+    let mut txn = ctx.db.begin().await?;
     if !sqlx::query_scalar!(
         "select exists (select 1 from users where id = $1) as \"exists!\"",
         to_user

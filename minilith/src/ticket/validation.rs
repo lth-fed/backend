@@ -1,5 +1,18 @@
+use std::collections::HashMap;
+
+use fed_auth_verifier::User;
+use minilith_errors::MinilithErrorOptionExt as _;
+use poem_openapi::Object;
+use sqlx::types::time::OffsetDateTime;
+use uuid::Uuid;
+
+use super::models::{Addon, AddonOption, PurchasedAddon};
+use crate::{
+    ContextWrapper, DbInternationalizedString as DIS, InternationalizedString as IS, MinilithResult,
+};
+
 #[derive(Object)]
-struct ValidateActivity {
+pub(super) struct ValidateActivity {
     id: Uuid,
     title: IS,
     description: IS,
@@ -11,16 +24,16 @@ struct ValidateActivity {
 /// The frontend has to encode / decode the QR with both these datapoints, maybe through
 /// `<id>.<time>` or JSON.
 #[derive(Object)]
-struct ValidateRequest {
+pub(super) struct ValidateRequest {
     purchased_ticket_id: Uuid,
     created_at: OffsetDateTime,
 }
 #[derive(Object)]
-struct Validation {
+pub(super) struct Validation {
     at: OffsetDateTime,
 }
 #[derive(Object)]
-struct ValidateResponse {
+pub(super) struct ValidateResponse {
     verified: bool,
     ticket_kind_name: IS,
     owner_id: Option<String>,
@@ -45,7 +58,10 @@ impl ValidateResponse {
     }
 }
 
-async fn validatable_activities(&self, auth: User) -> MinilithResult<Vec<ValidateActivity>> {
+pub(super) async fn validatable_activities(
+    ctx: &ContextWrapper,
+    auth: User,
+) -> MinilithResult<Vec<ValidateActivity>> {
     sqlx::query!(
         "select title as \"title!: DIS\", description as \"description!: DIS\",
             a.id, url, time_start, time_end
@@ -64,19 +80,26 @@ async fn validatable_activities(&self, auth: User) -> MinilithResult<Vec<Validat
         time_end: row.time_end,
         image_url: row.url,
     })
-    .fetch_all(&self.db)
+    .fetch_all(&ctx.db)
     .await
     .map_err(Into::into)
-    .map(Json)
 }
-async fn validate(&self, auth: User, body: ValidateRequest) -> MinilithResult<ValidateResponse> {
+#[allow(
+    clippy::too_many_lines,
+    reason = "linear validation and response mapping"
+)]
+pub(super) async fn validate(
+    ctx: &ContextWrapper,
+    auth: User,
+    body: ValidateRequest,
+) -> MinilithResult<ValidateResponse> {
     let now = OffsetDateTime::now_utc();
     // TODO(frontend-hack: 25/08/2026): some people are insane and don't have accurate time on their phone, so we have to
     // increase leeway before we implement server side time adjustment
     let leeway = 5 * time::Duration::MINUTE;
     if body.created_at < now.saturating_sub(leeway) || body.created_at > now.saturating_add(leeway)
     {
-        return Ok(Json(ValidateResponse::not_valid()));
+        return Ok(ValidateResponse::not_valid());
     }
     let Some(row) = sqlx::query!(
         "select owner_id, purchaser_id, owner.name as oname, purchaser.name as pname,
@@ -91,17 +114,17 @@ async fn validate(&self, auth: User, body: ValidateRequest) -> MinilithResult<Va
         body.purchased_ticket_id,
         auth.get_id()
     )
-    .fetch_optional(&self.db)
+    .fetch_optional(&ctx.db)
     .await?
     else {
-        return Ok(Json(ValidateResponse::not_valid()));
+        return Ok(ValidateResponse::not_valid());
     };
     let previous_verifications = sqlx::query!(
         "select timestamp from purchased_ticket_validations where purchased_ticket_id = $1",
         body.purchased_ticket_id
     )
     .map(|row| Validation { at: row.timestamp })
-    .fetch_all(&self.db)
+    .fetch_all(&ctx.db)
     .await?;
     let mut available_options: HashMap<Uuid, Vec<AddonOption>> = sqlx::query!(
         "select opt.id, opt.idx, opt.name as \"name!: DIS\", opt.price,
@@ -126,7 +149,7 @@ async fn validate(&self, auth: User, body: ValidateRequest) -> MinilithResult<Va
             },
         )
     })
-    .fetch_all(&self.db)
+    .fetch_all(&ctx.db)
     .await?
     .into_iter()
     .fold(HashMap::new(), |mut map, (addon_id, option)| {
@@ -163,7 +186,7 @@ async fn validate(&self, auth: User, body: ValidateRequest) -> MinilithResult<Va
         selected_text: row.selected_text,
         options: available_options.remove(&row.addon_id).unwrap_or_default(),
     })
-    .fetch_all(&self.context.db)
+    .fetch_all(&ctx.db)
     .await?;
     sqlx::query!(
         "insert into purchased_ticket_validations (id, purchased_ticket_id)
@@ -171,22 +194,22 @@ async fn validate(&self, auth: User, body: ValidateRequest) -> MinilithResult<Va
         Uuid::new_v4(),
         body.purchased_ticket_id
     )
-    .execute(&self.db)
+    .execute(&ctx.db)
     .await?;
-    Ok(Json(ValidateResponse {
+    Ok(ValidateResponse {
         verified: true,
         ticket_kind_name: row.ticket_kind_name.0,
         has_been_transfered: row.owner_id != row.purchaser_id,
         owner_id: Some(row.owner_id),
         owner_name: Some(
-            self.decrypt_string(row.oname)
+            ctx.decrypt_string(row.oname)
                 .wrap_err_encryption("validate name")?,
         ),
         purchaser_name: Some(
-            self.decrypt_string(row.pname)
+            ctx.decrypt_string(row.pname)
                 .wrap_err_encryption("validate purchaser name")?,
         ),
         previous_verifications,
         purchased_addons,
-    }))
+    })
 }

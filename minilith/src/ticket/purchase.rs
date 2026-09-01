@@ -1,8 +1,34 @@
+use bin_common::Transaction;
+use fed_auth_verifier::{User, callbacks::TransactionState};
+use minilith_errors::{
+    AlertLevel, MinilithErrorOptionExt as _, MinilithErrorResultExt as _, alert,
+};
+use tracing::error;
+use uuid::Uuid;
 
-async fn begin(
-    &self,
+use super::{
+    allocation::give_reservations_in_new_transaction,
+    flow::{
+        PurchaseFlow, attach_operation_lock_to_flow, detach_operation_lock_to_flow,
+        invalidate_wait_for_user_purchase_flow_on_transaction_id, lock_user_purchase_flow,
+        unlist_user_purchase_flow, wait_for_user_purchase_flow,
+        wait_for_user_purchase_flow_on_transaction_id,
+    },
+    models::{BoughtAddon, BuyTicketRequest, BuyTicketResponse, PurchaseProvider},
+};
+use crate::{
+    ContextWrapper, DbInternationalizedString as DIS, MinilithEndpointError, MinilithResult,
+    transactions,
+};
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "keeps the purchase transaction and external-payment sequence visible"
+)]
+pub(super) async fn begin(
+    ctx: &ContextWrapper,
     user: User,
-    Json(mut body): Json<BuyTicketRequest>,
+    mut body: BuyTicketRequest,
 ) -> MinilithResult<BuyTicketResponse> {
     if body.provider == PurchaseProvider::Stripe && body.stripe_success_url.is_none() {
         return Err(MinilithEndpointError::bad_frontend_code(
@@ -14,7 +40,7 @@ async fn begin(
     // ========
     // Get UUID (first, so we don't hog a DB connection)
     // ========
-    let transaction_id: Uuid = self
+    let transaction_id: Uuid = ctx
         .transactions_post("/v0/init")
         .send()
         .await
@@ -25,7 +51,7 @@ async fn begin(
         .await
         .wrap_err_internal("l1: init bad type")?;
 
-    let mut txn = self.db.begin().await?;
+    let mut txn = ctx.db.begin().await?;
     let chosen_options = validate_addons(&mut txn, &mut body.addons, body.ticket_kind).await?;
 
     // this is here so nobody else tries to mess with our reservation while we are assigning it
@@ -58,11 +84,11 @@ async fn begin(
         // drop transaction before we start the cancel
         txn.commit().await?;
 
-        let resp = self
+        let resp = ctx
             .transactions_post(format!("/v0/{txn_id}/cancel"))
             .send()
             .await;
-        txn = self.db.begin().await?;
+        txn = ctx.db.begin().await?;
         wait_for_user_purchase_flow(
             &mut txn,
             user.get_id(),
@@ -145,7 +171,7 @@ async fn begin(
     let lang = sqlx::query_scalar!("select language from users where id = $1", user.get_id())
         .fetch_one(&mut txn.executor())
         .await?;
-    let lang = self
+    let lang = ctx
         .decrypt_string(lang)
         .wrap_err_encryption("failed to decrypt user language")?;
 
@@ -257,7 +283,7 @@ async fn begin(
         PurchaseProvider::Swish => "/v0/swish",
         PurchaseProvider::Stripe => "/v0/stripe",
     };
-    let resp = match self.transactions_post(url).json(&payment_req).send().await {
+    let resp = match ctx.transactions_post(url).json(&payment_req).send().await {
         Ok(resp) => resp,
         Err(err) => {
             return Err(MinilithEndpointError::internal_error(
@@ -303,18 +329,18 @@ async fn begin(
         }
     };
 
-    Ok(Json(response))
+    Ok(response)
 }
 
-pub async fn callback(
-    &self,
+pub(super) async fn callback(
+    ctx: &ContextWrapper,
     events: fed_auth_verifier::callbacks::TransactionsCallbackDataV1,
 ) -> MinilithResult<()> {
     for data in &*events {
         match data.inner.state {
             TransactionState::Pending => {}
             TransactionState::Paid => {
-                let mut txn = self.db.begin().await?;
+                let mut txn = ctx.db.begin().await?;
                 if pay_for_reservation(&mut txn, data.transaction_id)
                     .await?
                     .is_some()
@@ -330,7 +356,7 @@ pub async fn callback(
                         where transaction_id = $1",
                     data.transaction_id
                 )
-                .execute(&self.db)
+                .execute(&ctx.db)
                 .await?;
                 if affected.rows_affected() != 1 {
                     alert(AlertLevel::L1, "1 row not affected when purchase refunded!");
@@ -340,7 +366,7 @@ pub async fn callback(
                 }
             }
             TransactionState::Cancelled => {
-                let mut txn = self.db.begin().await?;
+                let mut txn = ctx.db.begin().await?;
                 // if a cancel operation is locking the row, we ignore that and cancel it either
                 // way
                 let Some(flow) =
@@ -390,7 +416,7 @@ pub async fn callback(
                 txn.commit().await?;
                 if row.has_timed_out {
                     drop(
-                        give_reservations_in_new_transaction(&self.db, row.ticket_kind_id, 1).await,
+                        give_reservations_in_new_transaction(&ctx.db, row.ticket_kind_id, 1).await,
                     );
                 }
             }

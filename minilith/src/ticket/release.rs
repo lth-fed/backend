@@ -1,3 +1,24 @@
+use std::{collections::HashMap, ops::ControlFlow};
+
+use bin_common::{PgPool, Transaction};
+use rand::{rng, seq::SliceRandom as _};
+use sqlx::postgres::types::PgInterval;
+use uuid::Uuid;
+
+use super::{
+    allocation::{
+        give_reservations, new_timeout_interval, remove_queuers_when_sold_out, remove_reservation,
+        reserve_ticket_capacity,
+    },
+    ensure_affected_rows,
+    flow::{PurchaseFlow, unlist_users_purchase_flow, wait_for_user_purchase_flow},
+};
+use crate::{
+    ContextWrapper, InternationalizedString as IS, MinilithEndpointError, MinilithResult,
+    push_notifications::{NotificationRow, PushDeviceRow},
+    runtime::send_notifications,
+};
+
 async fn release_next_ticket(ctx: &ContextWrapper) -> MinilithResult<ControlFlow<()>> {
     // Commit the claim before acquiring flow locks. If the process dies
     // after this, the misplaced-queuer pass completes the release.
@@ -39,7 +60,7 @@ async fn release_next_ticket(ctx: &ContextWrapper) -> MinilithResult<ControlFlow
     clippy::too_many_lines,
     reason = "keeps the bulk flow lock and both state transitions in execution order"
 )]
-pub async fn release(
+pub(super) async fn release(
     ctx: Option<&ContextWrapper>,
     mut db: Transaction<'_>,
     id: Uuid,
@@ -271,7 +292,7 @@ async fn remove_reservation_tails(db: &PgPool) -> MinilithResult<()> {
     .await?;
     Ok(())
 }
-async fn remove_expired_release_queuers(db: &mut Transaction<'_>) -> MinilithResult<()> {
+pub(super) async fn remove_expired_release_queuers(db: &mut Transaction<'_>) -> MinilithResult<()> {
     let user_ids = sqlx::query_scalar!(
         "select flow.user_id
         from users_in_purchase_flow flow
@@ -310,7 +331,7 @@ async fn remove_expired_release_queuers(db: &mut Transaction<'_>) -> MinilithRes
 /// # Errors
 ///
 /// Db. See [`release`].
-pub async fn check_all_tickets(ctx: &ContextWrapper) -> MinilithResult<()> {
+pub(crate) async fn check_all_tickets(ctx: &ContextWrapper) -> MinilithResult<()> {
     // release tickets
     loop {
         if release_next_ticket(ctx).await?.is_break() {
@@ -394,7 +415,7 @@ pub async fn check_all_tickets(ctx: &ContextWrapper) -> MinilithResult<()> {
 /// # Errors
 ///
 /// DB.
-pub async fn update_misplaced_queuer(
+pub(super) async fn update_misplaced_queuer(
     user_id: &str,
     ticket_kind: Uuid,
     db: &mut Transaction<'_>,

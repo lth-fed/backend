@@ -1,17 +1,14 @@
-fn ensure_affected_rows(
-    affected: u64,
-    expected: usize,
-    operation: &'static str,
-) -> MinilithResult<()> {
-    if usize::try_from(affected).ok() == Some(expected) {
-        Ok(())
-    } else {
-        Err(MinilithEndpointError::internal_error(
-            operation,
-            format!("expected {expected} affected rows, got {affected}"),
-        ))
-    }
-}
+#![allow(
+    clippy::field_scoped_visibility_modifiers,
+    reason = "API DTOs are constructed by sibling ticket modules"
+)]
+
+use poem_openapi::{Enum, Object};
+use sqlx::types::time::OffsetDateTime;
+use uuid::Uuid;
+
+use crate::InternationalizedString as IS;
+use crate::activities::PoemLocation;
 
 #[derive(Debug, Clone, Copy, Enum, PartialEq, Eq)]
 #[oai(rename_all = "lowercase")]
@@ -22,54 +19,45 @@ pub enum PurchaseProvider {
 }
 #[derive(Debug, Clone, Object)]
 pub struct BoughtAddon {
-    id: Uuid,
-    selected_text: Option<String>,
-    selected_options: Option<Vec<i32>>,
+    pub(super) id: Uuid,
+    pub(super) selected_text: Option<String>,
+    pub(super) selected_options: Option<Vec<i32>>,
 }
 #[derive(Debug, Clone, Object)]
 pub struct BuyTicketRequest {
-    ticket_kind: Uuid,
+    pub(super) ticket_kind: Uuid,
     /// Doesn't matter for free tickets.
-    provider: PurchaseProvider,
-    addons: Vec<BoughtAddon>,
+    pub(super) provider: PurchaseProvider,
+    pub(super) addons: Vec<BoughtAddon>,
     /// Required for stripe.
-    stripe_success_url: Option<String>,
+    pub(super) stripe_success_url: Option<String>,
 }
 #[derive(Debug, Clone, Object)]
 pub struct BuyTicketResponse {
     /// Not null when using [`PurchaseProvider::Swish`].
-    payment_request_token: Option<String>,
+    pub(super) payment_request_token: Option<String>,
     /// Not null when using [`PurchaseProvider::Stripe`].
     /// Open this in a new browser context.
     /// Close that context when [`BuyTicketRequest::stripe_success_url`] is reached.
-    stripe_url: Option<String>,
+    pub(super) stripe_url: Option<String>,
 }
 #[derive(Debug, Clone, Copy, Object)]
 pub struct QueueRequest {
-    ticket_kind: Uuid,
-}
-#[derive(Debug, Clone, Copy, Object)]
-pub struct UnqueueRequest {
-    ticket_kind: Uuid,
+    pub(super) ticket_kind: Uuid,
 }
 #[derive(Debug, Clone, Copy, Object)]
 pub struct QueueResponse {
-    ticket_kind: Uuid,
+    pub(super) ticket_kind: Uuid,
     /// A placement of 0 indicates you can buy the ticket.
     /// `None` indicates the tickets have not yet been released.
-    placement: Option<i32>,
+    pub(super) placement: Option<i32>,
     /// When the ticket will be made unavailable for purchase, i.e. the reservation ran out.
     /// Will be not null when placement is 0.
-    timeout: Option<OffsetDateTime>,
+    pub(super) timeout: Option<OffsetDateTime>,
     /// When transactions at latest should be conducted.
     /// Will be not null when placement is 0.
-    start_transaction_before: Option<OffsetDateTime>,
+    pub(super) start_transaction_before: Option<OffsetDateTime>,
 }
-#[derive(Debug, Clone, Copy, Object)]
-pub struct PurchaseStatusRequest {
-    activity: Uuid,
-}
-
 #[derive(Debug, Clone, Copy, Enum)]
 pub enum PurchaseStatus {
     /// Standing in release queue (tickets have not been released yet).
@@ -86,12 +74,6 @@ pub enum PurchaseStatus {
     /// User owns the ticket now.
     Purchased,
 }
-#[derive(Debug, Clone, Copy, Object)]
-pub struct PurchaseStatusResponse {
-    ticket_kind: Option<Uuid>,
-    status: PurchaseStatus,
-}
-
 #[derive(Object, Debug)]
 pub struct Addon {
     pub id: Uuid,
@@ -135,20 +117,20 @@ pub struct TicketBase {
     pub activity_id: Uuid,
 }
 #[derive(Object, Debug)]
-struct PurchasedTicket {
+pub(super) struct PurchasedTicket {
     #[oai(flatten)]
-    inner: TicketBase,
-    id: Uuid,
-    activity_location: PoemLocation,
-    activity_title: IS,
-    creator_id: Uuid,
-    creator_path: String,
-    creator_name: IS,
-    time_start: OffsetDateTime,
-    time_end: OffsetDateTime,
-    purchased_addons: Vec<PurchasedAddon>,
+    pub(super) inner: TicketBase,
+    pub(super) id: Uuid,
+    pub(super) activity_location: PoemLocation,
+    pub(super) activity_title: IS,
+    pub(super) creator_id: Uuid,
+    pub(super) creator_path: String,
+    pub(super) creator_name: IS,
+    pub(super) time_start: OffsetDateTime,
+    pub(super) time_end: OffsetDateTime,
+    pub(super) purchased_addons: Vec<PurchasedAddon>,
     /// False if we have transferred it.
-    owned_by_me: bool,
+    pub(super) owned_by_me: bool,
 }
 #[derive(Object, Debug)]
 pub struct Kind {

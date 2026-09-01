@@ -1,3 +1,8 @@
+use sqlx::PgExecutor;
+use uuid::Uuid;
+
+use crate::{MinilithEndpointError, MinilithResult};
+
 /// Ensure that the user may purchase a ticket of the specified `ticket_kind`
 /// with regard to their group memberships.
 ///
@@ -9,7 +14,7 @@
 ///
 /// Returns 403 if the user is not allowed to purchase, or an internal error if
 /// the database query fails.
-async fn ensure_user_may_purchase_ticket(
+pub(super) async fn ensure_user_may_purchase_ticket(
     db: impl PgExecutor<'_>,
     user_id: &str,
     ticket_kind: Uuid,
@@ -52,7 +57,7 @@ async fn ensure_user_may_purchase_ticket(
 
 /// Transfer groups include all descendant groups in the path tree. An empty
 /// transfer-group set therefore permits no recipient.
-async fn ensure_user_may_receive_transferred_ticket(
+pub(super) async fn ensure_user_may_receive_transferred_ticket(
     db: impl PgExecutor<'_>,
     user_id: &str,
     ticket_kind: Uuid,
