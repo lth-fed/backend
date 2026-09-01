@@ -60,46 +60,21 @@
       },
       {
         "ordinal": 11,
-        "name": "fortnox_bank_account",
-        "type_info": "Int4"
-      },
-      {
-        "ordinal": 12,
-        "name": "fortnox_client_id",
-        "type_info": "Text"
-      },
-      {
-        "ordinal": 13,
-        "name": "fortnox_client_secret",
-        "type_info": "Text"
-      },
-      {
-        "ordinal": 14,
-        "name": "fortnox_tenant_id",
-        "type_info": "Text"
-      },
-      {
-        "ordinal": 15,
-        "name": "fortnox_voucher_series",
-        "type_info": "Text"
-      },
-      {
-        "ordinal": 16,
         "name": "swish_payment_fee_fixed",
         "type_info": "Money"
       },
       {
-        "ordinal": 17,
+        "ordinal": 12,
         "name": "swish_payment_fee_fraction",
         "type_info": "Float8"
       },
       {
-        "ordinal": 18,
+        "ordinal": 13,
         "name": "swish_payment_fee_max",
         "type_info": "Money"
       },
       {
-        "ordinal": 19,
+        "ordinal": 14,
         "name": "swish_refund_fee",
         "type_info": "Money"
       }
@@ -120,11 +95,6 @@
       false,
       false,
       false,
-      true,
-      true,
-      true,
-      true,
-      true,
       true,
       false,
       false,

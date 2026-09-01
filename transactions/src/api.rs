@@ -794,7 +794,8 @@ impl Route {
         };
 
         let client_id = sqlx::query!(
-            "select * from client_ids where client_id = $1",
+            "select name, organization_number, email, address, svg_icon
+            from client_ids where client_id = $1",
             transaction.client_id
         )
         .fetch_one(&self.db)
