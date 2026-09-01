@@ -20,6 +20,8 @@ use tracing::error;
 use uuid::Uuid;
 
 use crate::activities::{Location, PoemLocation};
+use crate::push_notifications::{NotificationRow, PushDeviceRow};
+use crate::runtime::send_notifications;
 use crate::{
     ContextWrapper, DbInternationalizedString as DIS, InternationalizedString as IS,
     MinilithEndpointError, MinilithResult, transactions,
@@ -2207,7 +2209,7 @@ async fn reserve_ticket_capacity(
     Ok(granted)
 }
 
-async fn release_next_ticket(db: &PgPool) -> MinilithResult<ControlFlow<()>> {
+async fn release_next_ticket(ctx: &ContextWrapper) -> MinilithResult<ControlFlow<()>> {
     // Commit the claim before acquiring flow locks. If the process dies
     // after this, the misplaced-queuer pass completes the release.
     let ticket_kind = sqlx::query_scalar!(
@@ -2226,12 +2228,11 @@ async fn release_next_ticket(db: &PgPool) -> MinilithResult<ControlFlow<()>> {
         where kind.id = next.id
         returning kind.id"
     )
-    .fetch_optional(db)
+    .fetch_optional(&ctx.db)
     .await?;
     if let Some(ticket_kind) = ticket_kind {
-        let mut release_txn = db.begin().await?;
-        release(&mut release_txn, ticket_kind).await?;
-        release_txn.commit().await?;
+        let release_txn = ctx.db.begin().await?;
+        release(Some(ctx), release_txn, ticket_kind).await?;
         Ok(ControlFlow::Continue(()))
     } else {
         // there may in certain circumstances be "jobs" left, but they will be taken care of
@@ -2260,7 +2261,11 @@ async fn remove_reservation_tails(db: &PgPool) -> MinilithResult<()> {
     clippy::too_many_lines,
     reason = "keeps the bulk flow lock and both state transitions in execution order"
 )]
-pub async fn release(db: &mut Transaction<'_>, id: Uuid) -> MinilithResult<()> {
+pub async fn release(
+    ctx: Option<&ContextWrapper>,
+    mut db: Transaction<'_>,
+    id: Uuid,
+) -> MinilithResult<()> {
     let ticket_kind = sqlx::query!(
         "select *
         from ticket_kinds 
@@ -2297,7 +2302,7 @@ pub async fn release(db: &mut Transaction<'_>, id: Uuid) -> MinilithResult<()> {
     let requested = (ticket_kind.max_tickets - ticket_kind.reserved_or_purchased_tickets)
         .min(queuers.len() as i32)
         .max(0);
-    let granted = reserve_ticket_capacity(db, id, requested).await?;
+    let granted = reserve_ticket_capacity(&mut db, id, requested).await?;
     #[allow(
         clippy::cast_sign_loss,
         reason = "i goddamn hope not granted will be negative"
@@ -2387,6 +2392,93 @@ pub async fn release(db: &mut Transaction<'_>, id: Uuid) -> MinilithResult<()> {
     .execute(&mut db.executor())
     .await?;
 
+    let reservation_devices = sqlx::query_as!(
+        PushDeviceRow,
+        "select user_id, device_id, push_token, language,
+        platform as \"platform!: crate::push_notifications::PushPlatform\"
+        from users
+        join push_devices on push_devices.user_id = users.id
+        where users.id = any($1)",
+        &reservations
+    )
+    .fetch_all(&mut db.executor())
+    .await?;
+    let reservation_queue_devices = sqlx::query_as!(
+        PushDeviceRow,
+        "select user_id, device_id, push_token, language,
+        platform as \"platform!: crate::push_notifications::PushPlatform\"
+        from users
+        join push_devices on push_devices.user_id = users.id
+        where users.id = any($1)",
+        &reservation_queuers
+    )
+    .fetch_all(&mut db.executor())
+    .await?;
+    db.commit().await?;
+    let Some(ctx) = ctx else {
+        return Ok(());
+    };
+    let notification = NotificationRow {
+        id,
+        title: IS(HashMap::from_iter([
+            ("sv".to_owned(), "Gå in och köp biljetten!".to_owned()),
+            (
+                "en".to_owned(),
+                "Open the app to buy your ticket!".to_owned(),
+            ),
+        ]))
+        .into(),
+        content: IS(HashMap::from_iter([(
+            "sv".to_owned(),
+            "Du fick en reservation. Köp biljetten snart, annars får någon annan din reservation."
+                .to_owned(),
+        ),
+            (
+                "en".to_owned(),
+                "You got a reservation. Buy the ticket soon, else someone else will get your reservation.".to_owned(),
+            ),
+        ]))
+        .into(),
+    };
+    // errors are logged & alerted when creating MinilithEndpointError
+    let removed1 = send_notifications(ctx, &notification, reservation_devices).await;
+    let notification = NotificationRow {
+        id,
+        title: IS(HashMap::from_iter([
+            ("sv".to_owned(), "Se din plats i kön".to_owned()),
+            (
+                "en".to_owned(),
+                "Tap to view your reservation placement".to_owned(),
+            ),
+        ]))
+        .into(),
+        content: IS(HashMap::from_iter([
+            (
+                "sv".to_owned(),
+                "Du har en plats i kön till reservationer, \
+                så om någon avbryter sitt köp får du reservationen."
+                    .to_owned(),
+            ),
+            (
+                "en".to_owned(),
+                "You have a spot in the queue to reservations. \
+                If someone cancels their payment, you get a reservation."
+                    .to_owned(),
+            ),
+        ]))
+        .into(),
+    };
+    let removed2 = send_notifications(ctx, &notification, reservation_queue_devices).await;
+
+    let mut txn = ctx.db.begin().await?;
+    if let Ok(removed) = removed1 {
+        removed.clear_failed(&mut txn).await?;
+    }
+    if let Ok(removed) = removed2 {
+        removed.clear_failed(&mut txn).await?;
+    }
+    txn.commit().await?;
+
     Ok(())
 }
 
@@ -2429,23 +2521,23 @@ async fn remove_expired_release_queuers(db: &mut Transaction<'_>) -> MinilithRes
 /// # Errors
 ///
 /// Db. See [`release`].
-pub async fn check_all_tickets(db: &PgPool) -> MinilithResult<()> {
+pub async fn check_all_tickets(ctx: &ContextWrapper) -> MinilithResult<()> {
     // release tickets
     loop {
-        if release_next_ticket(db).await?.is_break() {
+        if release_next_ticket(ctx).await?.is_break() {
             break;
         }
     }
-    remove_reservation_tails(db).await?;
+    remove_reservation_tails(&ctx.db).await?;
 
     // Also removes people's queue positions after 20 minutes.
-    let mut txn = db.begin().await?;
+    let mut txn = ctx.db.begin().await?;
     remove_expired_release_queuers(&mut txn).await?;
     txn.commit().await?;
 
     // missplaced
     loop {
-        let mut txn = db.begin().await?;
+        let mut txn = ctx.db.begin().await?;
         // take one release job
         // this works concurrently too!
         let ticket_kind = sqlx::query!(
@@ -2474,7 +2566,7 @@ pub async fn check_all_tickets(db: &PgPool) -> MinilithResult<()> {
     }
 
     // remove_reservation
-    while remove_reservation(db).await?.is_continue() {}
+    while remove_reservation(&ctx.db).await?.is_continue() {}
 
     // give_reservations:
     let mut reservations = sqlx::query!(
@@ -2485,13 +2577,13 @@ pub async fn check_all_tickets(db: &PgPool) -> MinilithResult<()> {
         where max_tickets > reserved_or_purchased_tickets
         group by id"
     )
-    .fetch_all(db)
+    .fetch_all(&ctx.db)
     .await?;
     // shuffle because if multiple runners are trying to do this, make each start at a different
     // node so we don't get as many "for update skip locked" in the start:)
     reservations.shuffle(&mut rng());
     for reservation in reservations {
-        let mut txn = db.begin().await?;
+        let mut txn = ctx.db.begin().await?;
         give_reservations(
             reservation.ticket_kind_id,
             reservation.available_tickets,
@@ -2501,7 +2593,7 @@ pub async fn check_all_tickets(db: &PgPool) -> MinilithResult<()> {
         txn.commit().await?;
     }
 
-    let mut txn = db.begin().await?;
+    let mut txn = ctx.db.begin().await?;
     remove_queuers_when_sold_out(&mut txn).await?;
     txn.commit().await?;
 
@@ -3313,9 +3405,8 @@ mod tests {
             .await
             .unwrap();
 
-        let mut txn = db.begin().await.unwrap();
-        release(&mut txn, ticket_kind).await.unwrap();
-        txn.commit().await.unwrap();
+        let txn = db.begin().await.unwrap();
+        release(None, txn, ticket_kind).await.unwrap();
 
         let release_count = sqlx::query_scalar!(
             "select count(*) from ticket_release_queuers where ticket_kind_id = $1",

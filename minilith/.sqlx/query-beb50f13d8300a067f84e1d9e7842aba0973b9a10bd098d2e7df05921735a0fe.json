@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "with links as (\n                select id, notification_id, 0::int as recipient\n                    from activity_notifications where activity_id = $1\n                union all\n                select id, notification_id, 1::int as recipient\n                    from activity_buyers_notifications where activity_id = $1\n                union all\n                select id, notification_id, 2::int as recipient\n                    from purchased_ticket_notifications where activity_id = $1\n            )\n            select links.id as \"id!\", links.recipient as \"recipient!\",\n                notifications.sender as \"sender!: DIS\",\n                notifications.title as \"title!: DIS\",\n                notifications.content as \"content!: DIS\",\n                notifications.send_at, notifications.sent\n            from links\n            inner join notifications on notifications.id = links.notification_id\n            order by notifications.send_at, links.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "recipient!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "sender!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 3,
+        "name": "title!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "content!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 5,
+        "name": "send_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "sent",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "beb50f13d8300a067f84e1d9e7842aba0973b9a10bd098d2e7df05921735a0fe"
+}

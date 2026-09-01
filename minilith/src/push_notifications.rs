@@ -14,6 +14,7 @@ use poem_openapi::{Enum, Object, OpenApi, payload::Json};
 use sqlx::Type;
 use sqlx::types::Uuid;
 
+use crate::DbInternationalizedString as DIS;
 use crate::context::ContextWrapper;
 
 #[derive(Clone)]
@@ -31,6 +32,27 @@ impl fmt::Debug for PushClients {
             .field("fcm", &"FcmService")
             .finish()
     }
+}
+
+#[derive(Enum, Type, Clone, Copy, Debug)]
+#[oai(rename_all = "lowercase")]
+#[sqlx(rename_all = "lowercase", type_name = "push_platform")]
+pub enum PushPlatform {
+    Ios,
+    Android,
+}
+
+pub(crate) struct PushDeviceRow {
+    pub user_id: String,
+    pub device_id: String,
+    pub push_token: String,
+    pub platform: PushPlatform,
+    pub language: Vec<u8>,
+}
+pub(crate) struct NotificationRow {
+    pub id: Uuid,
+    pub title: DIS,
+    pub content: DIS,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -250,13 +272,6 @@ impl Deref for Router {
     }
 }
 
-#[derive(Enum, Type, Clone, Copy, Debug)]
-#[oai(rename_all = "lowercase")]
-#[sqlx(rename_all = "lowercase", type_name = "push_platform")]
-pub enum PushPlatform {
-    Ios,
-    Android,
-}
 #[derive(Object)]
 struct RegisterRequest {
     platform: PushPlatform,

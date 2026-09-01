@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into activity_notification_overrides\n                (user_id, activity_id, follow)\n            values ($1, $2, $3)\n            on conflict (user_id, activity_id) do update set\n                follow = excluded.follow",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "109b1d33b5391619beeaf0cc11b09b69d2105e08c551b65ce668ab397a42b203"
+}

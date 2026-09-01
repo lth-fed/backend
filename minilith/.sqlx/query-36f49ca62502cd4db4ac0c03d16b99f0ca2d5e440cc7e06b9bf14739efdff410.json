@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update notifications set sender = $2\n            where id in (\n                select notification_id from activity_notifications where activity_id = $1\n                union\n                select notification_id from activity_buyers_notifications where activity_id = $1\n                union\n                select notification_id from purchased_ticket_notifications where activity_id = $1\n            )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "36f49ca62502cd4db4ac0c03d16b99f0ca2d5e440cc7e06b9bf14739efdff410"
+}

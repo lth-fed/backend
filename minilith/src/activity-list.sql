@@ -33,7 +33,7 @@ with visible_activities as (
             limit 1
         ) as closest_setting on true
         where activity_hosts.activity_id = kind.activity_id
-        and coalesce(closest_setting.visible, true)
+        and coalesce(closest_setting.visible, false)
     )
 
     union all

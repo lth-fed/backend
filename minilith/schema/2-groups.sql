@@ -62,7 +62,7 @@ create table group_adminships (
         references group_memberships (user_id, group_id)
 );
 
-create type notification_level as enum ('none', 'personalized', 'all');
+create type notification_level as enum ('none', 'all');
 create table user_group_settings (
     user_id text not null references users(id),
     group_id uuid not null references groups(id),

@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n            activities.title as \"sender!: DIS\",\n            min(ticket_kinds.purchasing_available_start) as \"released_at?\"\n        from activities\n        left join ticket_kinds\n            on ticket_kinds.activity_id = activities.id\n            and ticket_kinds.max_tickets > 0\n            and ticket_kinds.purchasing_available_start > now()\n        where activities.id = $1\n        group by activities.id, activities.title",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "sender!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 1,
+        "name": "released_at?",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "5086d77da9930f347cfce2277bd6596782595a170a91f0a5378480b62f0f3b50"
+}

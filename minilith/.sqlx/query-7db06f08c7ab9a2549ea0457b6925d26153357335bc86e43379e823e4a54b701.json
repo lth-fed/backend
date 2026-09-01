@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n                activity_id,\n                follow\n            from activity_notification_overrides\n            join activities on activities.id = activity_id\n            where user_id = $1\n            and activities.time_start > now() - '1 day'::interval\n            order by activities.time_start, activities.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "activity_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "follow",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "7db06f08c7ab9a2549ea0457b6925d26153357335bc86e43379e823e4a54b701"
+}

@@ -33,7 +33,7 @@ pub type DbInternationalizedString = sqlx::types::Json<InternationalizedString>;
 )]
 #[oai(from_multipart = false, from_parameter = false, to_header = false)]
 #[serde(transparent)]
-pub struct InternationalizedString(HashMap<String, String>);
+pub struct InternationalizedString(pub HashMap<String, String>);
 impl InternationalizedString {
     fn empty() -> Self {
         Self(HashMap::new())

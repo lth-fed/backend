@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from purchased_ticket_notifications where activity_id = $1 and id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "54f9d9e4ae40bfcdc3ba838f7df493c1e1faac4297a3b682a5939c148236d1fb"
+}

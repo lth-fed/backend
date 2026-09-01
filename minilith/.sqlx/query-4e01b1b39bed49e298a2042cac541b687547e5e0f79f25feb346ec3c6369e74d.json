@@ -22,7 +22,6 @@
             "kind": {
               "Enum": [
                 "none",
-                "personalized",
                 "all"
               ]
             }

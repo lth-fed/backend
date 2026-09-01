@@ -16,10 +16,6 @@ create index ticket_kind_allowed_groups_by_ticket_kind
     on ticket_kind_allowed_groups using hash (ticket_kind_id);
 create index ticket_kind_transfer_groups_by_ticket_kind
     on ticket_kind_transfer_groups using hash (ticket_kind_id);
-create index ticket_kind_notifications_by_notification
-    on ticket_kind_notifications using hash (notification_id);
-create index ticket_kind_notifications_by_ticket_kind
-    on ticket_kind_notifications using hash (ticket_kind_id);
 create index activity_admin_access_by_access_group
     on allow_admins_from_group_view_activities using hash (access_group_id);
 
@@ -35,3 +31,18 @@ create index purchased_tickets_by_owner_and_ticket_kind
     on purchased_tickets (owner_id, ticket_kind_id);
 create index purchased_tickets_by_ticket_kind
     on purchased_tickets using hash (ticket_kind_id);
+
+-- notification lookup and foreign-key maintenance
+create index notifications_unsent_send_time on notifications (send_at) where sent = false;
+create index activity_notifications_by_activity on activity_notifications (activity_id);
+create index activity_notifications_by_notification on activity_notifications (notification_id);
+create index activity_buyers_notifications_by_activity
+    on activity_buyers_notifications (activity_id);
+create index activity_buyers_notifications_by_notification
+    on activity_buyers_notifications (notification_id);
+create index purchased_ticket_notifications_by_activity
+    on purchased_ticket_notifications (activity_id);
+create index purchased_ticket_notifications_by_notification
+    on purchased_ticket_notifications (notification_id);
+create index group_notifications_by_group on group_notifications (group_id);
+create index group_notifications_by_notification on group_notifications (notification_id);

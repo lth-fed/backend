@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select name as \"name!: DIS\" from groups where id = $1 for update",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name!: DIS",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "2d76375ab0845d3880d1836d457face030e188911976e8b52735d409f45178d4"
+}

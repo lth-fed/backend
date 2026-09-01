@@ -1,15 +1,15 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use bin_common::Transaction;
 use fed_auth_verifier::callbacks::{TransactionCallbackInfo, TransactionInfo};
 use minilith_errors::{AlertLevel, MinilithResult, alert};
-use sqlx::postgres::types::PgInterval;
 use tracing::{error, info, warn};
 
-use crate::push_notifications::PushSendResult;
+use crate::push_notifications::{NotificationRow, PushDeviceRow, PushSendResult};
 use crate::{
-    ContextWrapper, DbInternationalizedString as DIS, InternationalizedString as IS,
-    MinilithErrorOptionExt as _, ticket, transactions,
+    ContextWrapper, DbInternationalizedString as DIS, MinilithErrorOptionExt as _, ticket,
+    transactions,
 };
 
 const NOTIFICATION_POLL_INTERVAL: Duration = Duration::from_secs(10);
@@ -98,74 +98,12 @@ async fn check_unpaid_transactions(ctx: &ContextWrapper) -> MinilithResult<()> {
     Ok(())
 }
 
-async fn send_ticket_release_notification(
-    ctx: &ContextWrapper,
-    minus_start: u8,
-    minus_end: u8,
-    id: &str,
-    mut title: impl FnMut(&IS) -> serde_json::Value,
-    description: serde_json::Value,
-) -> MinilithResult<()> {
-    debug_assert!(minus_start < minus_end, "otherwise none is ever sent");
-    let mut txn = ctx.db.begin().await?;
-    // this makes it idempotent
-    let rows = sqlx::query!(
-        "select kind.id, kind.name as \"name!: DIS\"
-        from ticket_kinds kind
-        where purchasing_available_start > (now() + $2::interval)
-        and purchasing_available_start < (now() + $3::interval)
-        and max_tickets > 0
-        and not exists (
-            select 1 from ticket_kind_notifications
-            where id = $1 and ticket_kind_id = kind.id
-        )
-        for update of kind skip locked",
-        id,
-        PgInterval {
-            microseconds: 1000 * 1000 * 60 * i64::from(minus_start),
-            days: 0,
-            months: 0,
-        },
-        PgInterval {
-            microseconds: 1000 * 1000 * 60 * i64::from(minus_end),
-            days: 0,
-            months: 0,
-        },
-    )
-    .fetch_all(&mut txn.executor())
-    .await?;
-
-    for row in rows {
-        // todo: insert into activity notification with send-at key
-        sqlx::query!(
-            r#"with notif as (
-                insert into notifications (id, title, content, send_at)
-                values (uuidv4(), $1, $2, now())
-                returning id
-            )
-            insert into ticket_kind_notifications (id, ticket_kind_id, notification_id) 
-            select $3, $4, notif.id as notification_id
-            from notif"#,
-            title(&row.name),
-            description,
-            id,
-            row.id
-        )
-        .execute(&mut txn.executor())
-        .await?;
-    }
-
-    txn.commit().await?;
-
-    Ok(())
-}
-
 /// Locks and delivers the oldest due notification.
 ///
-/// The row lock is held while messages are sent. Together with `skip locked`, this lets multiple
-/// minilith instances process different notifications without intentionally sending the same one.
-/// Delivery is still at-least-once if the process exits after a provider accepts a message but
-/// before the database transaction commits.
+/// The row lock is held while messages are being prepared to be sent. Together with `skip locked`,
+/// this lets multiple minilith instances process different notifications without intentionally
+/// sending the same one. This is not robust; if the service crashes at most 1 notification is sent.
+/// But Minilith doesn't crash 😎.
 #[allow(
     clippy::too_many_lines,
     reason = "Keeping the recipient rules in one SQL statement makes their precedence explicit."
@@ -173,7 +111,8 @@ async fn send_ticket_release_notification(
 async fn check_next_notification(ctx: &ContextWrapper) -> MinilithResult<bool> {
     let mut transaction = ctx.db.begin().await?;
 
-    let notification = sqlx::query!(
+    let notification = sqlx::query_as!(
+        NotificationRow,
         r#"select
             id,
             title as "title!: DIS",
@@ -192,26 +131,11 @@ async fn check_next_notification(ctx: &ContextWrapper) -> MinilithResult<bool> {
         return Ok(false);
     };
 
-    if !ctx.has_notification_support() {
-        warn!(
-            notification_id = ?notification.id,
-            title = notification.title.resolve_intl("en", ""),
-            "push-notification not sent because setup failed"
-        );
-        sqlx::query!(
-            "update notifications set sent = true where id = $1",
-            notification.id
-        )
-        .execute(&mut transaction.executor())
-        .await?;
-        transaction.commit().await?;
-        return Ok(false);
-    }
-
     // The view applies membership visibility and the closest notification setting on each allowed
     // group. Until personalized behavior is defined, both `all` and `personalized` receive every
     // matching notification.
-    let devices = sqlx::query!(
+    let devices = sqlx::query_as!(
+        PushDeviceRow,
         r#"select
             push_devices.user_id as "user_id!",
             push_devices.device_id as "device_id!",
@@ -222,16 +146,73 @@ async fn check_next_notification(ctx: &ContextWrapper) -> MinilithResult<bool> {
         from notification_recipients
         inner join push_devices using (user_id)
         inner join users on users.id = notification_recipients.user_id
-        where notification_recipients.notification_id = $1"#,
+        where notification_recipients.notification_id = $1
+        and notification_level = 'all'::notification_level"#,
         notification.id,
     )
     .fetch_all(&mut transaction.executor())
     .await?;
+    sqlx::query!(
+        "update notifications set sent = true where id = $1",
+        notification.id
+    )
+    .execute(&mut transaction.executor())
+    .await?;
+
+    transaction.commit().await?;
+
+    let removed_devices = send_notifications(ctx, &notification, devices).await?;
+
+    let mut txn = ctx.db.begin().await?;
+
+    removed_devices.clear_failed(&mut txn).await?;
+
+    txn.commit().await?;
+
+    Ok(true)
+}
+pub(crate) struct PushDevices {
+    pub device_ids: Vec<String>,
+    pub push_tokens: Vec<String>,
+}
+impl PushDevices {
+    pub async fn clear_failed(&self, txn: &mut Transaction<'_>) -> MinilithResult<()> {
+        sqlx::query!(
+            "delete from push_devices pd
+            using unnest($1::text[], $2::text[]) as t(device_id, push_token)
+            where pd.device_id = t.device_id and pd.push_token = t.push_token",
+            &self.device_ids,
+            &self.push_tokens,
+        )
+        .execute(&mut txn.executor())
+        .await?;
+        Ok(())
+    }
+}
+pub(crate) async fn send_notifications(
+    ctx: &ContextWrapper,
+    notification: &NotificationRow,
+    rows: impl IntoIterator<Item = PushDeviceRow>,
+) -> MinilithResult<PushDevices> {
+    if !ctx.has_notification_support() {
+        warn!(
+            notification_id = ?notification.id,
+            title = notification.title.resolve_intl("en", ""),
+            "push-notification not sent because setup failed"
+        );
+        return Ok(PushDevices {
+            device_ids: Vec::new(),
+            push_tokens: Vec::new(),
+        });
+    }
 
     let mut sent = 0_u64;
     let mut failed = 0_u64;
-    let mut removed_devices = 0_u64;
-    for device in devices {
+    let mut removed_devices = PushDevices {
+        device_ids: Vec::new(),
+        push_tokens: Vec::new(),
+    };
+    for device in rows {
         let language = ctx
             .decrypt_string(device.language)
             .wrap_err_encryption("notification recipient language")?;
@@ -250,16 +231,8 @@ async fn check_next_notification(ctx: &ContextWrapper) -> MinilithResult<bool> {
         {
             Ok(PushSendResult::Sent) => sent += 1,
             Ok(PushSendResult::InvalidToken) => {
-                let removed = sqlx::query!(
-                    "delete from push_devices
-                    where device_id = $1 and push_token = $2",
-                    device.device_id,
-                    device.push_token,
-                )
-                .execute(&mut transaction.executor())
-                .await?
-                .rows_affected();
-                removed_devices += removed;
+                removed_devices.device_ids.push(device.device_id);
+                removed_devices.push_tokens.push(device.push_token);
             }
             Err(err) => {
                 if failed == 0 {
@@ -280,23 +253,14 @@ async fn check_next_notification(ctx: &ContextWrapper) -> MinilithResult<bool> {
             }
         }
     }
-
-    sqlx::query!(
-        "update notifications set sent = true where id = $1",
-        notification.id
-    )
-    .execute(&mut transaction.executor())
-    .await?;
-    transaction.commit().await?;
-
     info!(
         notification_id = %notification.id,
         sent,
         failed,
-        removed_devices,
+        removed_devices=removed_devices.push_tokens.len(),
         "processed push notification"
     );
-    Ok(true)
+    Ok(removed_devices)
 }
 
 /// We can scale this, just call it several times.
@@ -311,7 +275,7 @@ pub fn spawn(ctx: &ContextWrapper) {
     // sql queries)
     tokio::spawn(async move {
         loop {
-            if let Err(err) = ticket::check_all_tickets(&ticket_ctx.db).await {
+            if let Err(err) = ticket::check_all_tickets(&ticket_ctx).await {
                 error!(?err, "Error from runtime->check_all_tickets");
             }
 
@@ -346,48 +310,6 @@ pub fn spawn(ctx: &ContextWrapper) {
     let notification_ctx = Arc::clone(ctx);
     tokio::spawn(async move {
         loop {
-            // drop since MinilithEndpointError already logs & sends alert
-            drop(send_ticket_release_notification(
-                &notification_ctx,
-                14,
-                16,
-                "pre-release",
-                |title| {
-                    serde_json::json!({
-                        "sv": format!(
-                            "Biljetterna till {} släpps snart!",
-                            title.resolve_intl("sv", "")
-                        ),
-                        "en": format!(
-                            "The tickets to {} are released soon!",
-                            title.resolve_intl("en", "")
-                        ),
-                    })
-                },
-                serde_json::json!({
-                    "sv": "Gå in i appen och ställ dig i kö för att få plats.",
-                    "en": "The queues are open.",
-                }),
-            ).await);
-            drop(
-                send_ticket_release_notification(
-                    &notification_ctx,
-                    0,
-                    1,
-                    "release",
-                    |_| {
-                        serde_json::json!({
-                            "sv": "Biljetterna är släppta!",
-                            "en": "The tickets are released!",
-                        })
-                    },
-                    serde_json::json!({
-                        "sv": "Se om du fått en reservation.",
-                        "en": "Check if you got a reservation.",
-                    }),
-                )
-                .await,
-            );
             loop {
                 match check_next_notification(&notification_ctx).await {
                     Ok(true) => {}

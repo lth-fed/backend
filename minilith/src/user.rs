@@ -50,6 +50,7 @@ struct Me {
 #[derive(Debug, Object)]
 struct Notification {
     id: Uuid,
+    sender: InternationalizedString,
     title: InternationalizedString,
     content: InternationalizedString,
     send_at: OffsetDateTime,
@@ -62,6 +63,7 @@ async fn load_notification_history(
     sqlx::query!(
         r#"select
             notifications.id,
+            notifications.sender as "sender!: DIS",
             notifications.title as "title!: DIS",
             notifications.content as "content!: DIS",
             notifications.send_at
@@ -69,6 +71,7 @@ async fn load_notification_history(
         inner join notifications
             on notifications.id = notification_recipients.notification_id
         where notification_recipients.user_id = $1
+        and notification_recipients.visible = true
         and notifications.sent = true
         and notifications.send_at >= now() - '6 months'::interval
         order by notifications.send_at desc, notifications.id"#,
@@ -76,6 +79,7 @@ async fn load_notification_history(
     )
     .map(|row| Notification {
         id: row.id,
+        sender: row.sender.0,
         title: row.title.0,
         content: row.content.0,
         send_at: row.send_at,
@@ -84,12 +88,11 @@ async fn load_notification_history(
     .await
 }
 
-#[derive(Debug, Clone, Copy, Enum, sqlx::Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Enum, sqlx::Type)]
 #[oai(rename_all = "lowercase")]
 #[sqlx(type_name = "notification_level", rename_all = "lowercase")]
 enum NotificationLevel {
     None,
-    Personalized,
     All,
 }
 
@@ -98,6 +101,11 @@ struct GroupSetting {
     group_id: Uuid,
     visible: bool,
     notification_level: NotificationLevel,
+}
+#[derive(Debug, Object)]
+struct ActivitySetting {
+    activity_id: Uuid,
+    follow: bool,
 }
 
 #[OpenApi(prefix_path = "/user")]
@@ -229,8 +237,7 @@ impl Router {
         user: User,
         Json(body): Json<GroupSetting>,
     ) -> MinilithResult<()> {
-        sqlx::query_as!(
-            GroupSetting,
+        sqlx::query!(
             "insert into user_group_settings
                 (user_id, group_id, visible, notification_level)
             values ($1, $2, $3, $4)
@@ -241,6 +248,66 @@ impl Router {
             body.group_id,
             body.visible,
             body.notification_level as NotificationLevel,
+        )
+        .execute(&self.db)
+        .await?;
+        Ok(())
+    }
+    /// Removes an explicit group settings. Useful for resetting filters.
+    #[oai(path = "/group-settings/:group_id", method = "delete")]
+    async fn delete_group_setting(
+        &self,
+        user: User,
+        group_id: poem_openapi::param::Path<Uuid>,
+    ) -> MinilithResult<()> {
+        sqlx::query!(
+            "delete from user_group_settings
+            where user_id = $1 and group_id = $2",
+            user.get_id(),
+            group_id.0,
+        )
+        .execute(&self.db)
+        .await?;
+        Ok(())
+    }
+    /// Lists the user's explicit group filter settings. Groups without a row
+    /// inherit from their nearest configured ancestor.
+    #[oai(path = "/activity-settings", method = "get")]
+    async fn activity_settings(&self, user: User) -> MinilithResult<Json<Vec<ActivitySetting>>> {
+        let settings = sqlx::query_as!(
+            ActivitySetting,
+            r#"select
+                activity_id,
+                follow
+            from activity_notification_overrides
+            join activities on activities.id = activity_id
+            where user_id = $1
+            and activities.time_start > now() - '1 day'::interval
+            order by activities.time_start, activities.id"#,
+            user.get_id(),
+        )
+        .fetch_all(&self.db)
+        .await?;
+        Ok(Json(settings))
+    }
+
+    /// Creates or replaces an explicit group filter setting.
+    #[oai(path = "/activity-settings", method = "put")]
+    #[allow(trivial_casts, reason = "sqlx custom enum parameter type override")]
+    async fn update_activity_setting(
+        &self,
+        user: User,
+        Json(body): Json<ActivitySetting>,
+    ) -> MinilithResult<()> {
+        sqlx::query!(
+            "insert into activity_notification_overrides
+                (user_id, activity_id, follow)
+            values ($1, $2, $3)
+            on conflict (user_id, activity_id) do update set
+                follow = excluded.follow",
+            user.get_id(),
+            body.activity_id,
+            body.follow,
         )
         .execute(&self.db)
         .await?;
@@ -347,10 +414,40 @@ mod tests {
             history_ids(&db, "eligible").await,
             vec![Uuid::parse_str("30000000-0000-0000-0000-000000000001").unwrap()]
         );
-        assert!(history_ids(&db, "muted").await.is_empty());
+        assert_eq!(
+            history_ids(&db, "muted").await,
+            vec![Uuid::parse_str("30000000-0000-0000-0000-000000000001").unwrap()]
+        );
         assert_eq!(
             history_ids(&db, "private-member").await,
             vec![Uuid::parse_str("30000000-0000-0000-0000-000000000004").unwrap()]
+        );
+        assert_eq!(
+            history_ids(&db, "owner-muted").await,
+            vec![Uuid::parse_str("30000000-0000-0000-0000-000000000005").unwrap()]
+        );
+        assert!(history_ids(&db, "owner-overridden").await.is_empty());
+
+        let rules = sqlx::query!(
+            r#"select user_id as "user_id!",
+                notification_level as "notification_level!: NotificationLevel",
+                visible as "visible!"
+            from notification_recipients where notification_id = $1 order by user_id"#,
+            Uuid::parse_str("30000000-0000-0000-0000-000000000006").unwrap(),
+        )
+        .fetch_all(&db)
+        .await
+        .unwrap();
+        assert_eq!(
+            rules
+                .iter()
+                .map(|rule| (&*rule.user_id, rule.notification_level, rule.visible))
+                .collect::<Vec<_>>(),
+            vec![
+                ("eligible", NotificationLevel::All, true),
+                ("muted", NotificationLevel::None, true),
+                ("no-settings", NotificationLevel::None, false),
+            ]
         );
     }
 }

@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select notifications.id, notifications.sent\n            from notifications where notifications.id in (\n                select notification_id from activity_notifications\n                    where activity_id = $1 and id = $2\n                union\n                select notification_id from activity_buyers_notifications\n                    where activity_id = $1 and id = $2\n                union\n                select notification_id from purchased_ticket_notifications\n                    where activity_id = $1 and id = $2\n            )\n            for update of notifications",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "sent",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "0de24566e116a0e1ca0274b3660baebe95953376ebf3133c77285c4d24c35ec0"
+}
