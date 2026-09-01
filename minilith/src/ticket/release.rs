@@ -15,8 +15,7 @@ use super::{
 };
 use crate::{
     ContextWrapper, InternationalizedString as IS, MinilithEndpointError, MinilithResult,
-    push_notifications::{NotificationRow, PushDeviceRow},
-    runtime::send_notifications,
+    push_notifications::{NotificationRow, PushDeviceRow, send_notifications},
 };
 
 async fn release_next_ticket(ctx: &ContextWrapper) -> MinilithResult<ControlFlow<()>> {
@@ -219,6 +218,8 @@ pub(super) async fn release(
     };
     let notification = NotificationRow {
         id,
+        // people know where it's from since they just used the app
+        sender: sqlx::types::Json(IS::empty()),
         title: IS(HashMap::from_iter([
             ("sv".to_owned(), "Gå in och köp biljetten!".to_owned()),
             (
@@ -243,6 +244,8 @@ pub(super) async fn release(
     let removed1 = send_notifications(ctx, &notification, reservation_devices).await;
     let notification = NotificationRow {
         id,
+        // people know where it's from since they just used the app
+        sender: sqlx::types::Json(IS::empty()),
         title: IS(HashMap::from_iter([
             ("sv".to_owned(), "Se din plats i kön".to_owned()),
             (

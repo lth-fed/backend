@@ -7,12 +7,17 @@ use a2::{
     Error as ApnsError, ErrorReason as ApnsErrorReason, NotificationBuilder as _,
     NotificationOptions, PushType,
 };
+use bin_common::Transaction;
 use fcm_service::{FcmMessage, FcmNotification, FcmService, Target};
 use fed_auth_verifier::User;
-use minilith_errors::{MinilithEndpointError, MinilithErrorResultExt as _, MinilithResult};
+use minilith_errors::{
+    AlertLevel, MinilithEndpointError, MinilithErrorOptionExt as _, MinilithErrorResultExt as _,
+    MinilithResult, alert,
+};
 use poem_openapi::{Enum, Object, OpenApi, payload::Json};
 use sqlx::Type;
 use sqlx::types::Uuid;
+use tracing::{error, info, warn};
 
 use crate::DbInternationalizedString as DIS;
 use crate::context::ContextWrapper;
@@ -51,6 +56,7 @@ pub(crate) struct PushDeviceRow {
 }
 pub(crate) struct NotificationRow {
     pub id: Uuid,
+    pub sender: DIS,
     pub title: DIS,
     pub content: DIS,
 }
@@ -259,6 +265,104 @@ impl PushClients {
 fn fcm_test_target_rejected(error: &str) -> bool {
     error.contains("UNREGISTERED")
         || (error.contains("INVALID_ARGUMENT") && error.contains("registration token"))
+}
+
+pub(crate) struct PushDevices {
+    pub device_ids: Vec<String>,
+    pub push_tokens: Vec<String>,
+}
+impl PushDevices {
+    pub async fn clear_failed(&self, txn: &mut Transaction<'_>) -> MinilithResult<()> {
+        sqlx::query!(
+            "delete from push_devices pd
+            using unnest($1::text[], $2::text[]) as t(device_id, push_token)
+            where pd.device_id = t.device_id and pd.push_token = t.push_token",
+            &self.device_ids,
+            &self.push_tokens,
+        )
+        .execute(&mut txn.executor())
+        .await?;
+        Ok(())
+    }
+}
+pub(crate) async fn send_notifications(
+    ctx: &ContextWrapper,
+    notification: &NotificationRow,
+    rows: impl IntoIterator<Item = PushDeviceRow>,
+) -> MinilithResult<PushDevices> {
+    if !ctx.has_notification_support() {
+        warn!(
+            notification_id = ?notification.id,
+            title = notification.title.resolve_intl("en", ""),
+            "push-notification not sent because setup failed"
+        );
+        return Ok(PushDevices {
+            device_ids: Vec::new(),
+            push_tokens: Vec::new(),
+        });
+    }
+
+    let mut sent = 0_u64;
+    let mut failed = 0_u64;
+    let mut removed_devices = PushDevices {
+        device_ids: Vec::new(),
+        push_tokens: Vec::new(),
+    };
+    for device in rows {
+        let language = ctx
+            .decrypt_string(device.language)
+            .wrap_err_encryption("notification recipient language")?;
+
+        let sender = notification.sender.resolve_intl(&language, "");
+        let title = notification.title.resolve_intl(&language, "");
+        let title = if sender.is_empty() {
+            title.to_owned()
+        } else {
+            format!("{sender}: {title}")
+        };
+        let content = notification.content.resolve_intl(&language, "");
+        match ctx
+            .send_notification(
+                device.platform,
+                &device.push_token,
+                notification.id,
+                &title,
+                content,
+            )
+            .await
+        {
+            Ok(PushSendResult::Sent) => sent += 1,
+            Ok(PushSendResult::InvalidToken) => {
+                removed_devices.device_ids.push(device.device_id);
+                removed_devices.push_tokens.push(device.push_token);
+            }
+            Err(err) => {
+                if failed == 0 {
+                    alert(
+                        AlertLevel::L3,
+                        format!("failed to send push notification (id: {})", notification.id),
+                    );
+                }
+                failed += 1;
+                error!(
+                    ?err,
+                    notification_id = %notification.id,
+                    user_id = %device.user_id,
+                    device_id = %device.device_id,
+                    platform = ?device.platform,
+                    "failed to send push notification"
+                );
+            }
+        }
+    }
+    info!(
+        notification_id = %notification.id,
+        sent,
+        failed,
+        removed_devices=removed_devices.push_tokens.len(),
+        "processed push notification"
+    );
+    Ok(removed_devices)
 }
 
 #[derive(Clone, Debug)]

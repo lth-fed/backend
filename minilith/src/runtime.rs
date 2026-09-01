@@ -1,16 +1,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use bin_common::Transaction;
 use fed_auth_verifier::callbacks::{TransactionCallbackInfo, TransactionInfo};
 use minilith_errors::{AlertLevel, MinilithResult, alert};
-use tracing::{error, info, warn};
+use tracing::error;
 
-use crate::push_notifications::{NotificationRow, PushDeviceRow, PushSendResult};
-use crate::{
-    ContextWrapper, DbInternationalizedString as DIS, MinilithErrorOptionExt as _, ticket,
-    transactions,
-};
+use crate::push_notifications::{NotificationRow, PushDeviceRow, send_notifications};
+use crate::{ContextWrapper, DbInternationalizedString as DIS, ticket, transactions};
 
 const NOTIFICATION_POLL_INTERVAL: Duration = Duration::from_secs(10);
 
@@ -115,6 +111,7 @@ async fn check_next_notification(ctx: &ContextWrapper) -> MinilithResult<bool> {
         NotificationRow,
         r#"select
             id,
+            sender as "sender!: DIS",
             title as "title!: DIS",
             content as "content!: DIS"
         from notifications
@@ -170,97 +167,6 @@ async fn check_next_notification(ctx: &ContextWrapper) -> MinilithResult<bool> {
     txn.commit().await?;
 
     Ok(true)
-}
-pub(crate) struct PushDevices {
-    pub device_ids: Vec<String>,
-    pub push_tokens: Vec<String>,
-}
-impl PushDevices {
-    pub async fn clear_failed(&self, txn: &mut Transaction<'_>) -> MinilithResult<()> {
-        sqlx::query!(
-            "delete from push_devices pd
-            using unnest($1::text[], $2::text[]) as t(device_id, push_token)
-            where pd.device_id = t.device_id and pd.push_token = t.push_token",
-            &self.device_ids,
-            &self.push_tokens,
-        )
-        .execute(&mut txn.executor())
-        .await?;
-        Ok(())
-    }
-}
-pub(crate) async fn send_notifications(
-    ctx: &ContextWrapper,
-    notification: &NotificationRow,
-    rows: impl IntoIterator<Item = PushDeviceRow>,
-) -> MinilithResult<PushDevices> {
-    if !ctx.has_notification_support() {
-        warn!(
-            notification_id = ?notification.id,
-            title = notification.title.resolve_intl("en", ""),
-            "push-notification not sent because setup failed"
-        );
-        return Ok(PushDevices {
-            device_ids: Vec::new(),
-            push_tokens: Vec::new(),
-        });
-    }
-
-    let mut sent = 0_u64;
-    let mut failed = 0_u64;
-    let mut removed_devices = PushDevices {
-        device_ids: Vec::new(),
-        push_tokens: Vec::new(),
-    };
-    for device in rows {
-        let language = ctx
-            .decrypt_string(device.language)
-            .wrap_err_encryption("notification recipient language")?;
-
-        let title = notification.title.resolve_intl(&language, "");
-        let content = notification.content.resolve_intl(&language, "");
-        match ctx
-            .send_notification(
-                device.platform,
-                &device.push_token,
-                notification.id,
-                title,
-                content,
-            )
-            .await
-        {
-            Ok(PushSendResult::Sent) => sent += 1,
-            Ok(PushSendResult::InvalidToken) => {
-                removed_devices.device_ids.push(device.device_id);
-                removed_devices.push_tokens.push(device.push_token);
-            }
-            Err(err) => {
-                if failed == 0 {
-                    alert(
-                        AlertLevel::L3,
-                        format!("failed to send push notification (id: {})", notification.id),
-                    );
-                }
-                failed += 1;
-                error!(
-                    ?err,
-                    notification_id = %notification.id,
-                    user_id = %device.user_id,
-                    device_id = %device.device_id,
-                    platform = ?device.platform,
-                    "failed to send push notification"
-                );
-            }
-        }
-    }
-    info!(
-        notification_id = %notification.id,
-        sent,
-        failed,
-        removed_devices=removed_devices.push_tokens.len(),
-        "processed push notification"
-    );
-    Ok(removed_devices)
 }
 
 /// We can scale this, just call it several times.
