@@ -225,7 +225,7 @@ pub(super) async fn begin(
                 transactions::Ware {
                     name: format!("    {addon_name} - {option_name}"),
                     amount: opt.price,
-                    tax: 1.25,
+                    tax: 1.0,
                     currency: transactions::Currency::Sek,
                 }
             });
