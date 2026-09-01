@@ -73,29 +73,3 @@ create table stripe_checkouts (
     stripe_id text not null
 );
 create index stripe_checkouts_stripe_id on stripe_checkouts using hash (stripe_id);
-
--- A durable outbox keeps Fortnox unavailable/retried callbacks from losing bookkeeping work.
--- `manual_review` is intentionally terminal: retrying an ambiguous voucher POST could create a
--- duplicate voucher in Fortnox, which documents no idempotency key for this endpoint.
-create table fortnox_voucher_jobs (
-    transaction_id uuid primary key references transactions(id),
-    state text not null default 'pending'
-        check (state in ('pending', 'processing', 'manual_review', 'completed')),
-    attempts integer not null default 0 check (attempts >= 0),
-    next_attempt_at timestamptz not null default now(),
-    started_at timestamptz,
-    last_error text,
-
-    voucher_series text,
-    voucher_number integer,
-    voucher_year integer,
-    file_id text,
-    completed_at timestamptz,
-
-    constraint fortnox_voucher_identity_complete check (
-        num_nonnulls(voucher_series, voucher_number, voucher_year) in (0, 3)
-    )
-);
-create index fortnox_voucher_jobs_pending
-    on fortnox_voucher_jobs (next_attempt_at)
-    where state = 'pending';
