@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::{collections::HashMap, ops::ControlFlow};
 
 use bin_common::{PgPool, Transaction};
@@ -48,6 +49,78 @@ async fn release_next_ticket(ctx: &ContextWrapper) -> MinilithResult<ControlFlow
         // next minute in worst case
         Ok(ControlFlow::Break(()))
     }
+}
+async fn send_release_notifications(
+    ctx: &ContextWrapper,
+    id: Uuid,
+    reservation_devices: Vec<PushDeviceRow>,
+    reservation_queue_devices: Vec<PushDeviceRow>,
+) -> MinilithResult<()> {
+    let notification = NotificationRow {
+        id,
+        // people know where it's from since they just used the app
+        sender: sqlx::types::Json(IS::empty()),
+        title: IS(HashMap::from_iter([
+            ("sv".to_owned(), "Gå in och köp biljetten!".to_owned()),
+            (
+                "en".to_owned(),
+                "Open the app to buy your ticket!".to_owned(),
+            ),
+        ]))
+        .into(),
+        content: IS(HashMap::from_iter([(
+            "sv".to_owned(),
+            "Du fick en reservation. Köp biljetten snart, annars får någon annan din reservation."
+                .to_owned(),
+        ),
+            (
+                "en".to_owned(),
+                "You got a reservation. Buy the ticket soon, else someone else will get your reservation.".to_owned(),
+            ),
+        ]))
+        .into(),
+    };
+    // errors are logged & alerted when creating MinilithEndpointError
+    let removed1 = send_notifications(ctx, &notification, reservation_devices).await;
+    let notification = NotificationRow {
+        id,
+        // people know where it's from since they just used the app
+        sender: sqlx::types::Json(IS::empty()),
+        title: IS(HashMap::from_iter([
+            ("sv".to_owned(), "Se din plats i kön".to_owned()),
+            (
+                "en".to_owned(),
+                "Tap to view your reservation placement".to_owned(),
+            ),
+        ]))
+        .into(),
+        content: IS(HashMap::from_iter([
+            (
+                "sv".to_owned(),
+                "Du har en plats i kön till reservationer, \
+                så om någon avbryter sitt köp får du reservationen."
+                    .to_owned(),
+            ),
+            (
+                "en".to_owned(),
+                "You have a spot in the queue to reservations. \
+                If someone cancels their payment, you get a reservation."
+                    .to_owned(),
+            ),
+        ]))
+        .into(),
+    };
+    let removed2 = send_notifications(ctx, &notification, reservation_queue_devices).await;
+
+    let mut txn = ctx.db.begin().await?;
+    if let Ok(removed) = removed1 {
+        removed.clear_failed(&mut txn).await?;
+    }
+    if let Ok(removed) = removed2 {
+        removed.clear_failed(&mut txn).await?;
+    }
+    txn.commit().await?;
+    Ok(())
 }
 /// Releases a ticket. This MUST be called at the moment the tickets should be released.
 /// It MUST have locked the `ticket_kind`.
@@ -216,71 +289,14 @@ pub(super) async fn release(
     let Some(ctx) = ctx else {
         return Ok(());
     };
-    let notification = NotificationRow {
-        id,
-        // people know where it's from since they just used the app
-        sender: sqlx::types::Json(IS::empty()),
-        title: IS(HashMap::from_iter([
-            ("sv".to_owned(), "Gå in och köp biljetten!".to_owned()),
-            (
-                "en".to_owned(),
-                "Open the app to buy your ticket!".to_owned(),
-            ),
-        ]))
-        .into(),
-        content: IS(HashMap::from_iter([(
-            "sv".to_owned(),
-            "Du fick en reservation. Köp biljetten snart, annars får någon annan din reservation."
-                .to_owned(),
-        ),
-            (
-                "en".to_owned(),
-                "You got a reservation. Buy the ticket soon, else someone else will get your reservation.".to_owned(),
-            ),
-        ]))
-        .into(),
-    };
-    // errors are logged & alerted when creating MinilithEndpointError
-    let removed1 = send_notifications(ctx, &notification, reservation_devices).await;
-    let notification = NotificationRow {
-        id,
-        // people know where it's from since they just used the app
-        sender: sqlx::types::Json(IS::empty()),
-        title: IS(HashMap::from_iter([
-            ("sv".to_owned(), "Se din plats i kön".to_owned()),
-            (
-                "en".to_owned(),
-                "Tap to view your reservation placement".to_owned(),
-            ),
-        ]))
-        .into(),
-        content: IS(HashMap::from_iter([
-            (
-                "sv".to_owned(),
-                "Du har en plats i kön till reservationer, \
-                så om någon avbryter sitt köp får du reservationen."
-                    .to_owned(),
-            ),
-            (
-                "en".to_owned(),
-                "You have a spot in the queue to reservations. \
-                If someone cancels their payment, you get a reservation."
-                    .to_owned(),
-            ),
-        ]))
-        .into(),
-    };
-    let removed2 = send_notifications(ctx, &notification, reservation_queue_devices).await;
-
-    let mut txn = ctx.db.begin().await?;
-    if let Ok(removed) = removed1 {
-        removed.clear_failed(&mut txn).await?;
-    }
-    if let Ok(removed) = removed2 {
-        removed.clear_failed(&mut txn).await?;
-    }
-    txn.commit().await?;
-
+    let ctx = Arc::clone(ctx);
+    tokio::spawn(async move {
+        // MinilithEndpointError creation causes error! & alert
+        drop(
+            send_release_notifications(&ctx, id, reservation_devices, reservation_queue_devices)
+                .await,
+        );
+    });
     Ok(())
 }
 
