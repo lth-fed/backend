@@ -422,7 +422,7 @@ impl EmailClient {
         let mut has_recipient = false;
         for recipient in to {
             let mailbox = lettre::message::Mailbox::from_str(recipient)
-                .wrap_err_internal("email: invalid recipient email address")?;
+                .wrap_err_bad_user("email: invalid recipient email address", "email")?;
             message = message.to(mailbox);
             has_recipient = true;
         }

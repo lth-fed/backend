@@ -238,8 +238,7 @@ impl MainRouter {
             let html = format!("<p>{description}</p><p><a href=\"{link}\">{link}</a></p>");
             email_client
                 .send_html(from_name, [body.email.as_str()], subject, html)
-                .await
-                .wrap_err_internal("failed to send email")?;
+                .await?;
         } else {
             println!(
                 "Someone tried to log in with the email {}. Click the link below to continue.",

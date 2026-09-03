@@ -238,15 +238,9 @@ fn decode_jwt<T: DeserializeOwned>(
 #[cfg_attr(
     not(debug_assertions),
     oai(
-        ty = "oauth2",
-        key_in = "header",
-        key_name = "authorization",
-        bearer_format = "JWT",
-        flows(authorization_code(
-            authorization_url = "https://api.auth.teknologappen.se/oidc/v1/authorize",
-            token_url = "https://api.auth.teknologappen.se/oidc/v1/token",
-        )),
-        checker = "User::from_token"
+        ty = "openid_connect",
+        openid_connect_url = "https://api.auth.teknologappen.se/.well-known/openid-configuration",
+        checker = "User::from_token",
     )
 )]
 #[derive(Clone)]

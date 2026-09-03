@@ -194,3 +194,30 @@ services:
       traefik.http.routers.fed-s3-console.tls.certresolver: ${TRAEFIK_CERT_RESOLVER:-letsencrypt}
       traefik.http.routers.fed-s3-console.service: "fed-s3-console"
       traefik.http.services.fed-s3-console.loadbalancer.server.port: "9001"
+
+  memos:
+    image: neosmemo/memos:stable
+    container_name: memos
+    restart: unless-stopped
+    # ports:
+    #   - "5230:5230"
+    expose:
+      - "5230"
+    volumes:
+      - ./memos-data:/var/opt/memos
+    environment:
+      MEMOS_PORT: 5230
+      MEMOS_DRIVER: sqlite
+      MEMOS_INSTANCE_URL: https://<url>
+    networks:
+      - traefik
+    labels:
+      traefik.enable: true
+      traefik.http.services.memos.loadbalancer.server.port: 5230
+      traefik.docker.network: traefik
+      traefik.http.routers.memos-public.rule: Host(`memos.teknologappen.se`)
+      traefik.http.routers.memos-public.entrypoints: ${TRAEFIK_ENTRYPOINT:-websecure}
+      traefik.http.routers.fed-s3-console.tls: "true"
+      traefik.http.routers.fed-s3-console.tls.certresolver: ${TRAEFIK_CERT_RESOLVER:-letsencrypt}
+      traefik.http.routers.memos-public.service: memos
+      traefik.http.routers.memos-public.middlewares: https-redirect@file
