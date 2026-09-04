@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into ticket_reservation_queuers\n            (user_id, ticket_kind_id, placement)\n            values ($1, $2, $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e08ce4f5f15e03e307cfe620ba6323e6cb8a6fb1114e978548e04089fc3d9980"
+}

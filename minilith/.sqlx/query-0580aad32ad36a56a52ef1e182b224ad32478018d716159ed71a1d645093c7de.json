@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from push_devices pd\n            using unnest($1::text[], $2::text[]) as t(device_id, push_token)\n            where pd.device_id = t.device_id and pd.push_token = t.push_token",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0580aad32ad36a56a52ef1e182b224ad32478018d716159ed71a1d645093c7de"
+}

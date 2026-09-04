@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select sub from session_validated_users where session_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "sub",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "237336e76e70ecf0afe376d8213a527ac649b3ad071e62175af8bdaa5a74069c"
+}

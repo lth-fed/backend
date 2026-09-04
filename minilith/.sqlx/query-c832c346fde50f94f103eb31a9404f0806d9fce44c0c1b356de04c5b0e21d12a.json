@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select flow.user_id\n        from users_in_purchase_flow flow\n        inner join ticket_reservation_queuers queuer\n            on queuer.user_id = flow.user_id\n            and queuer.ticket_kind_id = flow.ticket_kind_id\n        inner join ticket_kinds kind on kind.id = queuer.ticket_kind_id\n        where flow.reservation_queue = flow.user_id\n        and\n        (\n            -- inidvidual ticket\n            (\n                kind.max_tickets = kind.reserved_or_purchased_tickets\n                and (\n                    select count(*) from purchased_tickets\n                    where ticket_kind_id = kind.id\n                ) >= kind.max_tickets\n            )\n            -- other ticket_kinds\n            -- this pathway should not often be reached since ticket kinds often are not released simultaneously\n            or exists (\n                select 1\n                from activities\n                where activities.id = kind.activity_id\n                and (\n                    select count(*)\n                    from purchased_tickets\n                    inner join ticket_kinds purchased_kind\n                        on purchased_kind.id = purchased_tickets.ticket_kind_id\n                    where purchased_kind.activity_id = activities.id\n                ) >= activities.max_tickets\n            )\n        )\n        order by flow.user_id\n        for update of flow skip locked",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c832c346fde50f94f103eb31a9404f0806d9fce44c0c1b356de04c5b0e21d12a"
+}

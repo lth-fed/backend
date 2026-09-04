@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "with administered_groups as (\n                select group_id from group_adminships where user_id = $1\n            ), related_users as (\n                select memberships.user_id\n                from group_memberships memberships\n                inner join administered_groups using (group_id)\n                union\n                select admins.user_id\n                from group_adminships admins\n                inner join administered_groups using (group_id)\n            )\n            select related_users.user_id as \"user_id!\", users.name as \"name?\"\n            from related_users\n            left join users on users.id = related_users.user_id\n            order by related_users.user_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "name?",
+        "type_info": "Bytea"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      false
+    ]
+  },
+  "hash": "ddf9d6800d91634c78b5489ff5248937917342cefc17544dd8a4c709c0f56fd6"
+}

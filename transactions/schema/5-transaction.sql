@@ -19,6 +19,7 @@ create table transactions (
     -- stripe: it's the stripe checkout ID
     -- swish: the payment_reference we get
     payment_reference text,
+    paid_at timestamptz,
     timeout timestamptz not null,
     -- for refund
     provider provider not null,
@@ -56,6 +57,7 @@ create table transaction_wares (
 );
 create index transaction_wares_transaction_id on transaction_wares using hash (transaction_id);
 
+-- The key here cannot exist in transactions aswell
 create table transaction_reserved_ids (
     id uuid primary key,
     created timestamptz not null default now()

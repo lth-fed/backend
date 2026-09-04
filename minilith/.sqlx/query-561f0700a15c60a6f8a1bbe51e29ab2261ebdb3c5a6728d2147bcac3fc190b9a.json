@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into ticket_reservation_placement_tails (ticket_kind_id, placement_tail)\n        values ($1, $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "561f0700a15c60a6f8a1bbe51e29ab2261ebdb3c5a6728d2147bcac3fc190b9a"
+}

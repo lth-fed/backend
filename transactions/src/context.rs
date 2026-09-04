@@ -2,17 +2,18 @@ use std::ops::Deref;
 use std::path::PathBuf;
 
 use base64::Engine as _;
-use bin_common::{PgPool, setup_db};
+use bin_common::{DebugConfig, PgPool, setup_db};
 use color_eyre::Section as _;
 use color_eyre::eyre::WrapErr as _;
 use ed25519_dalek::pkcs8::DecodePrivateKey as _;
 use jsonwebtoken::EncodingKey;
 use jsonwebtoken::jwk::JwkSet;
 use minilith_errors::{
-    AlertLevel, EmailClient, MinilithEndpointError, MinilithErrorOptionExt as _,
-    MinilithErrorResultExt as _, MinilithResult, alert, configure_alert_email,
+    EmailClient, MinilithEndpointError, MinilithErrorOptionExt as _, MinilithErrorResultExt as _,
+    MinilithResult, configure_alert_email,
 };
 use sqlx::migrate;
+use stripe_checkout::CheckoutSessionStatus;
 use stripe_misc::webhook_endpoint::CreateWebhookEndpointEnabledEvents;
 use tracing::error;
 use uuid::Uuid;
@@ -70,22 +71,10 @@ impl ClientStore<SwishClient> {
         let swish_client = reqwest::Client::builder()
             .identity(
                 reqwest::Identity::from_pem(rustls_buf.as_bytes())
-                    .wrap_err_internal("failed to build client authentication from swish")
-                    .inspect_err(|_| {
-                        alert(
-                            AlertLevel::L1,
-                            format!("swish config for a client_id ({client_id}) is invalid"),
-                        );
-                    })?,
+                    .wrap_err_internal("l1: failed to build client authentication from swish")?,
             )
             .build()
-            .wrap_err_internal("Failed to build swish client")
-            .inspect_err(|_| {
-                alert(
-                    AlertLevel::L1,
-                    format!("failed to build swish client for client_id {client_id}"),
-                );
-            })?;
+            .wrap_err_internal("l1: Failed to build swish client")?;
         let client = self.0.entry(client_id.to_owned()).or_insert(SwishClient {
             client: swish_client,
             number: client.swish_number,
@@ -120,10 +109,7 @@ impl ClientStore<stripe::Client> {
         let client = stripe::ClientBuilder::new(&stripe_secret)
             .client_id("fed-transactions".into())
             .build()
-            .wrap_err_internal("stripe: ClientBuilder failed")
-            .inspect_err(|_| {
-                alert(AlertLevel::L1, "stripe ClientBuilder failed");
-            })?;
+            .wrap_err_internal("l1: stripe: ClientBuilder failed")?;
 
         let webhook_url = format!("{DOMAIN}/v0{STRIPE_WEBHOOK_PATH}");
         let webhooks = stripe_misc::webhook_endpoint::ListWebhookEndpoint::new()
@@ -175,6 +161,7 @@ impl ClientStore<stripe::Client> {
 #[derive(Debug)]
 pub struct Context {
     pub db: PgPool,
+    pub debug: DebugConfig,
 
     pub swish_clients: ClientStore<SwishClient>,
     pub stripe_clients: ClientStore<stripe::Client>,
@@ -208,6 +195,9 @@ impl Context {
     /// Returns any errors stemming from setting up the DB or other services.
     pub async fn new(test_db: Option<PgPool>) -> color_eyre::Result<Self> {
         let _: Result<PathBuf, dotenvy::Error> = dotenvy::dotenv();
+        let debug = DebugConfig::from_env();
+
+        drop(rustls::crypto::ring::default_provider().install_default());
 
         if test_db.is_none() {
             configure_alert_email(EmailClient::new("ALERT")?)?;
@@ -221,21 +211,27 @@ impl Context {
             setup_db(
                 &std::env::var("DATABASE_URL").wrap_err("`DATABASE_URL` not set")?,
                 Some(migrate!("./migrations")),
+                24,
             )
             .await
             .wrap_err("Failed to set up the database")
             .suggestion("Start the database with `docker compose up -d`")?
         };
 
+        let client = reqwest::Client::builder()
+            .tls_danger_accept_invalid_certs(debug.enabled)
+            .build()?;
+
         let typst_world = OurWonderfulTypstWorldBase::default();
 
         let context = Self {
             db,
+            debug,
 
             swish_clients: ClientStore::default(),
             stripe_clients: ClientStore::default(),
 
-            client: reqwest::Client::new(),
+            client,
             jwks,
             signing_key: encoding_key,
 
@@ -257,83 +253,113 @@ impl Context {
         self.stripe_clients.get(&self.db, client_id).await
     }
 
+    async fn cancel_swish_transaction(
+        &self,
+        transaction: &CancelTransactionData,
+    ) -> MinilithResult<()> {
+        let patch = vec![swish::PaymentRequestPatch {
+            op: swish::PaymentRequestPatchOperation::Replace,
+            path: "/status".to_owned(),
+            value: "cancelled".to_owned(),
+        }];
+        let client = self.get_swish_client(&transaction.client_id).await?;
+        let cancel_response = client
+            .patch(swish::payment_request_url(
+                swish::ApiVersion::V1,
+                transaction.id,
+                self.debug.enabled,
+            ))
+            .header("content-type", "application/json-patch+json")
+            .json(&patch)
+            .send()
+            .await
+            .wrap_err_internal(
+                "l2: failed to cancel swish payment request due to connection issues",
+            );
+
+        // OK: swish api error, ERR: transport error
+        let cancel_failure = match cancel_response {
+            Ok(resp) if resp.status().is_success() => return Ok(()),
+            Ok(resp) => {
+                let status = resp.status();
+                let text = resp
+                    .text()
+                    .await
+                    .wrap_err_internal("l2: failed to read body of cancel swish payment request")
+                    .ok();
+
+                if text.as_deref().is_some_and(|text| text.contains("RP04")) {
+                    // Swish no longer knows about the request, so it cannot be paid.
+                    return Ok(());
+                }
+
+                Ok((status, text))
+            }
+            Err(err) => Err(err),
+        };
+
+        // Swish rejects cancelling a request that is already in a terminal state.
+        // Reconcile it instead of assuming that every non-cancellable request was paid.
+        let current = client
+            .get(swish::payment_request_url(
+                swish::ApiVersion::V1,
+                transaction.id,
+                self.debug.enabled,
+            ))
+            .send()
+            .await
+            .wrap_err_internal("l2: failed to reconcile swish payment request after cancel failed");
+        drop(client);
+
+        if let Ok(resp) = current {
+            let status = resp.status();
+            if status.is_success() {
+                let data = resp.json::<swish::Callback>().await.wrap_err_internal(
+                    "l2: failed to parse swish payment request after cancel failed",
+                );
+                if matches!(
+                    data,
+                    Ok(swish::Callback {
+                        status: Some(swish::Status::Cancelled),
+                        ..
+                    })
+                ) {
+                    return Ok(());
+                }
+            }
+        }
+
+        if cancel_failure
+            .as_ref()
+            .is_ok_and(|(_, text)| text.as_deref().is_some_and(|text| text.contains("RP07")))
+        {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "user in middle of paying",
+                (transaction.id, cancel_failure),
+            ));
+        }
+
+        // if there was connection error, just continue as normal, try to make new transaction
+        if let Ok((status, text)) = &cancel_failure {
+            return Err(MinilithEndpointError::internal_error(
+                "l1: swish cancel failed due to unknown reasons",
+                (status, text),
+            ));
+        }
+        cancel_failure
+            .wrap_err_internal("l1: swish cancel transport")
+            .map(|_| ())
+    }
+
     /// # Return
     ///
-    /// Returns `true` if cancel is guaranteed successful, applying from the instant this returns.
+    /// Returns () if cancel is guaranteed successful, applying from the instant this returns.
     pub(crate) async fn cancel_transaction(
         &self,
         transaction: &CancelTransactionData,
-    ) -> MinilithResult<bool> {
+    ) -> MinilithResult<()> {
         match transaction.provider {
-            Provider::Swish => {
-                let patch = vec![swish::PaymentRequestPatch {
-                    op: swish::PaymentRequestPatchOperation::Replace,
-                    path: "/status".to_owned(),
-                    value: "cancelled".to_owned(),
-                }];
-                let client = self.get_swish_client(&transaction.client_id).await?;
-                let resp = match client
-                    .patch(swish::payment_request_url(
-                        swish::ApiVersion::V1,
-                        transaction.id,
-                    ))
-                    .header("content-type", "application/json-patch+json")
-                    .json(&patch)
-                    .send()
-                    .await
-                {
-                    Ok(resp) => resp,
-                    Err(err) => {
-                        alert(
-                            AlertLevel::L2,
-                            "failed to cancel swish payment request due to connection issues",
-                        );
-                        error!(
-                            ?err,
-                            "failed to cancel swish payment request due to connection issues"
-                        );
-                        return Ok(false);
-                    }
-                };
-                drop(client);
-                let status = resp.status();
-                if status.is_success() {
-                    return Ok(true);
-                }
-
-                let text = match resp.text().await {
-                    Ok(text) => text,
-                    Err(err) => {
-                        alert(
-                            AlertLevel::L2,
-                            "failed to read body of cancel swish payment request",
-                        );
-                        error!(?err, "failed to read body of cancel swish payment request");
-                        return Ok(false);
-                    }
-                };
-
-                if text.contains("RP04") {
-                    // TXN not found, it's obviously cancelled
-                    println!("rp04");
-                    return Ok(true);
-                }
-                // non-cancellable state
-                if text.contains("RP07") {
-                    return Ok(false);
-                }
-
-                error!(
-                    error_body = text,
-                    status_code = ?status,
-                    "Shit went down with swish cancel!"
-                );
-                alert(
-                    AlertLevel::L1,
-                    "swish cancel failed due to unknown reasons (see logs for error_body & status)",
-                );
-                Ok(false)
-            }
+            Provider::Swish => self.cancel_swish_transaction(transaction).await,
             Provider::Stripe => {
                 let client = self.get_stripe_client(&transaction.client_id).await?;
 
@@ -347,13 +373,89 @@ impl Context {
                     "no stripe_checkouts.stripe_id was associated with a stripe transaction",
                 )?;
 
-                stripe_checkout::checkout_session::ExpireCheckoutSession::new(session_id)
+                let Err(expire_error) =
+                    stripe_checkout::checkout_session::ExpireCheckoutSession::new(
+                        session_id.as_str(),
+                    )
                     .send(&*client)
                     .await
-                    .wrap_err_internal("stripe: cancel")?;
-                Ok(true)
+                else {
+                    return Ok(());
+                };
+
+                // Stripe deliberately returns an error when an already-expired
+                // Checkout Session is expired again. Reconcile the resource
+                // state instead of matching Stripe's error text, which also
+                // covers a race where Stripe expires it during this request.
+                let session = match stripe_checkout::checkout_session::RetrieveCheckoutSession::new(
+                    session_id,
+                )
+                .send(&*client)
+                .await
+                {
+                    Ok(session) => session,
+                    Err(reconcile_error) => {
+                        tracing::warn!(
+                            ?expire_error,
+                            ?reconcile_error,
+                            "stripe: failed to reconcile checkout after cancel failed"
+                        );
+                        return Err(expire_error).wrap_err_internal("stripe: cancel");
+                    }
+                };
+
+                if session.status == Some(CheckoutSessionStatus::Expired) {
+                    Ok(())
+                } else {
+                    Err(expire_error).wrap_err_internal("stripe: cancel")
+                }
             }
-            Provider::Free => Ok(false),
+            Provider::Free => Err(MinilithEndpointError::bad_frontend_code(
+                "cannot cancel a free transaction",
+                "",
+            )),
         }
+    }
+
+    /// # Errors
+    ///
+    /// Errors from stripe API.
+    pub async fn stripe_get_fee(
+        &self,
+        client_id: &str,
+        id: impl Into<stripe_checkout::CheckoutSessionId>,
+    ) -> MinilithResult<i64> {
+        let client = self.get_stripe_client(client_id).await?;
+        let data = stripe_checkout::checkout_session::RetrieveCheckoutSession::new(id)
+            // for getting the fee
+            .expand(["payment_intent.latest_charge.balance_transaction"].map(str::to_owned))
+            .send(&*client)
+            .await
+            .wrap_err_internal("l1: stripe: fetch session data failed when paid")?;
+        drop(client);
+
+        // broooo
+        let intent = data
+            .payment_intent
+            .as_ref()
+            .wrap_err_bad_frontend("payment_intent should exist when paid")?;
+        let intent = intent
+            .as_object()
+            .wrap_err_bad_frontend("didn't expand payment_intent")?;
+        let charge = intent
+            .latest_charge
+            .as_ref()
+            .wrap_err_bad_frontend("no charge when paid")?;
+        let charge = charge
+            .as_object()
+            .wrap_err_bad_frontend("didn't expand latest_charge")?;
+        let balance = charge
+            .balance_transaction
+            .as_ref()
+            .wrap_err_bad_frontend("no balance_transaction when paid")?;
+        let balance = balance
+            .as_object()
+            .wrap_err_bad_frontend("didn't expand balance_transaction")?;
+        Ok(balance.fee)
     }
 }

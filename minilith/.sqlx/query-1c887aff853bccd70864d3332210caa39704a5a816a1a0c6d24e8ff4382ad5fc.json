@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into purchased_tickets\n            (ticket_kind_id, purchaser_id, owner_id, transaction_id)\n            values ($1, $2, $2, $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1c887aff853bccd70864d3332210caa39704a5a816a1a0c6d24e8ff4382ad5fc"
+}

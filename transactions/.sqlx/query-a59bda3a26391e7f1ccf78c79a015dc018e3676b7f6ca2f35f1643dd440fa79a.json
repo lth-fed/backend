@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into transactions (id, customer_id, client_id, callback_url_v1,\n                timeout, provider, total_transaction_fee, callback_identifier)\n            values ($1, $2, $3, $4, $5, 'swish'::provider, $6, $7)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Money",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a59bda3a26391e7f1ccf78c79a015dc018e3676b7f6ca2f35f1643dd440fa79a"
+}

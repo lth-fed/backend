@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select ticket_kind_id, timeout\n                    from ticket_reservations\n                    where user_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "ticket_kind_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "timeout",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "549d0a1e9137016229db67817412200c3096e58d1bc5fd9caf110d735c204e92"
+}

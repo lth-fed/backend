@@ -1,7 +1,7 @@
 use sqlx::PgExecutor;
 use uuid::Uuid;
 
-use crate::group::{Group, path::Path};
+use crate::group::{FatGroup, path::Path};
 use crate::{DbInternationalizedString as DIS, MinilithResult};
 
 /// Returns the closest matching (longest prefix) group path for the given user
@@ -40,9 +40,9 @@ pub async fn closest_user_membership(
 pub async fn user_groups_tree(
     db: impl PgExecutor<'_>,
     user_id: &str,
-) -> MinilithResult<Vec<Group>> {
+) -> MinilithResult<Vec<FatGroup>> {
     sqlx::query_as!(
-        Group,
+        FatGroup,
         r#"
             select distinct
                 g.id, g.path, g.limit_membership_visibility,
@@ -50,7 +50,8 @@ pub async fn user_groups_tree(
                 g.description as "description!: DIS",
                 g.deleted,
                 logo.id as logo_id,
-                logo.url as logo_url
+                logo.url as logo_url,
+                (select array(select user_id from group_adminships where group_id = g.id)) as admin_ids
             from groups g
             join group_memberships gm on gm.user_id = $1
             join groups mg on mg.id = gm.group_id
@@ -100,7 +101,7 @@ mod tests {
         id_by_path(db, &path).await.unwrap().unwrap()
     }
 
-    fn sorted_paths(groups: Vec<Group>) -> Vec<String> {
+    fn sorted_paths(groups: Vec<FatGroup>) -> Vec<String> {
         let mut paths: Vec<String> = groups
             .into_iter()
             .map(|group| group.path.to_string())

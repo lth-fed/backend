@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from ticket_release_queuers\n        where user_id = any ($1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "cc4b67250ec5583daeb07cd5148e03973b2ed0eecf25fbca83d4f71eadae2b21"
+}

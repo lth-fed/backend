@@ -1,5 +1,6 @@
 //! Copied from `transactions/src/api.rs`.
 
+use fed_auth_verifier::callbacks::TransactionState;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -66,8 +67,8 @@ pub struct InfoRequest {
 }
 #[derive(Debug, Deserialize, Clone)]
 pub struct SingleInfoResponse {
-    // id: Uuid,
-    // status: TransactionState,
+    pub id: Uuid,
+    pub state: TransactionState,
     // customer_id: Option<String>,
     pub total_fees: i64,
     // provider: Provider,

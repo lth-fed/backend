@@ -2,14 +2,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use base64::Engine as _;
-use bin_common::setup_db;
+use bin_common::{DebugConfig, setup_db};
 use chacha20::ChaCha20;
 use chacha20::cipher::KeyIvInit as _;
 use chacha20::cipher::StreamCipher as _;
 use color_eyre::Section as _;
 use color_eyre::eyre::Context as _;
-#[cfg(not(debug_assertions))]
-use color_eyre::eyre::ContextCompat as _;
 use minilith_errors::{
     AlertLevel, EmailClient, MinilithEndpointError, MinilithResult, alert, configure_alert_email,
 };
@@ -29,6 +27,7 @@ pub type ContextWrapper = Arc<Context>;
 #[derive(Debug)]
 pub struct Context {
     pub db: PgPool,
+    pub debug: DebugConfig,
     encryption_key: [u8; 32],
 
     transactions_api: String,
@@ -38,6 +37,7 @@ pub struct Context {
     push_clients: Option<PushClients>,
 
     email_client: Option<EmailClient>,
+    accountant: Option<String>,
     report_typst: report::OurWonderfulTypstWorldBase,
 
     s3_image_bucket: Box<s3::Bucket>,
@@ -57,11 +57,14 @@ impl Context {
             None
         } else {
             configure_alert_email(EmailClient::new("ALERT")?)?;
-            let email_client = EmailClient::new("MAIL")?;
-            #[cfg(not(debug_assertions))]
-            let email_client =
-                Some(email_client.wrap_err("`MAIL_*` email configuration is required")?);
-            email_client
+            EmailClient::new("MAIL")?
+        };
+        let accountant = if is_test {
+            None
+        } else {
+            std::env::var("ACCOUNTANT")
+                .ok()
+                .filter(|address| !address.trim().is_empty())
         };
 
         let db = if let Some(db) = test_db {
@@ -70,6 +73,7 @@ impl Context {
             setup_db(
                 &std::env::var("DATABASE_URL").wrap_err("`DATABASE_URL` not set")?,
                 migrate.then_some(migrate!("./migrations")),
+                24,
             )
             .await
             .wrap_err("Failed to set up the database")
@@ -86,19 +90,26 @@ impl Context {
 
         let transactions_token = std::env::var("TRANSACTIONS_TOKEN")
             .wrap_err("Error: Missing env variable: 'TRANSACTIONS_TOKEN'.")?;
+        let debug = DebugConfig::from_env();
+        let default_transactions_api = if debug.service_urls {
+            "https://transactions:8052"
+        } else if cfg!(debug_assertions) {
+            "https://localhost:8052"
+        } else {
+            "https://transactions.teknologappen.se"
+        };
+        let transactions_api = default_transactions_api.to_owned();
 
-        #[cfg(debug_assertions)]
-        let transactions_api = "http://localhost:8002";
-        #[cfg(not(debug_assertions))]
-        let transactions_api = "https://transactions.teknologappen.se";
+        let client = reqwest::Client::builder()
+            .tls_danger_accept_invalid_certs(debug.enabled)
+            .build()?;
 
         let push_clients = if is_test {
             None
         } else {
             match PushClients::from_env().await {
                 Ok(None) => {
-                    #[cfg(not(debug_assertions))]
-                    {
+                    if !debug.enabled {
                         alert(
                             AlertLevel::L2,
                             "push-notifications credentials not available",
@@ -110,10 +121,26 @@ impl Context {
 
                     None
                 }
-                Ok(Some(push_clients)) => Some(push_clients),
+                Ok(Some(push_clients)) => match push_clients.verify_credentials().await {
+                    Ok(()) => Some(push_clients),
+                    Err(error) => {
+                        if !debug.enabled {
+                            alert(
+                                AlertLevel::L2,
+                                "push-notifications credential test failed. See logs",
+                            );
+                        }
+                        error!(
+                            ?error,
+                            "push-notification sending disabled because its credential test failed"
+                        );
+                        None
+                    }
+                },
                 Err(error) => {
-                    #[cfg(not(debug_assertions))]
-                    alert(AlertLevel::L2, "push-notifications setup failed. See logs");
+                    if !debug.enabled {
+                        alert(AlertLevel::L2, "push-notifications setup failed. See logs");
+                    }
                     error!(
                         ?error,
                         "push-notification sending disabled because setup failed"
@@ -125,10 +152,13 @@ impl Context {
 
         let s3_access_key = std::env::var("S3_ACCESS_KEY")?;
         let s3_secret_key = std::env::var("S3_SECRET_KEY")?;
-        #[cfg(debug_assertions)]
-        let s3_url = "http://localhost:9000";
-        #[cfg(not(debug_assertions))]
-        let s3_url = "http://fed-s3:9000";
+        let (s3_url, s3_console_url) = if debug.service_urls {
+            ("http://fed-s3:9000", "http://fed-s3:9001")
+        } else if cfg!(debug_assertions) {
+            ("http://localhost:9000", "http://localhost:9001")
+        } else {
+            ("http://fed-s3:9000", "http://fed-s3:9001")
+        };
         let s3_image_bucket = s3::Bucket::new(
             "image",
             s3::Region::Custom {
@@ -156,12 +186,11 @@ impl Context {
                     alert(AlertLevel::L2, "s3: no image bucket!");
                     warn!("No s3 image bucket exists! Please create one.");
                 }
-                #[cfg(debug_assertions)]
-                Err(error) => {
+                Err(error) if debug.enabled => {
                     warn!(
                         ?error,
                         "Could not connect to s3 bucket. Continuing without suppoort. \
-                    Add account at console: http://localhost:9001 \
+                    Add account at console: {s3_console_url} \
                     password&user is rustfsadmin. Save as env vars."
                     );
                 }
@@ -171,16 +200,32 @@ impl Context {
             }
         }
 
+        if !is_test && (accountant.is_none() || email_client.is_none()) {
+            if !debug.enabled {
+                alert(
+                    AlertLevel::L2,
+                    "automatic bookkeeping email is disabled; ACCOUNTANT or MAIL SMTP settings are missing",
+                );
+            }
+            warn!(
+                accountant_configured = accountant.is_some(),
+                mail_configured = email_client.is_some(),
+                "automatic bookkeeping email is disabled"
+            );
+        }
+
         let context = Self {
             db,
+            debug,
             encryption_key,
-            transactions_api: transactions_api.to_owned(),
-            transactions_client: reqwest::Client::new(),
+            transactions_api,
+            transactions_client: client,
             transactions_token,
 
             push_clients,
 
             email_client,
+            accountant,
             report_typst: report::OurWonderfulTypstWorldBase::default(),
 
             s3_image_bucket,
@@ -314,6 +359,11 @@ impl Context {
         self.email_client.as_ref()
     }
 
+    #[must_use]
+    pub(crate) fn accounting_email(&self) -> Option<(&EmailClient, &str)> {
+        self.email_client.as_ref().zip(self.accountant.as_deref())
+    }
+
     /// # Errors
     ///
     /// Returns an internal error if the push provider rejects the notification.
@@ -322,6 +372,7 @@ impl Context {
         platform: PushPlatform,
         push_token: &str,
         notification_id: Uuid,
+        activity_id: Option<Uuid>,
         title: &str,
         content: &str,
     ) -> MinilithResult<PushSendResult> {
@@ -332,7 +383,14 @@ impl Context {
             )
         })?;
         sender
-            .send(platform, push_token, notification_id, title, content)
+            .send(
+                platform,
+                push_token,
+                notification_id,
+                activity_id,
+                title,
+                content,
+            )
             .await
     }
 

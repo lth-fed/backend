@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from ticket_kind_transfer_groups where ticket_kind_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "be1052492e4496ab07ee098aebd962afb24066d97f8ad367cb41b93c0bea01ed"
+}

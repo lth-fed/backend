@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select distinct addons.name as \"name!: DIS\"\n            from ticket_addons addons\n            inner join ticket_kinds kinds on kinds.id = addons.ticket_kind_id\n            inner join activity_hosts hosts on hosts.activity_id = kinds.activity_id\n            inner join group_adminships admins on admins.group_id = hosts.group_id\n            where admins.user_id = $1\n            order by addons.name",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name!: DIS",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "52b65e1c190069f9f6419777823c40502c40ba20e3309f01853074eb678b8014"
+}

@@ -1,0 +1,56 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n            push_devices.user_id as \"user_id!\",\n            push_devices.device_id as \"device_id!\",\n            push_devices.push_token,\n            push_devices.platform::push_platform\n                as \"platform!: crate::push_notifications::PushPlatform\",\n            users.language\n        from notification_recipients\n        inner join push_devices using (user_id)\n        inner join users on users.id = notification_recipients.user_id\n        where notification_recipients.notification_id = $1\n        and notification_level = 'all'::notification_level",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "device_id!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "push_token",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "platform!: crate::push_notifications::PushPlatform",
+        "type_info": {
+          "Custom": {
+            "name": "push_platform",
+            "kind": {
+              "Enum": [
+                "ios",
+                "android"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "language",
+        "type_info": "Bytea"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "358d25f9109d6ee4f55027b638c1c8cb117bbec207635b144546307f66591819"
+}

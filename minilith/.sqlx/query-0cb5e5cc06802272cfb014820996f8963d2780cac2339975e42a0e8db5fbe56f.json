@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select purchased_tickets.id, purchased_tickets.ticket_kind_id,\n            purchased_tickets.transaction_id\n        from purchased_tickets\n        inner join ticket_kinds on ticket_kinds.id = purchased_tickets.ticket_kind_id\n        where ticket_kinds.activity_id = $1\n        order by purchased_tickets.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "ticket_kind_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "transaction_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "0cb5e5cc06802272cfb014820996f8963d2780cac2339975e42a0e8db5fbe56f"
+}

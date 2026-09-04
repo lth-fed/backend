@@ -25,7 +25,9 @@ create table activities (
     -- only for normal users, admins can always see them
     is_hidden boolean not null default true,
     is_hidden_for_other_admins boolean not null default false,
-    max_tickets integer not null default 2147483647 check (max_tickets >= 0)
+    max_tickets integer not null default 2147483647 check (max_tickets >= 0),
+    -- Set only after the automatic sales report email has been accepted by SMTP.
+    bookkept boolean not null default false
 );
 
 -- co-hosts of event. MUST include activities.creator_id

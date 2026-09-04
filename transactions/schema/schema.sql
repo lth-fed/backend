@@ -4,6 +4,10 @@ create table client_ids (
     swish_cert text not null,
     swish_key text not null,
     swish_number text not null,
+    swish_payment_fee_fixed money not null,
+    swish_payment_fee_fraction double precision not null,
+    swish_payment_fee_max money not null,
+    swish_refund_fee money not null,
 
     stripe_secret text,
     -- all stripe callbacks should go to the same URL, so keeping one per client_id is reasonable
@@ -42,6 +46,7 @@ create table transactions (
     -- stripe: it's the stripe checkout ID
     -- swish: the payment_reference we get
     payment_reference text,
+    paid_at timestamptz,
     timeout timestamptz not null,
     -- for refund
     provider provider not null,
@@ -79,6 +84,7 @@ create table transaction_wares (
 );
 create index transaction_wares_transaction_id on transaction_wares using hash (transaction_id);
 
+-- The key here cannot exist in transactions aswell
 create table transaction_reserved_ids (
     id uuid primary key,
     created timestamptz not null default now()

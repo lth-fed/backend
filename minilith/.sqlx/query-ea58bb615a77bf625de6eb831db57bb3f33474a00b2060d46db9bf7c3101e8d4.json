@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update users_in_purchase_flow set lock_id = $1, locked_at = now()\n        where user_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ea58bb615a77bf625de6eb831db57bb3f33474a00b2060d46db9bf7c3101e8d4"
+}

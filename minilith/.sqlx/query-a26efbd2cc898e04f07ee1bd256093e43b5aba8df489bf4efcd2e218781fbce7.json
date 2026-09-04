@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select count(distinct pt.owner_id) as \"count!\"\n            from purchased_ticket_validations\n            inner join purchased_tickets pt\n                on pt.id = purchased_ticket_validations.purchased_ticket_id\n            inner join ticket_kinds on ticket_kinds.id = pt.ticket_kind_id\n            where ticket_kinds.activity_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "a26efbd2cc898e04f07ee1bd256093e43b5aba8df489bf4efcd2e218781fbce7"
+}

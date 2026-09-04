@@ -1,12 +1,14 @@
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
-use minilith_errors::{AlertLevel, MinilithErrorResultExt as _, MinilithResult, alert};
-use stripe_checkout::CheckoutSessionStatus;
-use tracing::error;
+use minilith_errors::{
+    MinilithEndpointError, MinilithErrorOptionExt as _, MinilithErrorResultExt as _, MinilithResult,
+};
+use sqlx::postgres::types::PgMoney;
+use stripe_checkout::{CheckoutSessionPaymentStatus, CheckoutSessionStatus};
 use uuid::Uuid;
 
-use crate::callback::handle_callback_to_us;
+use crate::callback::{self, handle_callback_to_us};
 use crate::context::{CancelTransactionData, Context};
 use crate::{CallbackEvent, CallbackInfo, Provider, TransactionInfo, TransactionState, swish};
 
@@ -25,70 +27,72 @@ async fn fetch_transaction_info(ctx: &Context, txn: TxnData) -> MinilithResult<C
             let Ok(client) = ctx.get_swish_client(&txn.client_id).await else {
                 return Ok(ControlFlow::Continue(()));
             };
-            let resp = match client
-                .get(swish::payment_request_url(swish::ApiVersion::V1, txn.id))
+            let Ok(resp) = client
+                .get(swish::payment_request_url(
+                    swish::ApiVersion::V1,
+                    txn.id,
+                    ctx.debug.enabled,
+                ))
                 .send()
                 .await
-            {
-                Ok(resp) => resp,
-                Err(err) => {
-                    alert(
-                        AlertLevel::L2,
-                        "swish connection issues when GETting payment status",
-                    );
-                    error!(
-                        ?err,
-                        "failed to fetch swish payment request status due to connection issues"
-                    );
-                    return Ok(ControlFlow::Break(()));
-                }
+                .wrap_err_internal(
+                    "l2: failed to fetch swish payment request status due to connection issues",
+                )
+            else {
+                return Ok(ControlFlow::Break(()));
             };
             drop(client);
-            if !resp.status().is_success() {
-                alert(AlertLevel::L1, "swish payment request failed");
-                error!(
-                    status_code=%resp.status(),
-                    "swish payment request status fetch failed!"
-                );
+            let status = resp.status();
+            if !status.is_success() {
+                let body = resp.text().await.ok();
+                drop(MinilithEndpointError::internal_error(
+                    format!("l1: swish payment request status fetch failed! Status: {status}"),
+                    body,
+                ));
                 return Ok(ControlFlow::Continue(()));
             }
-            match resp.json().await {
-                Ok(data) => data,
-                Err(err) => {
-                    alert(AlertLevel::L2, "swish payment request body parsing failed");
-                    error!(
-                        ?err,
-                        "failed to get body from swish payment request status \
-                        due to parsing json / reading body issues"
-                    );
-                    return Ok(ControlFlow::Continue(()));
-                }
-            }
+            let Ok(data) = resp.json().await.wrap_err_internal(
+                "l2: failed to get body from swish payment request status \
+                        due to parsing json / reading body issues",
+            ) else {
+                return Ok(ControlFlow::Continue(()));
+            };
+            data
         }
         Provider::Stripe => {
             let Ok(client) = ctx.get_stripe_client(&txn.client_id).await else {
                 return Ok(ControlFlow::Continue(()));
             };
 
-            let Some(session_id) = txn.stripe_id else {
-                alert(
-                    AlertLevel::L1,
-                    "stripe_checkouts doesn't have a stripe_id for this transaction",
-                );
-                error!("stripe_checkouts doesn't have stripe_id for a stripe transaction!");
+            let Ok(session_id) = txn.stripe_id.wrap_err_internal(
+                "l1: stripe_checkouts doesn't have a stripe_id for a stripe transaction",
+            ) else {
                 return Ok(ControlFlow::Continue(()));
             };
-            let checkout =
-                stripe_checkout::checkout_session::RetrieveCheckoutSession::new(session_id)
-                    .send(&*client)
-                    .await
-                    .wrap_err_internal("stripe: retrieve checkout")?;
+            let checkout = stripe_checkout::checkout_session::RetrieveCheckoutSession::new(
+                session_id.as_str(),
+            )
+            .send(&*client)
+            .await
+            .wrap_err_internal("stripe: retrieve checkout")?;
             drop(client);
-            let status = match checkout.status {
-                Some(CheckoutSessionStatus::Complete) => Some(swish::Status::Paid),
-                Some(CheckoutSessionStatus::Open) | None => None,
-                _ => Some(swish::Status::Cancelled),
+            let status = match (checkout.payment_status, checkout.status) {
+                (CheckoutSessionPaymentStatus::Paid, _) => Some(swish::Status::Paid),
+                (_, Some(CheckoutSessionStatus::Expired)) => Some(swish::Status::Cancelled),
+                _ => None,
             };
+            if status == Some(swish::Status::Paid) {
+                let fee = ctx.stripe_get_fee(&txn.client_id, session_id).await?;
+
+                // set so this is idempotent
+                sqlx::query!(
+                    "update transactions set total_transaction_fee = $1 where id = $2",
+                    PgMoney(fee),
+                    txn.id,
+                )
+                .execute(&ctx.db)
+                .await?;
+            }
 
             swish::Callback {
                 id: txn.id,
@@ -136,16 +140,13 @@ pub fn spawn(ctx: &Arc<Context>) {
     // one runtime task per instance of this, so every function called in `check_timeouts` has to
     // be safe to be called concurrently from all instances of transactions (i.e. we have to write
     // good sql queries)
-    let ctx = Arc::clone(ctx);
+    let timeout_context = Arc::clone(ctx);
     tokio::spawn(async move {
         loop {
-            if let Err(err) = check_timeouts(&ctx).await {
-                error!(?err, "Error from runtime->check_timeouts");
-                alert(
-                    AlertLevel::L2,
-                    "error from transactions->runtime->check_timeouts",
-                );
-            }
+            let res = check_timeouts(&timeout_context)
+                .await
+                .wrap_err_internal("l2: error from runtime->check_timeouts");
+            drop(res);
 
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
         }
@@ -174,7 +175,11 @@ pub async fn check_timeouts(ctx: &Context) -> MinilithResult<()> {
     let mut cancelled = Vec::new();
 
     for transaction in timed_out_transactions {
-        if ctx.cancel_transaction(&transaction).await? {
+        // holds a DB connection over HTTP requests, though this is fine since it's max one per
+        // instance:)
+        //
+        // should probably be fixed though TODO
+        if ctx.cancel_transaction(&transaction).await.is_ok() {
             cancelled_uuids.push(transaction.id);
             cancelled.push(transaction);
         } else {
@@ -194,9 +199,18 @@ pub async fn check_timeouts(ctx: &Context) -> MinilithResult<()> {
         }
     }
 
-    crate::callback::send_callbacks(
-        &ctx.client,
-        &ctx.signing_key,
+    sqlx::query!(
+        "delete from transactions using unnest($1::uuid[]) as t(id)
+        where transactions.id = t.id",
+        &cancelled_uuids
+    )
+    .execute(&mut txn.executor())
+    .await?;
+
+    txn.commit().await?;
+
+    callback::send_callbacks(
+        ctx,
         cancelled.iter().map(|row| CallbackEvent {
             callback_url_v1: row.callback_url_v1.clone(),
             client_id: row.client_id.clone(),
@@ -209,15 +223,6 @@ pub async fn check_timeouts(ctx: &Context) -> MinilithResult<()> {
         }),
     )
     .await;
-
-    sqlx::query!(
-        "delete from transactions using unnest($1::uuid[]) as t(id)",
-        &cancelled_uuids
-    )
-    .execute(&mut txn.executor())
-    .await?;
-
-    txn.commit().await?;
 
     Ok(())
 }

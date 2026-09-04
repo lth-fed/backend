@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select ticket_kind_id, transaction_id\n                    from ticket_reservations where user_id = $1\n                    for update",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "ticket_kind_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "transaction_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "6e1128a3f55fa50794f672da681c2c39a2841649c8818000888a8e74b6ebbfd0"
+}

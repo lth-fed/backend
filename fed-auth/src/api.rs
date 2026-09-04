@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::context::{ValidatedAuthSession, ValidatedUser};
 use crate::oidc::ACCESS_TOKEN_VALID_FOR;
-use crate::{Context, ContextWrapper, WEBSITE_DOMAIN, jwt};
+use crate::{Context, ContextWrapper, jwt};
 
 #[derive(Object, Clone)]
 pub(crate) struct EmailLoginRequest {
@@ -65,17 +65,18 @@ impl Deref for MainRouter {
 }
 #[OpenApi]
 impl MainRouter {
-    async fn get_guild(&self, pn: &str) -> MinilithResult<Option<Guild>> {
+    async fn get_guild(&self, pn: &str, sub: &str) -> MinilithResult<Option<Guild>> {
         let resp = self
             .reqwest_client
             .post("https://medcheck.tlth.se")
+            .timeout(std::time::Duration::from_secs(5))
             .header("content-type", "application/x-www-form-urlencoded")
             .body(format!("id={pn}"))
             .send()
             .await
-            .wrap_err_internal("medcheck: transport error")?
+            .wrap_err_internal(format!("noalert medcheck: transport error (for {sub})"))?
             .error_for_status()
-            .wrap_err_internal("medcheck: status error")?;
+            .wrap_err_internal(format!("noalert medcheck: status error (for {sub})"))?;
         let body = resp
             .text()
             .await
@@ -120,14 +121,29 @@ impl MainRouter {
     ) -> MinilithResult<PlainText<String>> {
         if headers
             .get("origin")
-            .is_some_and(|origin| origin != WEBSITE_DOMAIN)
+            .is_some_and(|origin| origin != self.website_domain)
         {
             return Err(MinilithEndpointError::bad_frontend_code(
                 "origin has to be from our domain",
                 "",
             ));
         }
-        if !body.name.contains(' ') || body.name.len() < 5 {
+        let sub = sqlx::query_scalar!(
+            "select sub from session_validated_users where session_id = $1",
+            body.code
+        )
+        .fetch_optional(&self.db)
+        .await?
+        .wrap_err_not_found()?;
+
+        // if email (admin) login, don't enforce name!
+        if !sub.starts_with("email:")
+            && (body
+                .name
+                .split_once(' ')
+                .is_none_or(|(first_name, surname)| first_name.is_empty() || surname.is_empty())
+                || body.name.len() < 5)
+        {
             return Err(MinilithEndpointError::bad_user_input(
                 "name invalid",
                 "",
@@ -145,7 +161,14 @@ impl MainRouter {
                 ));
             }
 
-            self.get_guild(pn).await.ok().flatten()
+            // TODO: remove hack, we fall back to E if medcheck is bad
+            Some(
+                self.get_guild(pn, &sub)
+                    .await
+                    .ok()
+                    .flatten()
+                    .unwrap_or(Guild::E),
+            )
         } else {
             None
         };
@@ -182,7 +205,7 @@ impl MainRouter {
     ) -> MinilithResult<()> {
         if headers
             .get("origin")
-            .is_some_and(|origin| origin != WEBSITE_DOMAIN)
+            .is_some_and(|origin| origin != self.website_domain)
         {
             return Err(MinilithEndpointError::bad_frontend_code(
                 "origin has to be from our domain",
@@ -193,7 +216,10 @@ impl MainRouter {
             return Err(MinilithEndpointError::unauthorized("code not valid", ""));
         }
         let token = Uuid::new_v4();
-        let link = format!("{WEBSITE_DOMAIN}/providers/email/approve/?token={token}");
+        let link = format!(
+            "{}/providers/email/approve/?token={token}",
+            self.website_domain
+        );
         if let Some(email_client) = &self.email_client {
             let (from_name, subject, description) = match body.language {
                 EmailLanguage::En => (
@@ -212,8 +238,7 @@ impl MainRouter {
             let html = format!("<p>{description}</p><p><a href=\"{link}\">{link}</a></p>");
             email_client
                 .send_html(from_name, [body.email.as_str()], subject, html)
-                .await
-                .wrap_err_internal("failed to send email")?;
+                .await?;
         } else {
             println!(
                 "Someone tried to log in with the email {}. Click the link below to continue.",
@@ -243,7 +268,7 @@ impl MainRouter {
     ) -> MinilithResult<PlainText<String>> {
         if headers
             .get("origin")
-            .is_some_and(|origin| origin != WEBSITE_DOMAIN)
+            .is_some_and(|origin| origin != self.website_domain)
         {
             return Err(MinilithEndpointError::bad_frontend_code(
                 "origin has to be from our domain",
@@ -288,7 +313,7 @@ impl MainRouter {
     ) -> MinilithResult<PlainText<String>> {
         if headers
             .get("origin")
-            .is_some_and(|origin| origin != WEBSITE_DOMAIN)
+            .is_some_and(|origin| origin != self.website_domain)
         {
             return Err(MinilithEndpointError::bad_frontend_code(
                 "origin has to be from our domain",

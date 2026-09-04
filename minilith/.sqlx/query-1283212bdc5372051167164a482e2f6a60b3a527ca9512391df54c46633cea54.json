@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select admins.user_id, users.name as \"name?\"\n            from group_adminships admins\n            left join users on users.id = admins.user_id\n            where admins.group_id = $1\n            order by admins.user_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "name?",
+        "type_info": "Bytea"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "1283212bdc5372051167164a482e2f6a60b3a527ca9512391df54c46633cea54"
+}

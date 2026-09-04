@@ -2,6 +2,10 @@ insert into client_ids (
     client_id,
 
     swish_number,
+    swish_payment_fee_fixed,
+    swish_payment_fee_fraction,
+    swish_payment_fee_max,
+    swish_refund_fee,
 
     stripe_secret,
 
@@ -18,10 +22,14 @@ values
 (
     'esek',
     '1234679304',
+    '3'::money,
+    0.0,
+    '3'::money,
+    '3'::money,
     null,
     'E-sektionen inom TLTH',
     'informationschef@esek.se',
-    ' Edekvata, plan B i E-huset, LTH
+    'Edekvata, plan B i E-huset, LTH
 Ole Römers väg 3B
 223 63 Lund',
     '845001-2284',

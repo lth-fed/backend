@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select group_notifications.notification_id, notifications.sent\n            from group_notifications\n            inner join notifications on notifications.id = group_notifications.notification_id\n            where group_notifications.id = $1 and group_notifications.group_id = $2\n            for update of notifications",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "notification_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "sent",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "50b9dedc6661cef65bb5ec40130e05505cf045504ddfa570b51c251138e5d9a4"
+}

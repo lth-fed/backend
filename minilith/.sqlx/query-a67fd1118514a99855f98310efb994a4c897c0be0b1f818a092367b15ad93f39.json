@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into ticket_release_queuers\n            (user_id, ticket_kind_id, started_queueing)\n            values ($1, $2, now())",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a67fd1118514a99855f98310efb994a4c897c0be0b1f818a092367b15ad93f39"
+}

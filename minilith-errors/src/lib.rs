@@ -4,6 +4,7 @@ use std::sync::OnceLock;
 
 use color_eyre::eyre::Context as _;
 use lettre::AsyncTransport as _;
+use opentelemetry::KeyValue;
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Object};
 use tracing::error;
@@ -121,10 +122,7 @@ impl MinilithEndpointError {
         }))
     }
     /// This resource wasn't found. Is arguably [`Self::bad_frontend_code`]. Should they be merged?
-    #[track_caller]
     pub fn not_found() -> Self {
-        // to get the trace
-        error!("Not found.");
         Self::NotFound(Json(MinilithError {
             message: "resource not found, try reloading app".into(),
             field: None,
@@ -134,7 +132,9 @@ impl MinilithEndpointError {
     #[track_caller]
     pub fn internal_error(error_message: impl AsRef<str>, error: impl Debug) -> Self {
         // so it doesn't just loop
-        if !error_message.as_ref().starts_with("email:") && !error_message.as_ref().starts_with("noalert") {
+        if !error_message.as_ref().starts_with("email:")
+            && !error_message.as_ref().starts_with("noalert")
+        {
             let level = match error_message
                 .as_ref()
                 .get(..2)
@@ -144,13 +144,14 @@ impl MinilithEndpointError {
                 "l1" => AlertLevel::L1,
                 _ => AlertLevel::L3,
             };
-            alert(
+            alert_html(
                 level,
                 format!(
-                    "internal error from wrap_err_internal, \
-                    message:<code>{}</code>, \
-                    error:<pre><code>{error:?}</code></pre>",
-                    error_message.as_ref()
+                    "<p>internal error from wrap_err_internal, \
+                    message:<i>{}</i>. Extensive error:</p> \
+                    <pre><code>{}</code></pre>",
+                    escape_email_html(error_message.as_ref()),
+                    escape_email_html(&format!("{error:#?}"))
                 ),
             );
         }
@@ -158,15 +159,6 @@ impl MinilithEndpointError {
         error!(message = error_message.as_ref(), ?error, "Internal error.");
         Self::InternalServerError(Json(MinilithError {
             message: "Something went very wrong. Contact app developers.".to_owned(),
-            field: None,
-        }))
-    }
-    #[track_caller]
-    pub fn db<E: Debug>(error: E) -> Self {
-        error!(?error, "DB error");
-        Self::InternalServerError(Json(MinilithError {
-            message: "Something went very wrong. Contact app developers. Database request failed."
-                .to_owned(),
             field: None,
         }))
     }
@@ -182,14 +174,20 @@ impl From<sqlx::Error> for MinilithEndpointError {
             // we can't connect to DB!
             AlertLevel::L2
         };
-        alert(
+        alert_html(
             level,
             format!(
-                "db error, \
-                error:<pre><code>{error:?}</code></pre>",
+                "<p>db error:</p> \
+                <pre><code>{}</code></pre>",
+                escape_email_html(&format!("{error:#?}"))
             ),
         );
-        Self::db(error)
+        error!(?error, "DB error");
+        Self::InternalServerError(Json(MinilithError {
+            message: "Something went very wrong. Contact app developers. Database request failed."
+                .to_owned(),
+            field: None,
+        }))
     }
 }
 /// Poem thing.
@@ -309,7 +307,7 @@ impl<T> MinilithErrorOptionExt<T> for Option<T> {
     }
     #[track_caller]
     fn wrap_err_not_found(self) -> MinilithResult<T> {
-        self.ok_or_else(|| MinilithEndpointError::not_found())
+        self.ok_or_else(MinilithEndpointError::not_found)
     }
     #[track_caller]
     fn wrap_err_internal(self, error_message: impl AsRef<str>) -> MinilithResult<T> {
@@ -328,6 +326,8 @@ impl<T> MinilithErrorOptionExt<T> for Option<T> {
 pub struct EmailClient {
     from: lettre::Address,
     transport: lettre::AsyncSmtpTransport<lettre::Tokio1Executor>,
+    metrics: opentelemetry::metrics::Counter<u64>,
+    metrics_error: opentelemetry::metrics::Counter<u64>,
 }
 
 impl Debug for EmailClient {
@@ -386,7 +386,16 @@ impl EmailClient {
             ])
             .build();
 
-        Ok(Some(Self { from, transport }))
+        let meter = opentelemetry::global::meter("minilith-errors");
+        let metrics = meter.u64_counter("email").build();
+        let metrics_error = meter.u64_counter("email-errors").build();
+
+        Ok(Some(Self {
+            from,
+            transport,
+            metrics,
+            metrics_error,
+        }))
     }
 
     /// Sends one HTML-only message to every supplied recipient.
@@ -413,7 +422,7 @@ impl EmailClient {
         let mut has_recipient = false;
         for recipient in to {
             let mailbox = lettre::message::Mailbox::from_str(recipient)
-                .wrap_err_internal("email: invalid recipient email address")?;
+                .wrap_err_bad_user("email: invalid recipient email address", "email")?;
             message = message.to(mailbox);
             has_recipient = true;
         }
@@ -424,11 +433,100 @@ impl EmailClient {
         let message = message
             .body(html.into())
             .wrap_err_internal("email: failed to format email")?;
-        let response = self
-            .transport
-            .send(message)
-            .await
-            .wrap_err_internal("email: failed to send email")?;
+
+        self.send_message(message, from_name, subject).await
+    }
+
+    /// Sends an HTML message with one PDF attachment.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if there are no recipients, an address or message is
+    /// invalid, or the SMTP server rejects delivery.
+    pub async fn send_html_with_pdf<'a>(
+        &self,
+        from_name: &str,
+        to: impl IntoIterator<Item = &'a str>,
+        subject: &str,
+        html: impl Into<String>,
+        filename: String,
+        pdf: Vec<u8>,
+    ) -> MinilithResult<()> {
+        let mut message = lettre::Message::builder()
+            .from(lettre::message::Mailbox::new(
+                Some(from_name.to_owned()),
+                self.from.clone(),
+            ))
+            .subject(subject);
+
+        let mut has_recipient = false;
+        for recipient in to {
+            let mailbox = lettre::message::Mailbox::from_str(recipient)
+                .wrap_err_bad_user("email: invalid recipient email address", "email")?;
+            message = message.to(mailbox);
+            has_recipient = true;
+        }
+        if !has_recipient {
+            return Ok(());
+        }
+
+        let content_type = lettre::message::header::ContentType::parse("application/pdf")
+            .wrap_err_internal("email: invalid PDF content type")?;
+        let body = lettre::message::MultiPart::mixed()
+            .singlepart(lettre::message::SinglePart::html(html.into()))
+            .singlepart(lettre::message::Attachment::new(filename).body(pdf, content_type));
+        let message = message
+            .multipart(body)
+            .wrap_err_internal("email: failed to format email with PDF")?;
+
+        self.send_message(message, from_name, subject).await
+    }
+
+    async fn send_message(
+        &self,
+        message: lettre::Message,
+        from_name: &str,
+        subject: &str,
+    ) -> MinilithResult<()> {
+        let mut labels = Vec::with_capacity(4);
+        labels.push(KeyValue::new(
+            "email.request.from".to_owned(),
+            from_name.to_owned(),
+        ));
+        labels.push(KeyValue::new(
+            "email.request.subject".to_owned(),
+            subject.to_owned(),
+        ));
+
+        let mut tries = 0;
+        let max_tries = 5;
+        let mut wait = std::time::Duration::from_millis(50);
+        let response = loop {
+            tries += 1;
+            let res = self.transport.send(message.clone()).await;
+            let err = match res {
+                Ok(resp) => break resp,
+                Err(err) => err,
+            };
+            if tries >= max_tries {
+                labels.push(KeyValue::new(
+                    "email.response.status_code",
+                    err.status()
+                        .map_or(String::new(), |status| status.to_string()),
+                ));
+                labels.push(KeyValue::new("email.response.error", err.to_string()));
+                self.metrics.add(1, &labels);
+                self.metrics_error.add(1, &labels);
+                return Err(err).wrap_err_internal("email: failed to send email")?;
+            }
+            tokio::time::sleep(wait).await;
+            wait *= 2;
+        };
+        labels.push(KeyValue::new(
+            "email.response.status_code",
+            response.code().to_string(),
+        ));
+        self.metrics.add(1, &labels);
         if !response.is_positive() {
             // we can't alert here, that could cause loops
             // alert(
@@ -436,6 +534,11 @@ impl EmailClient {
             //     format!("failed to send email: {:?}", response.code()),
             // );
             error!("email: Failed to send email: {:?}", response.code());
+            self.metrics_error.add(1, &labels);
+            return Err(MinilithEndpointError::internal_error(
+                "email: SMTP rejected email",
+                response.code(),
+            ));
         }
         Ok(())
     }
@@ -515,8 +618,25 @@ pub fn configure_alert_email(client: Option<EmailClient>) -> color_eyre::Result<
 /// Delivery is scheduled on the application's existing Tokio runtime so this
 /// function remains usable by synchronous error-conversion code.
 pub fn alert(level: AlertLevel, message: impl AsRef<str>) {
+    alert_html(
+        level,
+        format!("<p><i>{}</i></p>", escape_email_html(message.as_ref())),
+    );
+}
+/// Same as [`alert`] but `message` has to be escaped for HTML.
+/// `message` is not in an HTML tag.
+pub fn alert_html(level: AlertLevel, message: impl AsRef<str>) {
     let Some(client) = ALERT_EMAIL_CLIENT.get().cloned() else {
-        error!(%level, "ALERTS: email is not configured");
+        let backtrace = std::backtrace::Backtrace::force_capture()
+            .to_string()
+            .lines()
+            .take(14)
+            .fold(String::new(), |mut acc, line| {
+                acc.push_str(line);
+                acc.push('\n');
+                acc
+            });
+        error!(%level, "ALERTS: email is not configured. Backtrace:\n{backtrace}");
         return;
     };
     let recipients = match alert_recipients(level) {
@@ -527,8 +647,9 @@ pub fn alert(level: AlertLevel, message: impl AsRef<str>) {
         }
     };
 
-    let trace = std::backtrace::Backtrace::force_capture();
-    let message = escape_email_html(message.as_ref());
+    let trace_id = opentelemetry::trace::get_active_span(|span| span.span_context().trace_id());
+
+    let backtrace = std::backtrace::Backtrace::force_capture();
     let intro = match level {
         AlertLevel::L1 => {
             "A level 1 critical error occurred in any of the teknologappen instances. \
@@ -546,11 +667,14 @@ pub fn alert(level: AlertLevel, message: impl AsRef<str>) {
     let subject = format!("ALERT {level} from teknologappen");
     let html = format!(
         "<p>{intro}</p>\
-         <p>A message was included from the code: <code>{message}</code>. \
-         <strong>Version</strong>: <code>{GIT_VERSION}</code>.</p>\
+         <p>A message was included from the code:</p>
+         {} \
+         <p><strong>Version</strong>: <code>{GIT_VERSION}</code>. \
+         <strong>Trace ID</strong>: <code>{trace_id}</code>.</p>\
          <p>To ease debugging the backtrace is inserted below.</p>\
          <pre><code>{}</code></pre>",
-        escape_email_html(&trace.to_string()),
+        message.as_ref(),
+        escape_email_html(&backtrace.to_string()),
     );
     let Ok(runtime) = tokio::runtime::Handle::try_current() else {
         error!(%level, "ALERTS: no Tokio runtime is available for email delivery");

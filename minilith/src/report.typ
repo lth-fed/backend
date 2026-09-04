@@ -113,3 +113,14 @@
   table.hline(),
   total, format_currency(data.per_alcohol_category.map(obj => obj.amount).sum(default: 0)),
 )
+
+#for index in range(data.receipt_count) {
+  pagebreak()
+  image(
+    read("transaction-receipt-" + str(index) + ".pdf", encoding: none),
+    format: "pdf",
+    width: 100%,
+    height: 100%,
+    fit: "contain",
+  )
+}

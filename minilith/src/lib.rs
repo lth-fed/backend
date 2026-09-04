@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use bin_common::get_otel;
+use bin_common::{APP_VERSION_HEADER, AppVersionMetrics, get_otel};
 use fed_auth_verifier::{AuthUrl, JwkContext, TransactionsUrl};
 use opentelemetry::trace::TracerProvider as _;
 use poem::http::Method;
@@ -9,15 +9,10 @@ use poem::middleware::{Cors, OpenTelemetryMetrics, OpenTelemetryTracing};
 use poem::{Endpoint, EndpointExt as _, Route};
 use poem_openapi::OpenApiService;
 
-const CORS_ALLOWED_ORIGINS: [&str; 4] = [
-    "https://app.teknologappen.se",
-    "https://admin.teknologappen.se",
-    "http://localhost:5173",
-    "http://localhost:5175",
-];
-
+mod accounting;
 pub mod activities;
 pub mod admin;
+mod api;
 pub mod context;
 pub mod group;
 pub mod healthcheck;
@@ -39,8 +34,11 @@ pub type DbInternationalizedString = sqlx::types::Json<InternationalizedString>;
 )]
 #[oai(from_multipart = false, from_parameter = false, to_header = false)]
 #[serde(transparent)]
-pub struct InternationalizedString(HashMap<String, String>);
+pub struct InternationalizedString(pub HashMap<String, String>);
 impl InternationalizedString {
+    fn empty() -> Self {
+        Self(HashMap::new())
+    }
     /// # Panics
     ///
     /// None.
@@ -90,11 +88,12 @@ pub async fn get_endpoint(
     test_db: Option<PgPool>,
     migrate: bool,
 ) -> color_eyre::Result<impl Endpoint> {
-    let otel = get_otel(env!("CARGO_PKG_NAME"), test_db.is_some())?;
+    let is_test = test_db.is_some();
+    let otel = get_otel(env!("CARGO_PKG_NAME"), is_test)?;
 
     let context = Arc::new(Context::new(test_db, migrate).await?);
 
-    if cfg!(not(test)) {
+    if !is_test {
         if let Err(err) = runtime::initial_checks(&context).await {
             tracing::error!(?err, "failed to run initial checks!");
             return Err(color_eyre::Report::msg(""));
@@ -102,14 +101,27 @@ pub async fn get_endpoint(
         runtime::spawn(&context);
     }
 
-    let auth_context = JwkContext::<AuthUrl>::new("teknologappen").await?;
-    let transaction_context = JwkContext::<TransactionsUrl>::new("esek").await?;
+    let auth_context = JwkContext::<AuthUrl>::new(
+        "teknologappen",
+        context.debug.enabled,
+        context.debug.service_urls,
+    )
+    .await?;
+    let transaction_context = JwkContext::<TransactionsUrl>::new(
+        "esek",
+        context.debug.enabled,
+        context.debug.service_urls,
+    )
+    .await?;
     let api_service = OpenApiService::new(
         (
             admin::Router {
                 context: Arc::clone(&context),
             },
             activities::Router {
+                context: Arc::clone(&context),
+            },
+            api::Router {
                 context: Arc::clone(&context),
             },
             group::Router {
@@ -136,7 +148,7 @@ pub async fn get_endpoint(
     let ui = api_service.swagger_ui();
     let spec = api_service.spec_endpoint();
 
-    let cors = minilith_cors();
+    let cors = minilith_cors(context.debug);
 
     Ok(Route::new()
         .nest(
@@ -146,20 +158,32 @@ pub async fn get_endpoint(
         .nest("/v0/docs", ui)
         .nest("/v0/spec.json", spec)
         .with(OpenTelemetryMetrics::new())
+        .with(AppVersionMetrics::new())
         .with(OpenTelemetryTracing::new(
             otel.tracer(env!("CARGO_PKG_NAME")),
         ))
         .with(cors))
 }
 
-fn minilith_cors() -> Cors {
+fn minilith_cors(debug: bin_common::DebugConfig) -> Cors {
+    let mut allowed_origins = vec![
+        "https://app.teknologappen.se",
+        "https://admin.teknologappen.se",
+    ];
+    if debug.enabled {
+        allowed_origins.extend(["http://localhost:5173", "http://localhost:5175"]);
+    }
+    if debug.service_urls {
+        allowed_origins.extend(["http://frontend:5173", "http://admin-frontend:5175"]);
+    }
     Cors::new()
-        .allow_origins(CORS_ALLOWED_ORIGINS)
+        .allow_origins(allowed_origins)
         .allow_method(Method::GET)
         .allow_method(Method::POST)
         .allow_method(Method::PUT)
         .allow_method(Method::DELETE)
         .allow_header("content-type")
         .allow_header("authorization")
+        .allow_header(APP_VERSION_HEADER)
         .allow_credentials(true)
 }

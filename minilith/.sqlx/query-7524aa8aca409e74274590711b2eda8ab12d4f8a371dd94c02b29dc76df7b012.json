@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "with ensured_membership as (\n            insert into group_memberships (user_id, group_id)\n            values ($1, $2)\n            on conflict do nothing\n        ), inserted_adminship as (\n            insert into group_adminships (user_id, group_id)\n            values ($1, $2)\n            on conflict do nothing\n            returning user_id, group_id\n        ), changed_adminship as (\n            select user_id, group_id, true as created\n            from inserted_adminship\n            union all\n            select user_id, group_id, false as created\n            from group_adminships\n            where user_id = $1 and group_id = $2\n            and not exists (select 1 from inserted_adminship)\n        )\n        select\n            changed_adminship.user_id as \"user_id!\",\n            groups.path as \"group_path!: Path\",\n            changed_adminship.created as \"created!\"\n        from changed_adminship\n        inner join groups on groups.id = changed_adminship.group_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "group_path!: Path",
+        "type_info": {
+          "Custom": {
+            "name": "ltree",
+            "kind": "Simple"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "created!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      false,
+      null
+    ]
+  },
+  "hash": "7524aa8aca409e74274590711b2eda8ab12d4f8a371dd94c02b29dc76df7b012"
+}

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select flow.user_id\n        from users_in_purchase_flow flow\n        inner join ticket_reservation_queuers queuer\n            on queuer.user_id = flow.user_id\n            and queuer.ticket_kind_id = flow.ticket_kind_id\n        where flow.ticket_kind_id = $1\n        and flow.reservation_queue = flow.user_id\n        order by queuer.placement asc, flow.user_id\n        limit $2\n        for update of flow skip locked",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4d1c8b8718beedbb73df3c670bb3f9f0c64be8adf0eb61b949391754f855948d"
+}

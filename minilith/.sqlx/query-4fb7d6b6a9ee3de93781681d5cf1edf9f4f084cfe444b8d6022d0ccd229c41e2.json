@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update activities set bookkept = true where id = $1 and bookkept = false",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4fb7d6b6a9ee3de93781681d5cf1edf9f4f084cfe444b8d6022d0ccd229c41e2"
+}

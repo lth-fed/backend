@@ -57,6 +57,26 @@
         "ordinal": 10,
         "name": "svg_icon",
         "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "swish_payment_fee_fixed",
+        "type_info": "Money"
+      },
+      {
+        "ordinal": 12,
+        "name": "swish_payment_fee_fraction",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 13,
+        "name": "swish_payment_fee_max",
+        "type_info": "Money"
+      },
+      {
+        "ordinal": 14,
+        "name": "swish_refund_fee",
+        "type_info": "Money"
       }
     ],
     "parameters": {
@@ -75,7 +95,11 @@
       false,
       false,
       false,
-      true
+      true,
+      false,
+      false,
+      false,
+      false
     ]
   },
   "hash": "984906f3f715b1b06af044d2b004601aea5f56c3bc430b5ca3be5db596b10577"

@@ -13,6 +13,7 @@ async-stripe-types = { version = "1.0.0-rc.6", features = ["redact-generated-deb
 async-stripe-webhook = { version = "1.0.0-rc.6", features = ["redact-generated-debug"] }
 base64.workspace = true
 bin-common = { path = "../bin-common" }
+clap.workspace = true
 color-eyre.workspace = true
 dashmap = "6.2.1"
 dotenvy.workspace = true
@@ -23,7 +24,8 @@ minilith-errors = { version = "0.1.0", path = "../minilith-errors", features = [
 opentelemetry.workspace = true
 poem.workspace = true
 poem-openapi.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["form", "multipart", "query"] }
+rustls = "0.23.43"
 serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true

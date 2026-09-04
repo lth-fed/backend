@@ -15,19 +15,16 @@ pub enum ApiVersion {
 }
 
 #[must_use]
-pub fn payment_request_url(version: ApiVersion, instruction_uuid: Uuid) -> String {
+pub fn payment_request_url(version: ApiVersion, instruction_uuid: Uuid, debug: bool) -> String {
     let mut buffer = Uuid::encode_buffer();
     let uuid = instruction_uuid.simple().encode_upper(&mut buffer);
     let v_string = match version {
         ApiVersion::V1 => "v1",
         ApiVersion::V2 => "v2",
     };
-    #[cfg(debug_assertions)]
-    {
+    if debug {
         format!("https://mss.cpc.getswish.net/swish-cpcapi/api/{v_string}/paymentrequests/{uuid}")
-    }
-    #[cfg(not(debug_assertions))]
-    {
+    } else {
         format!("https://cpc.getswish.net/swish-cpcapi/api/{v_string}/paymentrequests/{uuid}")
     }
 }
@@ -54,6 +51,8 @@ pub enum Status {
     Declined,
     Error,
     Cancelled,
+    /// Undocumented:( .
+    Created,
 }
 
 /// <https://developer.swish.nu/documentation/guides/create-a-payment-request#if-the-payment-is-successful>.

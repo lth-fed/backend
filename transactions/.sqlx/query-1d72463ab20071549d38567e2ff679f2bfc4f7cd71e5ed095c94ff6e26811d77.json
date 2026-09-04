@@ -1,0 +1,75 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select payment_reference as \"payment_reference?\", client_id as \"client_id?\",\n            refund_reference as \"refund_reference?\",\n            total_transaction_fee as \"total_transaction_fee?\",\n            customer_id as \"customer_id?\", provider as \"provider?: Provider\",\n            ids.id as \"reserved_id?\",\n            --\n            t.id as \"id!\"\n            from unnest($1::uuid[]) as t(id)\n            left join transactions on transactions.id = t.id\n            left join transaction_reserved_ids ids on ids.id = t.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "payment_reference?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "client_id?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "refund_reference?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "total_transaction_fee?",
+        "type_info": "Money"
+      },
+      {
+        "ordinal": 4,
+        "name": "customer_id?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "provider?: Provider",
+        "type_info": {
+          "Custom": {
+            "name": "provider",
+            "kind": {
+              "Enum": [
+                "swish",
+                "stripe",
+                "free"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "reserved_id?",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 7,
+        "name": "id!",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      null
+    ]
+  },
+  "hash": "1d72463ab20071549d38567e2ff679f2bfc4f7cd71e5ed095c94ff6e26811d77"
+}

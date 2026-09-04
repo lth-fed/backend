@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select notification_id from activity_buyers_notifications\n        where activity_id = $1 and id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "notification_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "302fbdf1816f78682d0cec1be93d04940d2287b2fa3ae3c55b99c7574efadf79"
+}

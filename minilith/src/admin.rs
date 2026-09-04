@@ -4,32 +4,28 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::Deref;
-use std::sync::Arc;
 
 use fed_auth_verifier::User;
 use minilith_errors::{MinilithEndpointError, MinilithErrorResultExt as _, escape_email_html};
 use poem_openapi::payload::{Binary, Json, Response};
-use poem_openapi::{Object, OpenApi, param::Path};
+use poem_openapi::{Enum, Object, OpenApi, param::Path};
 use s3::post_policy::PostPolicyExpiration;
 use sqlx::PgExecutor;
 use sqlx::postgres::types::PgMoney;
 use sqlx::types::Uuid;
 use sqlx::types::time::OffsetDateTime;
-use tracing::error;
 
 use crate::activities::PoemLocation;
-use crate::activities::Router as ActivityRouter;
 use crate::context::ContextWrapper;
 use crate::group::admin::{
     Adminship, check_activity_adminship, check_direct_adminship, check_direct_or_parent_adminship,
-    check_ticket_kind_adminship, create_adminship_change, group_admins,
+    check_ticket_kind_adminship, create_adminship_change,
 };
-use crate::group::member::group_members;
 use crate::group::{self, Group};
-use crate::ticket::{AvailableAddon, Router as TicketRouter};
+use crate::ticket::{self, AvailableAddon};
 use crate::{
     DbInternationalizedString as DIS, InternationalizedString, MinilithErrorOptionExt as _,
-    MinilithResult, report, transactions,
+    MinilithResult, accounting, report,
 };
 
 #[derive(Clone, Debug)]
@@ -41,6 +37,28 @@ impl Deref for Router {
     fn deref(&self) -> &Self::Target {
         &self.context
     }
+}
+
+async fn replace_ticket_kind_transfer_groups(
+    txn: &mut bin_common::Transaction<'_>,
+    ticket_kind_id: Uuid,
+    group_ids: &[Uuid],
+) -> MinilithResult<()> {
+    sqlx::query!(
+        "delete from ticket_kind_transfer_groups where ticket_kind_id = $1",
+        ticket_kind_id,
+    )
+    .execute(&mut txn.executor())
+    .await?;
+    sqlx::query!(
+        r#"insert into ticket_kind_transfer_groups (ticket_kind_id, group_id)
+        select $1, group_id from unnest($2::uuid[]) selected(group_id)"#,
+        ticket_kind_id,
+        group_ids,
+    )
+    .execute(&mut txn.executor())
+    .await?;
+    Ok(())
 }
 
 #[derive(Object, Debug)]
@@ -119,7 +137,8 @@ struct PutTicketKind {
     min_tickets: i32,
     allow_transfer_ticket_start: OffsetDateTime,
     allow_transfer_ticket_stop: OffsetDateTime,
-    allow_transfer_ticket_bypass_allowed_groups: bool,
+    /// Recipients may belong to any selected group or one of its descendants.
+    transfer_group_ids: Vec<Uuid>,
     allowed_group_ids: Vec<Uuid>,
     addons: Vec<AvailableAddon>,
 }
@@ -134,17 +153,162 @@ struct PutGroup {
 }
 
 #[derive(Debug, Object)]
-struct PutTicketNotification {
+struct PutNotification {
     title: InternationalizedString,
     content: InternationalizedString,
     send_at: OffsetDateTime,
 }
 
+#[derive(Clone, Copy, Debug, Enum, Eq, PartialEq)]
+#[oai(rename_all = "snake_case")]
+enum ActivityNotificationKind {
+    All,
+    Buyers,
+    TicketHolders,
+}
+
 #[derive(Debug, Object)]
-struct TicketNotification {
-    kind: String,
+struct PutActivityNotification {
+    recipient: ActivityNotificationKind,
     #[oai(flatten)]
-    notification: PutTicketNotification,
+    notification: PutNotification,
+}
+
+#[derive(Debug, Object)]
+struct ActivityNotification {
+    id: Uuid,
+    recipient: ActivityNotificationKind,
+    sender: InternationalizedString,
+    sent: bool,
+    #[oai(flatten)]
+    notification: PutNotification,
+}
+
+#[derive(Debug, Object)]
+struct GroupNotification {
+    id: Uuid,
+    sender: InternationalizedString,
+    sent: bool,
+    #[oai(flatten)]
+    notification: PutNotification,
+}
+
+async fn insert_activity_notification_link(
+    txn: &mut bin_common::Transaction<'_>,
+    activity_id: Uuid,
+    id: Uuid,
+    notification_id: Uuid,
+    recipient: ActivityNotificationKind,
+) -> MinilithResult<()> {
+    match recipient {
+        ActivityNotificationKind::All => {
+            sqlx::query!(
+                r#"insert into activity_notifications (id, activity_id, notification_id)
+                values ($1, $2, $3)"#,
+                id,
+                activity_id,
+                notification_id,
+            )
+            .execute(&mut txn.executor())
+            .await?;
+        }
+        ActivityNotificationKind::Buyers => {
+            sqlx::query!(
+                r#"insert into activity_buyers_notifications (id, activity_id, notification_id)
+                values ($1, $2, $3)"#,
+                id,
+                activity_id,
+                notification_id,
+            )
+            .execute(&mut txn.executor())
+            .await?;
+        }
+        ActivityNotificationKind::TicketHolders => {
+            sqlx::query!(
+                r#"insert into purchased_ticket_notifications (id, activity_id, notification_id)
+                values ($1, $2, $3)"#,
+                id,
+                activity_id,
+                notification_id,
+            )
+            .execute(&mut txn.executor())
+            .await?;
+        }
+    }
+    Ok(())
+}
+
+async fn sync_ticket_pre_release_notification(
+    txn: &mut bin_common::Transaction<'_>,
+    activity_id: Uuid,
+    create_if_missing: bool,
+) -> MinilithResult<()> {
+    let release = sqlx::query!(
+        r#"select
+            activities.title as "sender!: DIS",
+            min(ticket_kinds.purchasing_available_start) as "released_at?"
+        from activities
+        left join ticket_kinds
+            on ticket_kinds.activity_id = activities.id
+            and ticket_kinds.max_tickets > 0
+            and ticket_kinds.purchasing_available_start > now()
+        where activities.id = $1
+        group by activities.id, activities.title"#,
+        activity_id,
+    )
+    .fetch_one(&mut txn.executor())
+    .await?;
+    let Some(released_at) = release.released_at else {
+        return Ok(());
+    };
+    let send_at: OffsetDateTime = released_at - time::Duration::MINUTE * 15;
+
+    let existing = sqlx::query_scalar!(
+        r#"select notification_id from activity_buyers_notifications
+        where activity_id = $1 and id = $2"#,
+        activity_id,
+        Uuid::nil(),
+    )
+    .fetch_optional(&mut txn.executor())
+    .await?;
+    if let Some(notification_id) = existing {
+        sqlx::query!(
+            r#"update notifications set send_at = $2
+            where id = $1 and sent = false"#,
+            notification_id,
+            send_at,
+        )
+        .execute(&mut txn.executor())
+        .await?;
+    } else if create_if_missing {
+        let notification_id = Uuid::new_v4();
+        sqlx::query!(
+            r#"insert into notifications (id, sender, title, content, send_at)
+            values ($1, $2, $3, $4, $5)"#,
+            notification_id,
+            release.sender.to_json_value(),
+            serde_json::json!({
+                "sv": "Biljetterna släpps snart!",
+                "en": "The tickets are released soon!",
+            }),
+            serde_json::json!({
+                "sv": "Gå in i appen och ställ dig i kö för att få plats.",
+                "en": "The queues are open.",
+            }),
+            send_at,
+        )
+        .execute(&mut txn.executor())
+        .await?;
+        insert_activity_notification_link(
+            txn,
+            activity_id,
+            Uuid::nil(),
+            notification_id,
+            ActivityNotificationKind::Buyers,
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Object)]
@@ -161,6 +325,7 @@ struct AdminPurchasedTicket {
     purchaser_id: String,
     owner_id: String,
     transaction_id: Uuid,
+    owner_memberships: Vec<Uuid>,
     addons: Vec<AdminPurchasedAddon>,
 }
 
@@ -175,10 +340,18 @@ pub struct CreateAdminship {
     pub user_id: String,
 }
 
+/// A user identity shown in administrator user pickers. `name` is absent for
+/// invited identities that have not logged in yet.
+#[derive(Debug, Object)]
+struct AdminUser {
+    user_id: String,
+    name: Option<String>,
+}
+
 #[derive(Debug)]
 pub struct EmailRecipient {
     pub user_id: String,
-    pub language: Vec<u8>,
+    pub language: Option<Vec<u8>>,
     pub group_name: DIS,
 }
 
@@ -206,6 +379,7 @@ pub(crate) async fn change_admin_email_recipients(
             or admin_group.path = target.parent_path
         inner join group_adminships
             on group_adminships.group_id = admin_group.id
+        -- don't alert admins which aren't on the app to avoid spam to them
         inner join users on users.id = group_adminships.user_id
         where target.id = $1
         and (
@@ -251,9 +425,12 @@ async fn send_adminship_emails(
     let affected_user = email_from_admin_id(affected_user_id);
     let mut messages: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
     for recipient in recipients {
-        let language = context
-            .decrypt_string(recipient.language)
-            .wrap_err_encryption("admin email recipient language")?;
+        let language = match recipient.language {
+            Some(language) => context
+                .decrypt_string(language)
+                .wrap_err_encryption("admin email recipient language")?,
+            None => "sv".to_owned(),
+        };
         let group_name = recipient.group_name.resolve_intl(&language, "<group>");
         #[allow(clippy::single_match_else, reason = "futureproofing")]
         let (subject, html) = match language.split('-').next() {
@@ -629,7 +806,7 @@ async fn revoke_activity_verifier(
 }
 
 fn is_allowed_image_extension(extension: &str) -> bool {
-    matches!(extension, "jpg" | "jpeg" | "webp" | "png" | "avif")
+    matches!(extension, "jpg" | "jpeg" | "webp" | "png" | "avif" | "svg")
 }
 
 #[OpenApi(prefix_path = "/admin")]
@@ -834,8 +1011,80 @@ impl Router {
             .execute(&mut txn.executor())
             .await?;
         }
+        sqlx::query!(
+            r#"update notifications set sender = $2
+            where id in (
+                select notification_id from activity_notifications where activity_id = $1
+                union
+                select notification_id from activity_buyers_notifications where activity_id = $1
+                union
+                select notification_id from purchased_ticket_notifications where activity_id = $1
+            )"#,
+            id,
+            body.title.to_json_value(),
+        )
+        .execute(&mut txn.executor())
+        .await?;
         txn.commit().await?;
 
+        Ok(())
+    }
+
+    /// Permanently deletes an unpublished activity with no ticket kinds.
+    ///
+    /// The activity row is locked while checking the contract, preventing a
+    /// ticket kind from being created concurrently with deletion.
+    #[oai(path = "/activities/:id", method = "delete")]
+    async fn delete_activity(&self, user: User, Path(id): Path<Uuid>) -> MinilithResult<()> {
+        check_activity_adminship(&self.db, user.get_id(), id).await?;
+        let mut txn = self.db.begin().await?;
+        let activity = sqlx::query!(
+            r#"select
+                is_hidden,
+                exists (select 1 from ticket_kinds where activity_id = $1) as "has_ticket_kinds!",
+                exists (
+                    select 1
+                    from notifications
+                    where id in (
+                        select notification_id from activity_notifications where activity_id = $1
+                        union
+                        select notification_id from activity_buyers_notifications where activity_id = $1
+                        union
+                        select notification_id from purchased_ticket_notifications where activity_id = $1
+                    )
+                ) as "has_sent_notifications!"
+            from activities
+            where id = $1
+            for update"#,
+            id,
+        )
+        .fetch_optional(&mut txn.executor())
+        .await?
+        .wrap_err_not_found()?;
+
+        if !activity.is_hidden {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "cannot delete a published activity",
+                "hide the activity before deleting it",
+            ));
+        }
+        if activity.has_ticket_kinds {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "cannot delete an activity with ticket kinds",
+                "delete every ticket kind first",
+            ));
+        }
+        if activity.has_sent_notifications {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "cannot delete an activity with sent notifications",
+                "sent notifications are retained as notification history",
+            ));
+        }
+
+        sqlx::query!("delete from activities where id = $1", id)
+            .execute(&mut txn.executor())
+            .await?;
+        txn.commit().await?;
         Ok(())
     }
 
@@ -985,6 +1234,32 @@ impl Router {
         Ok(Json(verifiers))
     }
 
+    /// Counts distinct current ticket owners who have at least one validation
+    /// for this activity. The caller must directly administer an accepted host.
+    #[oai(
+        path = "/activities/:activity_id/verified-ticket-holders",
+        method = "get"
+    )]
+    async fn verified_ticket_holders(
+        &self,
+        user: User,
+        Path(activity_id): Path<Uuid>,
+    ) -> MinilithResult<Json<i64>> {
+        check_activity_adminship(&self.db, user.get_id(), activity_id).await?;
+        let count = sqlx::query_scalar!(
+            r#"select count(distinct pt.owner_id) as "count!"
+            from purchased_ticket_validations
+            inner join purchased_tickets pt
+                on pt.id = purchased_ticket_validations.purchased_ticket_id
+            inner join ticket_kinds on ticket_kinds.id = pt.ticket_kind_id
+            where ticket_kinds.activity_id = $1"#,
+            activity_id,
+        )
+        .fetch_one(&self.db)
+        .await?;
+        Ok(Json(count))
+    }
+
     /// Grants a user permission to validate tickets for an activity. The user
     /// must already have an account.
     #[oai(
@@ -1034,24 +1309,6 @@ impl Router {
         Json(body): Json<ReportRequest>,
     ) -> MinilithResult<Response<Binary<Vec<u8>>>> {
         check_activity_adminship(&self.db, user.get_id(), id).await?;
-        let ticket_kinds =
-            sqlx::query_scalar!("select id from ticket_kinds where activity_id = $1", id)
-                .fetch_all(&self.db)
-                .await?;
-        let mut tickets = Vec::new();
-        let mut kinds = HashMap::with_capacity(ticket_kinds.len());
-        let router = TicketRouter {
-            context: Arc::clone(&self.context),
-        };
-        for kind in &ticket_kinds {
-            tickets.extend(self.purchased_tickets(user.clone(), Path(*kind)).await?.0);
-            kinds.insert(*kind, router.load_ticket_kind_unchecked(*kind).await?);
-        }
-        let router = ActivityRouter {
-            context: Arc::clone(&self.context),
-        };
-        let activity = router.details(user.clone(), Path(id)).await?.0;
-
         let user_language =
             sqlx::query_scalar!("select language from users where id = $1", user.get_id())
                 .fetch_one(&self.db)
@@ -1065,154 +1322,20 @@ impl Router {
             "sv" => report::Language::Swedish,
             _ => report::Language::English,
         };
-
-        let creator_logo_url = sqlx::query_scalar!(
-            "select url from groups
-            inner join images on images.id = groups.logo_id
-            where groups.id = $1",
-            activity.creator_id
-        )
-        .fetch_one(&self.db)
-        .await?;
-        let extension = creator_logo_url
-            .rsplit('.')
-            .next()
-            .map(str::to_ascii_lowercase);
-        let mut format = match extension.as_deref() {
-            Some("jpg" | "jpeg") => Some(report::ImageKind::Jpg),
-            Some("png") => Some(report::ImageKind::Png),
-            Some("svg") => Some(report::ImageKind::Svg),
-            Some("webp") => Some(report::ImageKind::Webp),
-            _ => None,
-        };
-        let image_data = if format.is_some() {
-            let path = creator_logo_url
-                .rsplit('/')
-                .next()
-                .unwrap_or(&creator_logo_url);
-            match self.image_bucket().get_object(path).await {
-                Err(err) => {
-                    error!(error = ?err, "s3: Failed to get creator icon");
-                    format = None;
-                    None
-                }
-                Ok(resp) => Some(resp.into_bytes()),
-            }
-        } else {
-            None
-        };
-
-        let transaction_ids = tickets
-            .iter()
-            .map(|ticket| ticket.transaction_id)
-            .collect::<Vec<_>>();
-
-        let fees = self
-            .transactions_post("/v0/info")
-            .json(&transactions::InfoRequest { transaction_ids })
-            .send()
-            .await
-            .wrap_err_internal("report: failed to get transaction info")?
-            .error_for_status()
-            .wrap_err_internal("report: transaction non 2xx")?
-            .json::<Vec<transactions::SingleInfoResponse>>()
-            .await
-            .wrap_err_internal("report: failed to get/parse JSON body")?
-            .into_iter()
-            .map(|info| info.total_fees)
-            .sum();
-
-        let mut per_object = BTreeMap::new();
-        let mut per_alcohol_category = BTreeMap::new();
-        for ticket in &tickets {
-            let kind = kinds.get(&ticket.ticket_kind_id).wrap_err_internal(
-                "report: no ticket kind in this activity for the purchased tickets!!",
-            )?;
-            let kind_name = kind.inner.ticket_kind_name.resolve_intl(&lang, "");
-
-            per_object
-                .entry((report::Kind::Ticket, kind_name.to_owned()))
-                .or_insert((kind.price, 0))
-                .1 += 1;
-            *per_alcohol_category.entry("null".to_owned()).or_insert(0) += kind.price;
-
-            for addon in &ticket.addons {
-                let addon_data = kind
-                    .available_addons
-                    .iter()
-                    .find(|a_a| a_a.inner.id == addon.addon_id)
-                    .wrap_err_internal("report: no addon for purchased ticket in kind")?;
-                for option in &addon.selected_options {
-                    let option_data = addon_data
-                        .options
-                        .iter()
-                        .find(|opt| opt.idx == *option)
-                        .wrap_err_internal("report: no option for purchased ticket in kind")?;
-                    let name = format!(
-                        "{} - {}",
-                        addon_data.inner.name.resolve_intl(&lang, ""),
-                        option_data.name.resolve_intl(&lang, "")
-                    );
-
-                    per_object
-                        .entry((report::Kind::Option, name))
-                        .or_insert((option_data.price, 0))
-                        .1 += 1;
-
-                    for (category, price) in option_data
-                        .bookkeeping_price_categories
-                        .iter()
-                        .zip(option_data.bookkeeping_prices.iter())
-                    {
-                        *per_alcohol_category.entry(category.clone()).or_insert(0) += *price;
-                    }
-                }
-            }
-        }
-        for sale in body.external_sales {
-            per_object
-                .entry((report::Kind::External, String::new()))
-                .or_insert((0, 1))
-                .0 += sale.total;
-            *per_alcohol_category
-                .entry(sale.alcohol_category)
-                .or_insert(0) += sale.total;
-        }
-
-        let data = report::Data {
+        let report = accounting::generate_activity_report(
+            &self.context,
+            id,
             language,
-            activity_name: activity.title.resolve_intl(&lang, "<title>").to_owned(),
-            creator_name: activity
-                .hosts
-                .first()
-                .map_or("", |host| host.name.resolve_intl(&lang, ""))
-                .to_owned(),
-            creator_logo_format: format,
-            creator_logo_data: image_data,
-            // we also have to request the transaction api to get fees
-            fees,
-            fees_external: body.external_sale_fees,
-            per_object: per_object
+            body.external_sales
                 .into_iter()
-                .map(|((kind, name), (price, number))| report::Object {
-                    name,
-                    kind,
-                    price,
-                    number,
-                })
+                .map(|sale| (sale.alcohol_category, sale.total))
                 .collect(),
-            per_alcohol_category: per_alcohol_category
-                .into_iter()
-                .map(|(category, amount)| report::AlcoholCategory {
-                    name: category,
-                    amount,
-                })
-                .collect(),
-        };
+            body.external_sale_fees,
+            false,
+        )
+        .await?;
 
-        let pdf = report::compile(self.report_typst(), &data)?;
-
-        Ok(Response::new(Binary(pdf)).header(
+        Ok(Response::new(Binary(report.pdf)).header(
             "content-disposition",
             format!("attachment; filename=\"activity-report-{id}.pdf\""),
         ))
@@ -1264,7 +1387,9 @@ impl Router {
                 purchased_tickets.ticket_kind_id,
                 purchased_tickets.purchaser_id,
                 purchased_tickets.owner_id,
-                purchased_tickets.transaction_id
+                purchased_tickets.transaction_id,
+                (select array(select group_id from group_memberships 
+                 where user_id = owner_id)) as owner_memberships
             from purchased_tickets
             where purchased_tickets.ticket_kind_id = $1
             order by purchased_tickets.id"#,
@@ -1276,11 +1401,35 @@ impl Router {
             purchaser_id: row.purchaser_id,
             owner_id: row.owner_id,
             transaction_id: row.transaction_id,
+            owner_memberships: row.owner_memberships.unwrap_or_default(),
             addons: addons.get(&row.id).cloned().unwrap_or_default(),
         })
         .fetch_all(&self.db)
         .await?;
         Ok(Json(tickets))
+    }
+
+    /// Lists distinct add-on names from ticket kinds belonging to activities
+    /// directly administered by the caller. Intended for editor suggestions.
+    #[oai(path = "/addon-names", method = "get")]
+    async fn list_addon_names(
+        &self,
+        user: User,
+    ) -> MinilithResult<Json<Vec<InternationalizedString>>> {
+        let names = sqlx::query!(
+            r#"select distinct addons.name as "name!: DIS"
+            from ticket_addons addons
+            inner join ticket_kinds kinds on kinds.id = addons.ticket_kind_id
+            inner join activity_hosts hosts on hosts.activity_id = kinds.activity_id
+            inner join group_adminships admins on admins.group_id = hosts.group_id
+            where admins.user_id = $1
+            order by addons.name"#,
+            user.get_id(),
+        )
+        .map(|row| row.name.0)
+        .fetch_all(&self.db)
+        .await?;
+        Ok(Json(names))
     }
 
     /// Creates or fully replaces an unpurchased ticket kind, including its
@@ -1311,21 +1460,17 @@ impl Router {
 
         body.allowed_group_ids.sort_unstable();
         body.allowed_group_ids.dedup();
+        body.transfer_group_ids.sort_unstable();
+        body.transfer_group_ids.dedup();
         let existing = if existing_id.is_some() {
-            Some(
-                TicketRouter {
-                    context: Arc::clone(&self.context),
-                }
-                .load_ticket_kind_unchecked(id)
-                .await?,
-            )
+            Some(ticket::load_ticket_kind_unchecked(self, id).await?)
         } else {
             None
         };
 
         let already_reserved = existing
             .as_ref()
-            .map_or(0, crate::ticket::Kind::reserved_or_purchased_tickets);
+            .map_or(0, ticket::Kind::reserved_or_purchased_tickets);
         if body.max_tickets < already_reserved {
             return Err(MinilithEndpointError::bad_frontend_code(
                 "ticket kind max_tickets is below its reservation count",
@@ -1359,12 +1504,13 @@ impl Router {
             .as_ref()
             .filter(|ticket| ticket.has_been_purchased())
         {
-            if !existing.immutable_fields_match(
+            let immutable_fields_match = existing.immutable_fields_match(
                 body.activity_id,
                 body.price,
                 &body.allowed_group_ids,
                 &body.addons,
-            ) {
+            );
+            if !immutable_fields_match {
                 return Err(MinilithEndpointError::bad_frontend_code(
                     "a purchased ticket kind's structure and pricing are immutable",
                     "only purchasing availability and option bookkeeping may change",
@@ -1372,6 +1518,7 @@ impl Router {
             }
 
             let mut txn = self.db.begin().await?;
+            lock_activity(&mut txn, body.activity_id).await?;
             sqlx::query!(
                 r#"update ticket_kinds set
                     purchasing_available_start = $2,
@@ -1380,8 +1527,7 @@ impl Router {
                     max_tickets = $5,
                     min_tickets = $6,
                     allow_transfer_ticket_start = $7,
-                    allow_transfer_ticket_stop = $8,
-                    allow_transfer_ticket_bypass_allowed_groups = $9
+                    allow_transfer_ticket_stop = $8
                 where id = $1"#,
                 id,
                 body.purchasing_available_start,
@@ -1391,10 +1537,10 @@ impl Router {
                 body.min_tickets,
                 body.allow_transfer_ticket_start,
                 body.allow_transfer_ticket_stop,
-                body.allow_transfer_ticket_bypass_allowed_groups,
             )
             .execute(&mut txn.executor())
             .await?;
+            replace_ticket_kind_transfer_groups(&mut txn, id, &body.transfer_group_ids).await?;
             for addon in &body.addons {
                 for option in &addon.options {
                     let prices: Vec<PgMoney> = option
@@ -1414,9 +1560,24 @@ impl Router {
                         addon.inner.id,
                     )
                     .execute(&mut txn.executor())
-                    .await?;
+                    .await
+                    .map_err(|err| {
+                        if let Some(dberr) = err.as_database_error()
+                            && dberr.message().contains("bookkeeping_prices_add_up")
+                        {
+                            MinilithEndpointError::bad_user_input(
+                                "bookkeeping_prices_add_up failed",
+                                err,
+                                "bookkeeping doesn't add upp",
+                                "bookkeeping_prices",
+                            )
+                        } else {
+                            err.into()
+                        }
+                    })?;
                 }
             }
+            sync_ticket_pre_release_notification(&mut txn, body.activity_id, false).await?;
             txn.commit().await?;
             return Ok(());
         }
@@ -1424,6 +1585,7 @@ impl Router {
         // Lock for extensive edit
         // ========
         let mut txn = self.db.begin().await?;
+        lock_activity(&mut txn, body.activity_id).await?;
         if existing_id.is_some() {
             let purchased_now = sqlx::query_scalar!(
                 r#"select has_been_purchased
@@ -1451,10 +1613,9 @@ impl Router {
                 purchasing_available_start, purchasing_available_stop,
                 max_tickets, min_tickets, reserved_or_purchased_tickets,
                 allow_transfer_ticket_start, allow_transfer_ticket_stop,
-                allow_transfer_ticket_bypass_allowed_groups,
                 has_been_purchased, has_been_released
             ) values (
-                $1, $2, $3, $4, $5, $6, $7, $8, 0, $9, $10, $11, false, false
+                $1, $2, $3, $4, $5, $6, $7, $8, 0, $9, $10, false, false
             )
             on conflict (id) do update set
                 name = excluded.name,
@@ -1464,9 +1625,7 @@ impl Router {
                 max_tickets = excluded.max_tickets,
                 min_tickets = excluded.min_tickets,
                 allow_transfer_ticket_start = excluded.allow_transfer_ticket_start,
-                allow_transfer_ticket_stop = excluded.allow_transfer_ticket_stop,
-                allow_transfer_ticket_bypass_allowed_groups =
-                    excluded.allow_transfer_ticket_bypass_allowed_groups"#,
+                allow_transfer_ticket_stop = excluded.allow_transfer_ticket_stop"#,
             id,
             body.activity_id,
             body.name.to_json_value(),
@@ -1477,10 +1636,11 @@ impl Router {
             body.min_tickets,
             body.allow_transfer_ticket_start,
             body.allow_transfer_ticket_stop,
-            body.allow_transfer_ticket_bypass_allowed_groups,
         )
         .execute(&mut txn.executor())
         .await?;
+
+        replace_ticket_kind_transfer_groups(&mut txn, id, &body.transfer_group_ids).await?;
 
         // ========
         // Allowed groups
@@ -1568,138 +1728,294 @@ impl Router {
                     &option.bookkeeping_price_categories,
                 )
                 .execute(&mut txn.executor())
-                .await?;
+                .await
+                .map_err(|err| {
+                    if let Some(dberr) = err.as_database_error()
+                        && dberr.message().contains("bookkeeping_prices_add_up")
+                    {
+                        MinilithEndpointError::bad_user_input(
+                            "bookkeeping_prices_add_up failed",
+                            err,
+                            "bookkeeping doesn't add upp",
+                            "bookkeeping_prices",
+                        )
+                    } else {
+                        err.into()
+                    }
+                })?;
             }
         }
+        sync_ticket_pre_release_notification(
+            &mut txn,
+            body.activity_id,
+            existing_id.is_none() && body.max_tickets > 0,
+        )
+        .await?;
         txn.commit().await?;
         Ok(())
     }
 
-    /// Creates or replaces a named notification for a ticket kind.
-    #[oai(
-        path = "/ticket-kinds/:ticket_kind_id/notifications/:kind",
-        method = "put"
-    )]
-    async fn put_ticket_notification(
-        &self,
-        user: User,
-        Path(ticket_kind_id): Path<Uuid>,
-        Path(kind): Path<String>,
-        Json(body): Json<PutTicketNotification>,
-    ) -> MinilithResult<Json<TicketNotification>> {
-        check_ticket_kind_adminship(&self.db, user.get_id(), ticket_kind_id).await?;
+    /// Deletes a ticket kind only while it is still safe to withdraw: it must
+    /// have no buyers, never have been released, and release must be more than
+    /// twenty minutes away. Zero-capacity kinds are exempt from those checks,
+    /// allowing synthetic activity-visibility kinds to be removed.
+    #[oai(path = "/ticket-kinds/:id", method = "delete")]
+    async fn delete_ticket_kind(&self, user: User, Path(id): Path<Uuid>) -> MinilithResult<()> {
+        check_ticket_kind_adminship(&self.db, user.get_id(), id).await?;
         let mut txn = self.db.begin().await?;
-        sqlx::query_scalar!(
-            "select id from ticket_kinds where id = $1 for update",
-            ticket_kind_id,
-        )
-        .fetch_one(&mut txn.executor())
-        .await?;
-        let notification_id = sqlx::query_scalar!(
-            r#"select notification_id from ticket_kind_notifications
-            where ticket_kind_id = $1 and id = $2"#,
-            ticket_kind_id,
-            kind,
+        let ticket = sqlx::query!(
+            r#"select
+                activity_id,
+                purchasing_available_start,
+                has_been_released,
+                max_tickets,
+                exists (
+                    select 1 from purchased_tickets where ticket_kind_id = $1
+                ) as "has_buyers!"
+            from ticket_kinds
+            where id = $1
+            for update"#,
+            id,
         )
         .fetch_optional(&mut txn.executor())
         .await?
-        .unwrap_or_else(Uuid::new_v4);
+        .wrap_err_not_found()?;
+        if ticket.has_buyers {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "cannot delete a ticket kind with buyers",
+                "",
+            ));
+        }
+        if ticket.max_tickets != 0 && ticket.has_been_released {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "cannot delete a ticket kind that has been released",
+                "",
+            ));
+        }
+        if ticket.max_tickets != 0
+            && ticket.purchasing_available_start
+                <= OffsetDateTime::now_utc() + time::Duration::minutes(20)
+        {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "cannot delete a ticket kind less than twenty minutes before release",
+                "",
+            ));
+        }
+
         sqlx::query!(
-            r#"insert into notifications (id, title, content, send_at)
-            values ($1, $2, $3, $4)
+            r#"delete from ticket_addon_options
+            where ticket_addon_id in (
+                select id from ticket_addons where ticket_kind_id = $1
+            )"#,
+            id,
+        )
+        .execute(&mut txn.executor())
+        .await?;
+        sqlx::query!("delete from ticket_addons where ticket_kind_id = $1", id)
+            .execute(&mut txn.executor())
+            .await?;
+        sqlx::query!(
+            "delete from ticket_kind_allowed_groups where ticket_kind_id = $1",
+            id,
+        )
+        .execute(&mut txn.executor())
+        .await?;
+        sqlx::query!("delete from ticket_kinds where id = $1", id)
+            .execute(&mut txn.executor())
+            .await?;
+        sync_ticket_pre_release_notification(&mut txn, ticket.activity_id, false).await?;
+        txn.commit().await?;
+        Ok(())
+    }
+
+    /// Creates or replaces an unsent notification for a published activity.
+    ///
+    /// Hidden activities reject notification creation and editing. Sent
+    /// notifications are immutable.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keeps the notification replacement transaction in one endpoint"
+    )]
+    #[oai(path = "/activities/:activity_id/notifications/:id", method = "put")]
+    async fn put_activity_notification(
+        &self,
+        user: User,
+        Path(activity_id): Path<Uuid>,
+        Path(id): Path<Uuid>,
+        Json(body): Json<PutActivityNotification>,
+    ) -> MinilithResult<Json<ActivityNotification>> {
+        check_activity_adminship(&self.db, user.get_id(), activity_id).await?;
+        let mut txn = self.db.begin().await?;
+        lock_activity(&mut txn, activity_id).await?;
+        let activity = sqlx::query!(
+            r#"select title as "title!: DIS", is_hidden from activities where id = $1"#,
+            activity_id,
+        )
+        .fetch_one(&mut txn.executor())
+        .await?;
+        if activity.is_hidden {
+            return Err(MinilithEndpointError::bad_user_input(
+                "cannot create a notification for an unpublished activity",
+                "activity is not published",
+                "Publish the activity before scheduling notifications.",
+                "activity_id",
+            ));
+        }
+        let sender = activity.title;
+        let existing = sqlx::query!(
+            r#"select notifications.id, notifications.sent
+            from notifications where notifications.id in (
+                select notification_id from activity_notifications
+                    where activity_id = $1 and id = $2
+                union
+                select notification_id from activity_buyers_notifications
+                    where activity_id = $1 and id = $2
+                union
+                select notification_id from purchased_ticket_notifications
+                    where activity_id = $1 and id = $2
+            )
+            for update of notifications"#,
+            activity_id,
+            id,
+        )
+        .fetch_optional(&mut txn.executor())
+        .await?;
+        if existing
+            .as_ref()
+            .is_some_and(|notification| notification.sent)
+        {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "cannot edit a sent notification",
+                "create a new notification instead",
+            ));
+        }
+        let notification_id = existing.map_or_else(Uuid::new_v4, |notification| notification.id);
+        sqlx::query!(
+            r#"insert into notifications (id, sender, title, content, send_at)
+            values ($1, $2, $3, $4, $5)
             on conflict (id) do update set
+                sender = excluded.sender,
                 title = excluded.title,
                 content = excluded.content,
-                send_at = excluded.send_at"#,
+                send_at = excluded.send_at
+            where notifications.sent = false"#,
             notification_id,
-            body.title.to_json_value(),
-            body.content.to_json_value(),
-            body.send_at,
+            sender.to_json_value(),
+            body.notification.title.to_json_value(),
+            body.notification.content.to_json_value(),
+            body.notification.send_at,
         )
         .execute(&mut txn.executor())
         .await?;
         sqlx::query!(
-            r#"insert into ticket_kind_notifications
-                (id, ticket_kind_id, notification_id)
-            values ($1, $2, $3)
-            on conflict (id, ticket_kind_id) do update set
-                notification_id = excluded.notification_id"#,
-            kind,
-            ticket_kind_id,
-            notification_id,
+            "delete from activity_notifications where activity_id = $1 and id = $2",
+            activity_id,
+            id,
         )
         .execute(&mut txn.executor())
         .await?;
+        sqlx::query!(
+            "delete from activity_buyers_notifications where activity_id = $1 and id = $2",
+            activity_id,
+            id,
+        )
+        .execute(&mut txn.executor())
+        .await?;
+        sqlx::query!(
+            "delete from purchased_ticket_notifications where activity_id = $1 and id = $2",
+            activity_id,
+            id,
+        )
+        .execute(&mut txn.executor())
+        .await?;
+        insert_activity_notification_link(
+            &mut txn,
+            activity_id,
+            id,
+            notification_id,
+            body.recipient,
+        )
+        .await?;
         txn.commit().await?;
-        Ok(Json(TicketNotification {
-            kind,
-            notification: body,
+        Ok(Json(ActivityNotification {
+            id,
+            recipient: body.recipient,
+            sender: sender.0,
+            sent: false,
+            notification: body.notification,
         }))
     }
 
-    /// Gets a named ticket-kind notification.
-    #[oai(
-        path = "/ticket-kinds/:ticket_kind_id/notifications/:kind",
-        method = "get"
-    )]
-    async fn get_ticket_notification(
+    /// Deletes an activity notification that has not been sent yet.
+    #[oai(path = "/activities/:activity_id/notifications/:id", method = "delete")]
+    async fn delete_activity_notification(
         &self,
         user: User,
-        Path(ticket_kind_id): Path<Uuid>,
-        Path(kind): Path<String>,
-    ) -> MinilithResult<Json<TicketNotification>> {
-        check_ticket_kind_adminship(&self.db, user.get_id(), ticket_kind_id).await?;
-        let row = sqlx::query!(
-            r#"select
-                notifications.title as "title!: DIS",
-                notifications.content as "content!: DIS",
-                notifications.send_at
-            from ticket_kind_notifications
-            inner join notifications
-                on notifications.id = ticket_kind_notifications.notification_id
-            where ticket_kind_notifications.ticket_kind_id = $1
-            and ticket_kind_notifications.id = $2"#,
-            ticket_kind_id,
-            kind,
+        Path(activity_id): Path<Uuid>,
+        Path(id): Path<Uuid>,
+    ) -> MinilithResult<()> {
+        check_activity_adminship(&self.db, user.get_id(), activity_id).await?;
+        let deleted = sqlx::query_scalar!(
+            r#"delete from notifications
+            where sent = false and id in (
+                select notification_id from activity_notifications
+                    where activity_id = $1 and id = $2
+                union
+                select notification_id from activity_buyers_notifications
+                    where activity_id = $1 and id = $2
+                union
+                select notification_id from purchased_ticket_notifications
+                    where activity_id = $1 and id = $2
+            ) returning id"#,
+            activity_id,
+            id,
         )
         .fetch_optional(&self.db)
-        .await?
-        .wrap_err_not_found()?;
-        Ok(Json(TicketNotification {
-            kind,
-            notification: PutTicketNotification {
-                title: row.title.0,
-                content: row.content.0,
-                send_at: row.send_at,
-            },
-        }))
+        .await?;
+        deleted.wrap_err_not_found()?;
+        Ok(())
     }
 
-    /// Lists notifications that are still scheduled for a ticket kind, ordered
-    /// by delivery time. Successfully processed notifications are not retained.
-    #[oai(path = "/ticket-kinds/:ticket_kind_id/notifications", method = "get")]
-    async fn list_ticket_notifications(
+    /// Lists every notification for an activity, including sent notification history.
+    #[oai(path = "/activities/:activity_id/notifications", method = "get")]
+    async fn list_activity_notifications(
         &self,
         user: User,
-        Path(ticket_kind_id): Path<Uuid>,
-    ) -> MinilithResult<Json<Vec<TicketNotification>>> {
-        check_ticket_kind_adminship(&self.db, user.get_id(), ticket_kind_id).await?;
+        Path(activity_id): Path<Uuid>,
+    ) -> MinilithResult<Json<Vec<ActivityNotification>>> {
+        check_activity_adminship(&self.db, user.get_id(), activity_id).await?;
         let notifications = sqlx::query!(
-            r#"select
-                ticket_kind_notifications.id as kind,
+            r#"with links as (
+                select id, notification_id, 0::int as recipient
+                    from activity_notifications where activity_id = $1
+                union all
+                select id, notification_id, 1::int as recipient
+                    from activity_buyers_notifications where activity_id = $1
+                union all
+                select id, notification_id, 2::int as recipient
+                    from purchased_ticket_notifications where activity_id = $1
+            )
+            select links.id as "id!", links.recipient as "recipient!",
+                notifications.sender as "sender!: DIS",
                 notifications.title as "title!: DIS",
                 notifications.content as "content!: DIS",
-                notifications.send_at
-            from ticket_kind_notifications
-            inner join notifications
-                on notifications.id = ticket_kind_notifications.notification_id
-            where ticket_kind_notifications.ticket_kind_id = $1
-            order by notifications.send_at, ticket_kind_notifications.id"#,
-            ticket_kind_id,
+                notifications.send_at, notifications.sent
+            from links
+            inner join notifications on notifications.id = links.notification_id
+            order by notifications.send_at, links.id"#,
+            activity_id,
         )
-        .map(|row| TicketNotification {
-            kind: row.kind,
-            notification: PutTicketNotification {
+        .map(|row| ActivityNotification {
+            id: row.id,
+            recipient: match row.recipient {
+                0 => ActivityNotificationKind::All,
+                1 => ActivityNotificationKind::Buyers,
+                2 => ActivityNotificationKind::TicketHolders,
+                _ => unreachable!("query returns known activity notification recipient kinds"),
+            },
+            sender: row.sender.0,
+            sent: row.sent,
+            notification: PutNotification {
                 title: row.title.0,
                 content: row.content.0,
                 send_at: row.send_at,
@@ -1719,6 +2035,7 @@ impl Router {
     /// - webp
     /// - png
     /// - avif
+    /// - svg
     ///
     /// Notably, no GIF support.
     ///
@@ -1745,7 +2062,8 @@ impl Router {
         }
 
         let uuid = Uuid::new_v4();
-        let max_size_bytes = 1024u32 * 1024 * 4;
+        // 1 MB
+        let max_size_bytes = 1024u32 * 1024;
         let key = format!("{uuid}.{}", body.extension);
         let policy = s3::post_policy::PostPolicy::new(PostPolicyExpiration::ExpiresIn(60 * 5))
             .condition(
@@ -1773,6 +2091,10 @@ impl Router {
         // rust-s3 0.37.2 nevertheless includes Range conditions in `dynamic_fields`:
         // https://github.com/durch/rust-s3/blob/v0.37.2/src/post_policy.rs#L135-L148
         dynamic_fields.remove("content-length-range");
+
+        sqlx::query!("insert into image_uploads (key) values ($1)", key)
+            .execute(&self.db)
+            .await?;
 
         Ok(Json(ObjectUploadAllowanceResponse {
             // The signed policy covers the form fields. The browser sends them
@@ -1858,7 +2180,10 @@ impl Router {
                 sqlx::query!(
                     r#"
                 update groups
-                set path = $2::ltree || subpath(path, nlevel($3::ltree)),
+                set path = case
+                        when id = $1 then $2::ltree
+                        else $2::ltree || subpath(path, nlevel($3::ltree))
+                    end,
                     name = case when id = $1 then $4 else name end,
                     description = case when id = $1 then $5 else description end,
                     limit_membership_visibility = case
@@ -1906,9 +2231,9 @@ impl Router {
                     "GRP_NULL_PARENT",
                     format!("no parent with path `{new_parent}` exists"),
                 ),
-                _ => MinilithEndpointError::db(error),
+                _ => MinilithEndpointError::from(error),
             },
-            other_error => MinilithEndpointError::db(other_error),
+            other_error => MinilithEndpointError::from(other_error),
         })?;
 
         if is_new {
@@ -1942,12 +2267,24 @@ impl Router {
         &self,
         user: User,
         Path(group_id): Path<Uuid>,
-    ) -> MinilithResult<Json<Vec<String>>> {
+    ) -> MinilithResult<Json<Vec<AdminUser>>> {
         check_direct_adminship(&self.db, user.get_id(), group_id).await?;
-        let users = sqlx::query_scalar!(
-            "select member_id from group_member_requests where group_id = $1 order by member_id",
+        let users = sqlx::query!(
+            r#"select requests.member_id, users.name as "name?"
+            from group_member_requests requests
+            inner join users on users.id = requests.member_id
+            where requests.group_id = $1
+            order by requests.member_id"#,
             group_id,
         )
+        .map(|row| AdminUser {
+            user_id: row.member_id,
+            name: row.name.and_then(|name| {
+                self.decrypt_string(name)
+                    .wrap_err_encryption("membership_requests name")
+                    .ok()
+            }),
+        })
         .fetch_all(&self.db)
         .await?;
         Ok(Json(users))
@@ -1986,6 +2323,35 @@ impl Router {
         Ok(())
     }
 
+    /// Rejects a pending membership request without creating a membership.
+    #[oai(
+        path = "/groups/:group_id/member-requests/:member_id",
+        method = "delete"
+    )]
+    async fn reject_membership_request(
+        &self,
+        user: User,
+        Path(group_id): Path<Uuid>,
+        Path(member_id): Path<String>,
+    ) -> MinilithResult<()> {
+        let mut txn = self.db.begin().await?;
+        check_direct_adminship(&mut txn.executor(), user.get_id(), group_id).await?;
+        let rejected = sqlx::query_scalar!(
+            r#"delete from group_member_requests
+            where group_id = $1 and member_id = $2
+            returning member_id"#,
+            group_id,
+            member_id,
+        )
+        .fetch_optional(&mut txn.executor())
+        .await?;
+        if rejected.is_none() {
+            return Err(MinilithEndpointError::not_found());
+        }
+        txn.commit().await?;
+        Ok(())
+    }
+
     /// List all members of a group. To do it, you need to be an admin of the
     /// group.
     ///
@@ -1997,10 +2363,30 @@ impl Router {
         &self,
         user: User,
         Path(group_id): Path<Uuid>,
-    ) -> MinilithResult<Json<Vec<String>>> {
+    ) -> MinilithResult<Json<Vec<AdminUser>>> {
         let mut txn = self.db.begin().await?;
         check_direct_adminship(&mut txn.executor(), user.get_id(), group_id).await?;
-        let members = group_members(&mut txn.executor(), group_id).await?;
+        let members = sqlx::query!(
+            r#"select memberships.user_id, users.name as "name?"
+            from group_memberships memberships
+            left join group_adminships admins
+                on admins.group_id = memberships.group_id
+                and admins.user_id = memberships.user_id
+            left join users on users.id = memberships.user_id
+            where memberships.group_id = $1 and admins.user_id is null
+            order by memberships.user_id"#,
+            group_id,
+        )
+        .map(|row| AdminUser {
+            user_id: row.user_id,
+            name: row.name.and_then(|name| {
+                self.decrypt_string(name)
+                    .wrap_err_encryption("list_members name")
+                    .ok()
+            }),
+        })
+        .fetch_all(&mut txn.executor())
+        .await?;
 
         Ok(Json(members))
     }
@@ -2065,12 +2451,64 @@ impl Router {
         &self,
         user: User,
         Path(group_id): Path<Uuid>,
-    ) -> MinilithResult<Json<Vec<String>>> {
+    ) -> MinilithResult<Json<Vec<AdminUser>>> {
         let mut txn = self.db.begin().await?;
         check_direct_or_parent_adminship(&mut txn.executor(), user.get_id(), group_id).await?;
-        let admins = group_admins(&mut txn.executor(), group_id).await?;
+        let admins = sqlx::query!(
+            r#"select admins.user_id, users.name as "name?"
+            from group_adminships admins
+            left join users on users.id = admins.user_id
+            where admins.group_id = $1
+            order by admins.user_id"#,
+            group_id,
+        )
+        .map(|row| AdminUser {
+            user_id: row.user_id,
+            name: row.name.and_then(|name| {
+                self.decrypt_string(name)
+                    .wrap_err_encryption("list_members name")
+                    .ok()
+            }),
+        })
+        .fetch_all(&mut txn.executor())
+        .await?;
 
         Ok(Json(admins))
+    }
+
+    /// Lists the distinct member and administrator identities in every group
+    /// directly administered by the caller. Intended for cached user pickers.
+    #[oai(path = "/group-users", method = "get")]
+    async fn list_group_users(&self, user: User) -> MinilithResult<Json<Vec<AdminUser>>> {
+        let users = sqlx::query!(
+            r#"with administered_groups as (
+                select group_id from group_adminships where user_id = $1
+            ), related_users as (
+                select memberships.user_id
+                from group_memberships memberships
+                inner join administered_groups using (group_id)
+                union
+                select admins.user_id
+                from group_adminships admins
+                inner join administered_groups using (group_id)
+            )
+            select related_users.user_id as "user_id!", users.name as "name?"
+            from related_users
+            left join users on users.id = related_users.user_id
+            order by related_users.user_id"#,
+            user.get_id(),
+        )
+        .map(|row| AdminUser {
+            user_id: row.user_id,
+            name: row.name.and_then(|name| {
+                self.decrypt_string(name)
+                    .wrap_err_encryption("list_members name")
+                    .ok()
+            }),
+        })
+        .fetch_all(&self.db)
+        .await?;
+        Ok(Json(users))
     }
 
     /// Create an adminship for a user in a group.
@@ -2314,6 +2752,164 @@ impl Router {
         .execute(&self.db)
         .await?;
         Ok(())
+    }
+
+    /// Creates or replaces a notification for a group. All direct & descendant members see it.
+    #[oai(path = "/groups/:group_id/notifications/:id", method = "put")]
+    async fn put_group_notification(
+        &self,
+        user: User,
+        Path(group_id): Path<Uuid>,
+        Path(id): Path<Uuid>,
+        Json(body): Json<PutNotification>,
+    ) -> MinilithResult<Json<GroupNotification>> {
+        check_direct_adminship(&self.db, user.get_id(), group_id).await?;
+        let mut txn = self.db.begin().await?;
+        let sender = sqlx::query_scalar!(
+            r#"select name as "name!: DIS" from groups where id = $1 for update"#,
+            group_id,
+        )
+        .fetch_one(&mut txn.executor())
+        .await?;
+        let existing = sqlx::query!(
+            r#"select group_notifications.notification_id, notifications.sent
+            from group_notifications
+            inner join notifications on notifications.id = group_notifications.notification_id
+            where group_notifications.id = $1 and group_notifications.group_id = $2
+            for update of notifications"#,
+            id,
+            group_id
+        )
+        .fetch_optional(&mut txn.executor())
+        .await?;
+        if existing
+            .as_ref()
+            .is_some_and(|notification| notification.sent)
+        {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "cannot edit a sent notification",
+                "create a new notification instead",
+            ));
+        }
+        let notification_id =
+            existing.map_or_else(Uuid::new_v4, |notification| notification.notification_id);
+        sqlx::query!(
+            r#"insert into notifications (id, sender, title, content, send_at)
+            values ($1, $2, $3, $4, $5)
+            on conflict (id) do update set
+                sender = excluded.sender,
+                title = excluded.title,
+                content = excluded.content,
+                send_at = excluded.send_at
+            where notifications.sent = false"#,
+            notification_id,
+            sender.to_json_value(),
+            body.title.to_json_value(),
+            body.content.to_json_value(),
+            body.send_at,
+        )
+        .execute(&mut txn.executor())
+        .await?;
+        let affected = sqlx::query!(
+            r#"insert into group_notifications
+                (id, group_id, notification_id)
+            values ($1, $2, $3)
+            on conflict (id) do update set 
+                notification_id = excluded.notification_id
+            where group_notifications.group_id = excluded.group_id"#,
+            id,
+            group_id,
+            notification_id,
+        )
+        .execute(&mut txn.executor())
+        .await?;
+        if affected.rows_affected() != 1 {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "not unique notification id",
+                "",
+            ));
+        }
+        txn.commit().await?;
+        Ok(Json(GroupNotification {
+            id,
+            sender: sender.0,
+            sent: false,
+            notification: body,
+        }))
+    }
+
+    /// Deletes a named group notification that has not been sent yet.
+    #[oai(path = "/groups/:group_id/notifications/:id", method = "delete")]
+    async fn delete_group_notification(
+        &self,
+        user: User,
+        Path(group_id): Path<Uuid>,
+        Path(id): Path<Uuid>,
+    ) -> MinilithResult<()> {
+        check_direct_adminship(&self.db, user.get_id(), group_id).await?;
+        let mut txn = self.db.begin().await?;
+        let notification_id = sqlx::query_scalar!(
+            r#"delete from group_notifications notification_link
+            using notifications
+            where notification_link.group_id = $1
+            and notification_link.id = $2
+            and notifications.id = notification_link.notification_id
+            and notifications.sent = false
+            returning notification_link.notification_id"#,
+            // for access control
+            group_id,
+            id,
+        )
+        .fetch_optional(&mut txn.executor())
+        .await?
+        .wrap_err_not_found()?;
+        sqlx::query!(
+            r#"delete from notifications
+            where id = $1"#,
+            notification_id,
+        )
+        .execute(&mut txn.executor())
+        .await?;
+        txn.commit().await?;
+        Ok(())
+    }
+
+    /// Lists notifications that are still scheduled for a group, ordered by delivery time.
+    #[oai(path = "/groups/:group_id/notifications", method = "get")]
+    async fn list_group_notifications(
+        &self,
+        user: User,
+        Path(group_id): Path<Uuid>,
+    ) -> MinilithResult<Json<Vec<GroupNotification>>> {
+        check_direct_adminship(&self.db, user.get_id(), group_id).await?;
+        let notifications = sqlx::query!(
+            r#"select
+                group_notifications.id,
+                notifications.sender as "sender!: DIS",
+                notifications.title as "title!: DIS",
+                notifications.content as "content!: DIS",
+                notifications.send_at,
+                notifications.sent
+            from group_notifications
+            inner join notifications
+                on notifications.id = group_notifications.notification_id
+            where group_notifications.group_id = $1
+            order by notifications.send_at, group_notifications.id"#,
+            group_id,
+        )
+        .map(|row| GroupNotification {
+            id: row.id,
+            sender: row.sender.0,
+            sent: row.sent,
+            notification: PutNotification {
+                title: row.title.0,
+                content: row.content.0,
+                send_at: row.send_at,
+            },
+        })
+        .fetch_all(&self.db)
+        .await?;
+        Ok(Json(notifications))
     }
 }
 

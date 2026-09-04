@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into ticket_kind_transfer_groups (ticket_kind_id, group_id)\n        select $1, group_id from unnest($2::uuid[]) selected(group_id)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4cfba10f4660beac4dc73c8b875fa750adf674e4498ed6f431cff9ad8b1b7167"
+}

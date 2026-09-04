@@ -1,0 +1,117 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n            purchased_tickets.id as \"id\",\n            purchased_tickets.ticket_kind_id as \"ticket_kind_id\",\n            ticket_kinds.activity_id as \"activity_id\",\n            ticket_kinds.name as \"ticket_kind_name!: DIS\",\n            activities.title as \"activity_title!: DIS\",\n            creator.id as creator_id,\n            creator.path as creator_path,\n            creator.name as \"creator_name!: DIS\",\n            activities.location as \"location!: Location\",\n            activities.time_start as \"time_start\",\n            activities.time_end as \"time_end\",\n            (owner_id = $1) as \"owned_by_me!\"\n        from purchased_tickets\n        inner join ticket_kinds on ticket_kinds.id = purchased_tickets.ticket_kind_id\n        inner join activities on activities.id = ticket_kinds.activity_id\n        inner join groups creator on creator.id = activities.creator_id\n        where purchased_tickets.owner_id = $1 or purchased_tickets.purchaser_id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "ticket_kind_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "activity_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "ticket_kind_name!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "activity_title!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 5,
+        "name": "creator_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 6,
+        "name": "creator_path",
+        "type_info": {
+          "Custom": {
+            "name": "ltree",
+            "kind": "Simple"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "creator_name!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 8,
+        "name": "location!: Location",
+        "type_info": {
+          "Custom": {
+            "name": "location",
+            "kind": {
+              "Composite": [
+                [
+                  "name",
+                  "Jsonb"
+                ],
+                [
+                  "directions",
+                  "Jsonb"
+                ],
+                [
+                  "coordinate_wgs84",
+                  "Point"
+                ],
+                [
+                  "url",
+                  "Text"
+                ]
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "time_start",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 10,
+        "name": "time_end",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 11,
+        "name": "owned_by_me!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "f13c95c99d6f67806c97714b041243fb06fbce6b48b8a6fd6b8a1a4602446cb1"
+}

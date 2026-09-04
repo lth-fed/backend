@@ -2,6 +2,7 @@ use std::fmt::Display;
 use std::ops::Deref;
 use std::sync::Arc;
 
+use bin_common::Transaction;
 use fed_auth_verifier::callbacks::{TransactionCallbackInfo, TransactionInfo, TransactionState};
 use jsonwebtoken::jwk::JwkSet;
 use minilith_errors::{
@@ -9,13 +10,14 @@ use minilith_errors::{
 };
 use poem::http::HeaderMap;
 use poem_openapi::param::Path;
-use poem_openapi::payload::{Binary, Json, PlainText, Response};
+use poem_openapi::payload::{Binary, Json, Response};
 use poem_openapi::{Enum, Object, OpenApi};
 use serde::Serialize;
 use sqlx::postgres::types::PgMoney;
 use stripe_checkout::checkout_session::{
     CreateCheckoutSessionLineItems, CreateCheckoutSessionLineItemsPriceData,
     CreateCheckoutSessionLineItemsPriceDataTaxBehavior, CreateCheckoutSessionPaymentIntentData,
+    CreateCheckoutSessionPaymentIntentDataCaptureMethod,
     CreateCheckoutSessionPaymentIntentDataSetupFutureUsage,
     CreateCheckoutSessionPaymentMethodTypes, ProductData,
 };
@@ -147,6 +149,28 @@ fn check_client_id(auth: &ApiAuth, txn_client_id: &str) -> MinilithResult<()> {
     }
     Ok(())
 }
+async fn validate_init_id(id: Uuid, txn: &mut Transaction<'_>) -> MinilithResult<Uuid> {
+    sqlx::query!(
+        "delete from transaction_reserved_ids
+            where created < now() - '1 hour'::interval"
+    )
+    .execute(&mut txn.executor())
+    .await?;
+    let row = sqlx::query!(
+        "delete from transaction_reserved_ids
+            where id = $1",
+        id
+    )
+    .execute(&mut txn.executor())
+    .await?;
+    if row.rows_affected() != 1 {
+        return Err(MinilithEndpointError::bad_frontend_code(
+            "get an ID from /init first.",
+            "",
+        ));
+    }
+    Ok(id)
+}
 
 #[OpenApi]
 impl Route {
@@ -176,10 +200,12 @@ impl Route {
             refund_reference as "refund_reference?",
             total_transaction_fee as "total_transaction_fee?",
             customer_id as "customer_id?", provider as "provider?: Provider",
+            ids.id as "reserved_id?",
             --
             t.id as "id!"
             from unnest($1::uuid[]) as t(id)
-            left join transactions on transactions.id = t.id"#,
+            left join transactions on transactions.id = t.id
+            left join transaction_reserved_ids ids on ids.id = t.id"#,
             &body.transaction_ids
         )
         .fetch_all(&self.db)
@@ -191,7 +217,9 @@ impl Route {
         }
         let mapped = transactions.into_iter().map(|row| SingleInfoResponse {
             id: row.id,
-            state: if row.client_id.is_none() {
+            state: if row.reserved_id.is_some() {
+                TransactionState::Pending
+            } else if row.client_id.is_none() {
                 TransactionState::Cancelled
             } else if row.refund_reference.is_some() {
                 TransactionState::Refunded
@@ -267,29 +295,7 @@ impl Route {
         .await?;
         Ok(Json(uuid))
     }
-    async fn validate_init_id(&self, id: Uuid) -> MinilithResult<Uuid> {
-        sqlx::query!(
-            "delete from transaction_reserved_ids
-            where created < now() - '1 hour'::interval"
-        )
-        .execute(&self.db)
-        .await?;
-        let row = sqlx::query!(
-            "delete from transaction_reserved_ids
-            where id = $1",
-            id
-        )
-        .execute(&self.db)
-        .await?;
-        if row.rows_affected() != 1 {
-            return Err(MinilithEndpointError::bad_frontend_code(
-                "get an ID from /init first.",
-                "",
-            ));
-        }
-        Ok(id)
-    }
-    /// You WILL NOT get info on the callback, the transaction will be marked paid instantly.
+    /// You WILL get info on the callback, the transaction will be marked paid instantly.
     ///
     /// Keep in mind to complete your transaction before calling this, else we might call your
     /// callback prematurely.
@@ -314,7 +320,7 @@ impl Route {
         }
 
         let mut txn = self.db.begin().await?;
-        let transaction_id = self.validate_init_id(body.id).await?;
+        let transaction_id = validate_init_id(body.id, &mut txn).await?;
         sqlx::query!(
             "insert into transactions (id, customer_id, client_id, callback_url_v1,
                 timeout, provider, total_transaction_fee, callback_identifier, payment_reference)
@@ -334,8 +340,7 @@ impl Route {
         txn.commit().await?;
 
         callback::send_callbacks(
-            &self.client,
-            &self.signing_key,
+            self,
             [CallbackEvent {
                 callback_url_v1: auth.callback_url_v1.clone(),
                 client_id: auth.client_id.clone(),
@@ -360,8 +365,8 @@ impl Route {
         auth: ApiAuth,
         body: Json<CreatePaymentRequest>,
     ) -> MinilithResult<Json<CreatePaymentResponseSwish>> {
-        let amount = body.total_amount();
-        if amount < 100 {
+        let total_amount = body.total_amount();
+        if total_amount < 100 {
             return Err(MinilithEndpointError::bad_user_input(
                 "low amount",
                 "",
@@ -370,9 +375,8 @@ impl Route {
             ));
         }
 
-        let uuid = self.validate_init_id(body.id).await?;
         let cb_ident = Uuid::new_v4();
-        let mut amount = amount.to_string();
+        let mut amount = total_amount.to_string();
         amount.insert(amount.len() - 2, '.');
         let mut message = body
             .wares
@@ -393,7 +397,11 @@ impl Route {
                 callback_identifier: swish::uuid_to_string(cb_ident),
             };
             client
-                .put(swish::payment_request_url(swish::ApiVersion::V2, uuid))
+                .put(swish::payment_request_url(
+                    swish::ApiVersion::V2,
+                    body.id,
+                    self.context.debug.enabled,
+                ))
                 .json(&swish_body)
                 .send()
                 .await
@@ -413,15 +421,34 @@ impl Route {
             .wrap_err_internal("swish gave us no PaymentRequestToken")?;
 
         let mut txn = self.db.begin().await?;
+        let uuid = validate_init_id(body.id, &mut txn).await?;
+        let fees = sqlx::query!(
+            "select swish_payment_fee_fixed, swish_payment_fee_fraction, swish_payment_fee_max
+            from client_ids where client_id = $1",
+            auth.client_id
+        )
+        .fetch_one(&mut txn.executor())
+        .await?;
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_precision_loss,
+            reason = "it's min:ed either way"
+        )]
+        let fees = fees.swish_payment_fee_fixed
+            + PgMoney(
+                ((fees.swish_payment_fee_fraction * total_amount as f64 + 1e-6).floor() as i64)
+                    .min(fees.swish_payment_fee_max.0),
+            );
         sqlx::query!(
             "insert into transactions (id, customer_id, client_id, callback_url_v1,
                 timeout, provider, total_transaction_fee, callback_identifier)
-            values ($1, $2, $3, $4, $5, 'swish'::provider, '1.50'::money, $6)",
+            values ($1, $2, $3, $4, $5, 'swish'::provider, $6, $7)",
             uuid,
             body.customer_id,
             auth.client_id,
             auth.callback_url_v1,
             body.timeout,
+            fees,
             cb_ident
         )
         .execute(&mut txn.executor())
@@ -547,11 +574,15 @@ impl Route {
                     .collect::<Vec<_>>(),
             )
             .mode(CheckoutSessionMode::Payment)
+            .client_reference_id(body.id.to_string())
             .success_url(stripe_success_url)
             .payment_method_types(vec![CreateCheckoutSessionPaymentMethodTypes::Card])
             .payment_intent_data(CreateCheckoutSessionPaymentIntentData {
                 application_fee_amount: None,
-                capture_method: None,
+                // so we know the fee directly afterwards
+                capture_method: Some(
+                    CreateCheckoutSessionPaymentIntentDataCaptureMethod::Automatic,
+                ),
                 description: None,
                 metadata: None,
                 on_behalf_of: None,
@@ -586,18 +617,9 @@ impl Route {
 
         let url = session.url.clone().wrap_err_internal("stripe: no url")?;
 
-        let uuid = self.validate_init_id(body.id).await?;
-
         let mut txn = self.db.begin().await?;
 
-        sqlx::query!(
-            "insert into stripe_checkouts (transaction_id, stripe_id)
-            values ($1, $2)",
-            uuid,
-            session.id.as_str()
-        )
-        .execute(&mut txn.executor())
-        .await?;
+        let uuid = validate_init_id(body.id, &mut txn).await?;
 
         sqlx::query!(
             "insert into transactions (id, customer_id, client_id, callback_url_v1,
@@ -613,20 +635,31 @@ impl Route {
         .execute(&mut txn.executor())
         .await?;
 
+        sqlx::query!(
+            "insert into stripe_checkouts (transaction_id, stripe_id)
+            values ($1, $2)",
+            uuid,
+            session.id.as_str()
+        )
+        .execute(&mut txn.executor())
+        .await?;
+
         insert_wares(&mut txn.executor(), uuid, &body.wares).await?;
         txn.commit().await?;
 
-        Ok(Json(CreatePaymentResponseStripe {
-            redirect_url: url,
-        }))
+        Ok(Json(CreatePaymentResponseStripe { redirect_url: url }))
     }
     /// This endpoint is called by Stripe's backend.
     #[oai(path = "/stripe-callback", method = "post", hidden = true)]
     async fn stripe_callback(
         &self,
-        body: PlainText<String>,
+        body: Binary<Vec<u8>>,
         headers: &HeaderMap,
     ) -> MinilithResult<()> {
+        // Stripe sends JSON (`application/json; charset=utf-8`), but the
+        // signature must be checked against the exact, unparsed payload.
+        let body = String::from_utf8(body.0)
+            .wrap_err_bad_frontend("stripe: webhook body is not valid UTF-8")?;
         let signature = headers
             .get("stripe-signature")
             .and_then(|header| header.to_str().ok())
@@ -642,16 +675,20 @@ impl Route {
         match event.data.object {
             EventObject::CheckoutSessionCompleted(event)
             | EventObject::CheckoutSessionExpired(event) => {
-                let row = sqlx::query!(
+                let Some(row) = sqlx::query!(
                     "select transaction_id, transactions.client_id, stripe_endpoint_secret
-                    from stripe_checkouts 
+                    from stripe_checkouts
                     inner join transactions on (transactions.id = transaction_id)
                     inner join client_ids on (client_ids.client_id = transactions.client_id)
                     where stripe_id = $1",
                     event.id.as_str()
                 )
-                .fetch_one(&self.db)
-                .await?;
+                .fetch_optional(&self.db)
+                .await?
+                else {
+                    // then we don't have it anymore because it was previously cancelled
+                    return Ok(());
+                };
 
                 let stripe_endpoint_secret = row
                     .stripe_endpoint_secret
@@ -666,52 +703,12 @@ impl Route {
                 };
 
                 if status == Some(swish::Status::Paid) {
-                    let client = self.get_stripe_client(&row.client_id).await?;
-                    let data =
-                        stripe_checkout::checkout_session::RetrieveCheckoutSession::new(&event.id)
-                            // for getting the fee
-                            .expand(
-                                [
-                                    "payment_intent",
-                                    "payment_intent.latest_charge",
-                                    "payment_intent.latest_charge.balance_transaction",
-                                    "latest_charge",
-                                    "balance_transaction",
-                                ]
-                                .map(str::to_owned),
-                            )
-                            .send(&*client)
-                            .await
-                            .wrap_err_internal("l1: stripe: fetch session data failed when paid")?;
-                    drop(client);
-
-                    // broooo
-                    let intent = data
-                        .payment_intent
-                        .as_ref()
-                        .wrap_err_bad_frontend("payment_intent should exist when paid")?;
-                    let intent = intent
-                        .as_object()
-                        .wrap_err_bad_frontend("didn't expand payment_intent")?;
-                    let charge = intent
-                        .latest_charge
-                        .as_ref()
-                        .wrap_err_bad_frontend("no charge when paid")?;
-                    let charge = charge
-                        .as_object()
-                        .wrap_err_bad_frontend("didn't expand latest_charge")?;
-                    let balance = charge
-                        .balance_transaction
-                        .as_ref()
-                        .wrap_err_bad_frontend("no balance_transaction when paid")?;
-                    let balance = balance
-                        .as_object()
-                        .wrap_err_bad_frontend("didn't expand balance_transaction")?;
+                    let fee = self.stripe_get_fee(&row.client_id, &event.id).await?;
 
                     // set so this is idempotent
                     sqlx::query!(
                         "update transactions set total_transaction_fee = $1 where id = $2",
-                        PgMoney(balance.fee),
+                        PgMoney(fee),
                         row.transaction_id,
                     )
                     .execute(&self.db)
@@ -797,7 +794,8 @@ impl Route {
         };
 
         let client_id = sqlx::query!(
-            "select * from client_ids where client_id = $1",
+            "select name, organization_number, email, address, svg_icon
+            from client_ids where client_id = $1",
             transaction.client_id
         )
         .fetch_one(&self.db)
@@ -834,7 +832,7 @@ impl Route {
             payment_reference,
             refund_reference: transaction.refund_reference,
             wares,
-            customer_name: body.customer_name.clone(),
+            customer_name: Some(body.customer_name.clone()),
             customer_id: transaction.customer_id,
             merchant_id: transaction.client_id,
             merchant_name: client_id.name,

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update purchased_tickets set owner_id = 'refunded:'\n                        where transaction_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7c3707635830ed1a5ec4bba7499ac45e001c2b6bb1a01758dc46199a264e1fd5"
+}

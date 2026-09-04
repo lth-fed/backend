@@ -4,6 +4,10 @@ create table client_ids (
     swish_cert text not null,
     swish_key text not null,
     swish_number text not null,
+    swish_payment_fee_fixed money not null,
+    swish_payment_fee_fraction double precision not null,
+    swish_payment_fee_max money not null,
+    swish_refund_fee money not null,
 
     stripe_secret text,
     -- all stripe callbacks should go to the same URL, so keeping one per client_id is reasonable

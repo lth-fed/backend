@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into group_notifications\n                (id, group_id, notification_id)\n            values ($1, $2, $3)\n            on conflict (id) do update set \n                notification_id = excluded.notification_id\n            where group_notifications.group_id = excluded.group_id",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9540606556d6cbb39880c18c2c46995c0175ae352a01b8f833c35df876c62ce3"
+}

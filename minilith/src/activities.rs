@@ -85,6 +85,8 @@ pub struct Activity {
     pub hosts: Vec<Host>,
     /// If there are any tickets for this event.
     pub tickets_exist: bool,
+    /// Some if any tickets are purchasable.
+    pub earliest_purchasable_ticket_release: Option<OffsetDateTime>,
 }
 #[derive(Object)]
 struct BriefActivity {
@@ -99,6 +101,7 @@ struct BriefActivity {
     image_url: String,
     /// If there are any tickets for this event.
     is_hidden: bool,
+    earliest_purchasable_ticket_release: Option<OffsetDateTime>,
 }
 
 #[derive(Object)]
@@ -110,7 +113,6 @@ struct ActivityTicketKind {
     purchasing_available_stop: OffsetDateTime,
     /// Null if there's not a shortage of tickets.
     tickets_left: Option<i32>,
-    membership_passing: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -179,6 +181,7 @@ impl Router {
             time_end: activity.time_end,
             image_url: activity.url,
             is_hidden: activity.is_hidden,
+            earliest_purchasable_ticket_release: activity.earliest_ticket_release,
         })
         .fetch_all(&self.context.db)
         .await?;
@@ -221,12 +224,33 @@ impl Router {
                 activities.image_id,
                 creator_id,
                 is_hidden,
-                is_hidden_for_other_admins
+                is_hidden_for_other_admins,
+                -- NOT SAME as activity-list.sql, because it filters for if it's not sold out
+                -- either. This controls the tappableness of the button
+                (select purchasing_available_start
+                    from ticket_kinds tk
+                    inner join ticket_kind_allowed_groups g on g.ticket_kind_id = tk.id
+                    inner join groups ag on ag.id = g.group_id
+                    inner join groups ug on ag.path @> ug.path
+                    inner join group_memberships m on m.group_id = ug.id
+                    where tk.activity_id = $1
+                    and max_tickets > 0
+                    and m.user_id = $2
+                    order by purchasing_available_start
+                    limit 1
+                ) as "earliest_ticket_release?",
+                (select exists (
+                    select 1
+                    from ticket_kinds tk
+                    where tk.activity_id = $1
+                    and max_tickets > 0
+                )) as "tickets_exist!"
             from activities
             inner join images on images.id = image_id
             where activities.id = $1;
             "#,
-            *id
+            *id,
+            user.get_id()
         )
         .fetch_optional(&self.context.db)
         .await?
@@ -243,18 +267,6 @@ impl Router {
             activity.creator_id,
         )
         .fetch_all(&self.context.db)
-        .await?;
-        let tickets_available = sqlx::query!(
-            r#"select exists (
-                select 1
-                from ticket_kinds tk
-                where tk.activity_id = $1
-                and max_tickets > 0
-            ) as value;
-            "#,
-            *id,
-        )
-        .fetch_one(&self.context.db)
         .await?;
 
         let hosts = hosts
@@ -285,11 +297,14 @@ impl Router {
             is_hidden_for_other_admins: activity.is_hidden_for_other_admins,
             max_tickets: activity.max_tickets,
             hosts,
-            tickets_exist: tickets_available.value.unwrap_or(false),
+            tickets_exist: activity.tickets_exist,
+            earliest_purchasable_ticket_release: activity.earliest_ticket_release,
         };
 
         Ok(Json(activity))
     }
+    /// The ticket kinds not purchasable due to membership check are not shown.
+    ///
     /// # Errors
     ///
     /// - user might not be allowed to access this activity
@@ -301,8 +316,7 @@ impl Router {
     ) -> MinilithResult<Json<Vec<ActivityTicketKind>>> {
         self.test_activity_access(user.get_id(), &id.0).await?;
         let kinds = sqlx::query!(
-            r#"
-            select kind.id,
+            r#"select kind.id,
             kind.name as "name!: DIS",
             kind.price,
             kind.purchasing_available_start,
@@ -314,32 +328,41 @@ impl Router {
                     from ticket_kinds all_kinds
                     where all_kinds.activity_id = activities.id
                 )
-            ), 0)::int as "available_tickets!",
-            exists (
-                select 1
-                from group_memberships
-                inner join groups member_group on member_group.id = group_memberships.group_id
-                inner join ticket_kind_allowed_groups tk_ag on tk_ag.ticket_kind_id = kind.id
-                inner join groups allowed_group on allowed_group.id = tk_ag.group_id
-                    and allowed_group.path @> member_group.path
-
-                where group_memberships.user_id = $2
-                and (
-                    member_group.limit_membership_visibility = false
-                    or tk_ag.group_id = group_memberships.group_id
-                )
-            ) as membership_passing
+            ), 0)::int as "available_tickets!"
 
             from ticket_kinds as kind
             inner join activities on activities.id = kind.activity_id
             where kind.activity_id = $1
-            and kind.max_tickets > 0
+            and (
+                (
+                    kind.max_tickets > 0
+                    and exists (
+                        select 1
+                        from group_memberships
+                        inner join groups member_group on member_group.id = group_memberships.group_id
+                        inner join ticket_kind_allowed_groups tk_ag on tk_ag.ticket_kind_id = kind.id
+                        inner join groups allowed_group on allowed_group.id = tk_ag.group_id
+                            and allowed_group.path @> member_group.path
+
+                        where group_memberships.user_id = $2
+                        and (
+                            member_group.limit_membership_visibility = false
+                            or tk_ag.group_id = group_memberships.group_id
+                        )
+                    )
+                )
+                -- admin
+                or exists (select 1 from group_adminships admin
+                    inner join activity_hosts host on admin.group_id = host.group_id
+                    where admin.user_id = $2
+                    and host.activity_id = $1
+                )
+            )
             "#,
             id.0,
             user.get_id()
         )
         .map(|kind| {
-            // todo(release): check activity max too
             ActivityTicketKind {
                 id: kind.id,
                 name: kind.name.0,
@@ -347,7 +370,6 @@ impl Router {
                 purchasing_available_start: kind.purchasing_available_start,
                 purchasing_available_stop: kind.purchasing_available_stop,
                 tickets_left: (kind.available_tickets < 10).then_some(kind.available_tickets),
-                membership_passing: kind.membership_passing.unwrap_or(false),
             }
         })
         .fetch_all(&self.db)

@@ -33,7 +33,7 @@ with visible_activities as (
             limit 1
         ) as closest_setting on true
         where activity_hosts.activity_id = kind.activity_id
-        and coalesce(closest_setting.visible, true)
+        and coalesce(closest_setting.visible, false)
     )
 
     union all
@@ -88,7 +88,30 @@ select a.id,
     a.is_hidden,
     img.url,
     creator.name as "creator_name!: DIS",
-    creator.path as creator_path
+    creator.path as creator_path,
+    (select purchasing_available_start
+        from ticket_kinds tk
+        inner join ticket_kind_allowed_groups g on g.ticket_kind_id = tk.id
+        inner join groups ag on ag.id = g.group_id
+        inner join groups ug on ag.path @> ug.path
+        inner join group_memberships m on m.group_id = ug.id
+        where tk.activity_id = a.id
+        and tk.max_tickets > 0
+        and m.user_id = $1
+        and purchasing_available_stop > now()
+        and tk.reserved_or_purchased_tickets < tk.max_tickets
+        and tk.reserved_or_purchased_tickets + (
+            select coalesce(sum(greatest(
+                tk2.reserved_or_purchased_tickets,
+                tk2.min_tickets
+            )), 0)
+            from ticket_kinds tk2
+            where tk2.activity_id = a.id
+            and tk2.id != tk.id
+        ) < a.max_tickets
+        order by purchasing_available_start
+        limit 1
+    ) as "earliest_ticket_release?"
 from visible_activity_ids
 -- get the activity
 inner join activities a on a.id = activity_id

@@ -44,7 +44,7 @@ pub struct Data {
     /// Varor.
     pub wares: Vec<Ware>,
 
-    pub customer_name: String,
+    pub customer_name: Option<String>,
     pub customer_id: Option<String>,
 
     pub merchant_id: String,
@@ -177,4 +177,45 @@ pub fn compile(world: &OurWonderfulTypstWorldBase, data: &Data) -> MinilithResul
         ..Default::default()
     };
     typst_pdf::pdf(&doc, &pdf_opts).wrap_err_internal("typst: pdf")
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::Provider;
+    use crate::api::{Currency, Ware};
+
+    use super::{Data, Language, OurWonderfulTypstWorldBase, compile};
+
+    #[test]
+    fn compiles_bookkeeping_receipt_without_customer_name() {
+        let result = compile(
+            &OurWonderfulTypstWorldBase::default(),
+            &Data {
+                language: Language::Swedish,
+                transaction_id: "00000000-0000-0000-0000-000000000000".to_owned(),
+                purchase_date: "2026-08-13".to_owned(),
+                provider: Provider::Swish,
+                payment_reference: "payment-reference".to_owned(),
+                refund_reference: None,
+                wares: vec![Ware {
+                    name: "Biljett".to_owned(),
+                    amount: 12_500,
+                    tax: 1.25,
+                    currency: Currency::Sek,
+                }],
+                customer_name: None,
+                customer_id: None,
+                merchant_id: "merchant".to_owned(),
+                merchant_name: "Merchant".to_owned(),
+                merchant_org_id: "000000-0000".to_owned(),
+                merchant_email: "merchant@example.com".to_owned(),
+                merchant_address: "Address".to_owned(),
+                merchant_svg_icon: None,
+            },
+        );
+        assert!(result.is_ok(), "bookkeeping receipt should compile");
+        if let Ok(pdf) = result {
+            assert!(pdf.starts_with(b"%PDF"), "receipt should be a PDF");
+        }
+    }
 }

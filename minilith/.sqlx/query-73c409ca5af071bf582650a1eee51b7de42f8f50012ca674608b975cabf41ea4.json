@@ -1,0 +1,69 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select distinct\n                pg.id,\n                pg.path,\n                pg.limit_membership_visibility,\n                pg.name as \"name!: DIS\",\n                pg.description as \"description!: DIS\",\n                pg.deleted,\n                logo.id as logo_id,\n                logo.url as logo_url\n            from groups g\n            join groups pg on pg.path @> g.path\n            join images logo on logo.id = pg.logo_id\n            where g.deleted = false\n            and exists (\n                select 1\n                from group_memberships gm\n                join groups mg on mg.id = gm.group_id\n                where gm.user_id = $1\n                and subpath(g.path, 0, 1) = subpath(mg.path, 0, 1)\n            )\n            and (\n                exists (\n                    select 1\n                    from activity_hosts ah\n                    join activities act on act.id = ah.activity_id\n                    where ah.group_id = g.id\n                    and act.time_start > now() - interval '3 months'\n                )\n                or exists (\n                    select 1\n                    from user_group_settings ugs\n                    where ugs.group_id = g.id\n                    and ugs.user_id = $1\n                )\n            )\n            order by pg.path",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "path",
+        "type_info": {
+          "Custom": {
+            "name": "ltree",
+            "kind": "Simple"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "limit_membership_visibility",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 3,
+        "name": "name!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "description!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 5,
+        "name": "deleted",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
+        "name": "logo_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 7,
+        "name": "logo_url",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "73c409ca5af071bf582650a1eee51b7de42f8f50012ca674608b975cabf41ea4"
+}

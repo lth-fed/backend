@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from notifications\n            where sent = false and id in (\n                select notification_id from activity_notifications\n                    where activity_id = $1 and id = $2\n                union\n                select notification_id from activity_buyers_notifications\n                    where activity_id = $1 and id = $2\n                union\n                select notification_id from purchased_ticket_notifications\n                    where activity_id = $1 and id = $2\n            ) returning id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "b0d7fd018122d39dfbd435760768abd8092eb4441d497bc2e79bcf3cb23c10aa"
+}

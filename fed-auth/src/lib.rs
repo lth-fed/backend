@@ -28,29 +28,22 @@ mod saml2;
 pub use bin_common::PgPool;
 pub(crate) use context::{Context, ContextWrapper};
 
-#[cfg(debug_assertions)]
-pub(crate) const API_DOMAIN: &str = "http://localhost:8001";
-#[cfg(not(debug_assertions))]
-pub(crate) const API_DOMAIN: &str = "https://api.auth.teknologappen.se";
-#[cfg(debug_assertions)]
-pub(crate) const WEBSITE_DOMAIN: &str = "http://localhost:5174";
-#[cfg(not(debug_assertions))]
-pub(crate) const WEBSITE_DOMAIN: &str = "https://auth.teknologappen.se";
-
 /// # Errors
 ///
 /// If the endpoint fails to set up, often because env variables / database is missing.
 pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl poem::Endpoint> {
-    let tracer = get_otel(env!("CARGO_PKG_NAME"), test_db.is_some())?;
+    let is_test = test_db.is_some();
+    let tracer = get_otel(env!("CARGO_PKG_NAME"), is_test)?;
 
     let context = Arc::new(Context::new(test_db).await?);
 
-    if cfg!(not(test)) {
+    if !is_test {
         runtime::spawn(&context).await;
     }
 
-    let auth_ctx = JwkContext::<AuthUrl>::from_jwks("", context.jwks.clone());
-    let server_url = API_DOMAIN;
+    let auth_ctx =
+        JwkContext::<AuthUrl>::from_jwks("", context.jwks.clone(), context.debug.enabled);
+    let server_url = context.api_domain;
     let api_service = OpenApiService::new(
         api::MainRouter {
             context: Arc::clone(&context),
@@ -86,7 +79,9 @@ pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl po
     let saml_spec = saml_service.spec_endpoint();
 
     let well_known = OpenApiService::new(
-        WellKnownRouter,
+        WellKnownRouter {
+            context: Arc::clone(&context),
+        },
         env!("CARGO_PKG_NAME"),
         env!("CARGO_PKG_VERSION"),
     )
@@ -144,13 +139,13 @@ struct WellKnownOidc {
     revocation_endpoint_auth_methods_supported: Vec<String>,
 }
 impl WellKnownOidc {
-    fn new() -> Self {
+    fn new(api_domain: &str) -> Self {
         Self {
-            issuer: API_DOMAIN.to_owned(),
-            authorization_endpoint: format!("{API_DOMAIN}/oidc/v1/authorize"),
-            token_endpoint: format!("{API_DOMAIN}/oidc/v1/token"),
-            userinfo_endpoint: format!("{API_DOMAIN}/oidc/v1/userinfo"),
-            jwks_uri: format!("{API_DOMAIN}/oidc/v1/certs"),
+            issuer: api_domain.to_owned(),
+            authorization_endpoint: format!("{api_domain}/oidc/v1/authorize"),
+            token_endpoint: format!("{api_domain}/oidc/v1/token"),
+            userinfo_endpoint: format!("{api_domain}/oidc/v1/userinfo"),
+            jwks_uri: format!("{api_domain}/oidc/v1/certs"),
             response_types_supported: vec!["code".to_owned()],
             id_token_signing_alg_values_supported: vec!["EdDSA".to_owned()],
             scopes_supported: vec!["openid".to_owned()],
@@ -160,17 +155,19 @@ impl WellKnownOidc {
                 "authorization_code".to_owned(),
                 "refresh_token".to_owned(),
             ],
-            revocation_endpoint: format!("{API_DOMAIN}/oidc/v1/revoke"),
+            revocation_endpoint: format!("{api_domain}/oidc/v1/revoke"),
             revocation_endpoint_auth_methods_supported: vec![String::from("none")],
         }
     }
 }
 #[derive(Clone)]
-pub(crate) struct WellKnownRouter;
+pub(crate) struct WellKnownRouter {
+    context: ContextWrapper,
+}
 #[OpenApi]
 impl WellKnownRouter {
     #[oai(path = "/openid-configuration", method = "get")]
     async fn oidc(&self) -> Json<WellKnownOidc> {
-        Json(WellKnownOidc::new())
+        Json(WellKnownOidc::new(self.context.api_domain))
     }
 }

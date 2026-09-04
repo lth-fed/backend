@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select requests.member_id, users.name as \"name?\"\n            from group_member_requests requests\n            inner join users on users.id = requests.member_id\n            where requests.group_id = $1\n            order by requests.member_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "member_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "name?",
+        "type_info": "Bytea"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "dd325312b89e5c4149ea1e47ac5a9a58ba090e2838af81ad4250769065830f9c"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update activities set is_hidden = true\n\t\t\twhere id = '50000000-0000-0000-0000-000000000001'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "441e2b60193a30bde5dae172fcf5d871ebccb279877e5610952e8c7e2cb04f7b"
+}

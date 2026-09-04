@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select transaction_id, transactions.client_id, stripe_endpoint_secret\n                    from stripe_checkouts\n                    inner join transactions on (transactions.id = transaction_id)\n                    inner join client_ids on (client_ids.client_id = transactions.client_id)\n                    where stripe_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "transaction_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "client_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "stripe_endpoint_secret",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "69831a694b1137c9a61e3704d46c5791e624f0f9138bddad58870ada0f5eefea"
+}

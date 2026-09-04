@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -7,13 +8,19 @@ use a2::{
     Error as ApnsError, ErrorReason as ApnsErrorReason, NotificationBuilder as _,
     NotificationOptions, PushType,
 };
+use bin_common::Transaction;
 use fcm_service::{FcmMessage, FcmNotification, FcmService, Target};
 use fed_auth_verifier::User;
-use minilith_errors::{MinilithEndpointError, MinilithErrorResultExt as _, MinilithResult};
+use minilith_errors::{
+    AlertLevel, MinilithEndpointError, MinilithErrorOptionExt as _, MinilithErrorResultExt as _,
+    MinilithResult, alert,
+};
 use poem_openapi::{Enum, Object, OpenApi, payload::Json};
 use sqlx::Type;
 use sqlx::types::Uuid;
+use tracing::{error, info, warn};
 
+use crate::DbInternationalizedString as DIS;
 use crate::context::ContextWrapper;
 
 #[derive(Clone)]
@@ -31,6 +38,29 @@ impl fmt::Debug for PushClients {
             .field("fcm", &"FcmService")
             .finish()
     }
+}
+
+#[derive(Enum, Type, Clone, Copy, Debug)]
+#[oai(rename_all = "lowercase")]
+#[sqlx(rename_all = "lowercase", type_name = "push_platform")]
+pub enum PushPlatform {
+    Ios,
+    Android,
+}
+
+pub(crate) struct PushDeviceRow {
+    pub user_id: String,
+    pub device_id: String,
+    pub push_token: String,
+    pub platform: PushPlatform,
+    pub language: Vec<u8>,
+}
+pub(crate) struct NotificationRow {
+    pub id: Uuid,
+    pub activity_id: Option<Uuid>,
+    pub sender: DIS,
+    pub title: DIS,
+    pub content: DIS,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -99,18 +129,88 @@ impl PushClients {
         }))
     }
 
+    /// Verifies both provider configurations without delivering to a real device.
+    ///
+    /// APNs and FCM require a target on every send. The deliberately invalid targets below
+    /// therefore must be rejected as targets after authentication succeeds.
+    pub(crate) async fn verify_credentials(&self) -> MinilithResult<()> {
+        let (apns, fcm) = tokio::join!(
+            self.verify_apns_credentials(),
+            self.verify_fcm_credentials()
+        );
+        apns?;
+        fcm?;
+        Ok(())
+    }
+
+    async fn verify_apns_credentials(&self) -> MinilithResult<()> {
+        const APNS_TEST_TOKEN: &str =
+            "0000000000000000000000000000000000000000000000000000000000000000";
+
+        let payload = DefaultNotificationBuilder::new()
+            .set_title("Credential check")
+            .set_body("This notification has no recipient.")
+            .build(
+                APNS_TEST_TOKEN,
+                NotificationOptions {
+                    apns_id: Some("00000000-0000-0000-0000-000000000000"),
+                    apns_push_type: Some(PushType::Alert),
+                    apns_topic: Some(&self.apns_topic),
+                    ..NotificationOptions::default()
+                },
+            );
+        match self.apns.send(payload).await {
+            Err(ApnsError::ResponseError(response))
+                if response
+                    .error
+                    .as_ref()
+                    .is_some_and(|error| error.reason == ApnsErrorReason::BadDeviceToken) => {}
+            Ok(_) => {
+                return Err(MinilithEndpointError::internal_error(
+                    "APNs accepted the credential-test target",
+                    "the synthetic token unexpectedly accepted a notification",
+                ));
+            }
+            Err(error) => return Err(error).wrap_err_internal("APNs credential test failed"),
+        }
+
+        Ok(())
+    }
+
+    async fn verify_fcm_credentials(&self) -> MinilithResult<()> {
+        let mut notification = FcmNotification::new();
+        notification.set_title("Credential check".to_owned());
+        notification.set_body("This notification has no recipient.".to_owned());
+        let mut message = FcmMessage::new();
+        message.set_notification(Some(notification));
+        message.set_target(Target::Token("credential-test-no-device".to_owned()));
+        match self.fcm.send_notification(message).await {
+            Err(error) if fcm_test_target_rejected(&error.to_string()) => {}
+            Ok(()) => {
+                return Err(MinilithEndpointError::internal_error(
+                    "FCM accepted the credential-test target",
+                    "the synthetic token unexpectedly accepted a notification",
+                ));
+            }
+            Err(error) => return Err(error).wrap_err_internal("FCM credential test failed"),
+        }
+
+        Ok(())
+    }
+
     pub(crate) async fn send(
         &self,
         platform: PushPlatform,
         push_token: &str,
         notification_id: Uuid,
+        activity_id: Option<Uuid>,
         title: &str,
         content: &str,
     ) -> MinilithResult<PushSendResult> {
         match platform {
             PushPlatform::Ios => {
                 let apns_id = notification_id.to_string();
-                let payload = DefaultNotificationBuilder::new()
+                let mut payload = DefaultNotificationBuilder::new()
                     .set_title(title)
                     .set_body(content)
                     .set_sound("default")
@@ -123,13 +223,20 @@ impl PushClients {
                             ..NotificationOptions::default()
                         },
                     );
+                if let Some(activity_id) = activity_id {
+                    payload
+                        .add_custom_data("activity_id", &activity_id.to_string())
+                        .wrap_err_internal("failed to add activity id to APNs payload")?;
+                }
                 match self.apns.send(payload).await {
                     Ok(_) => {}
                     Err(ApnsError::ResponseError(response))
-                        if response
-                            .error
-                            .as_ref()
-                            .is_some_and(|error| error.reason == ApnsErrorReason::Unregistered) =>
+                        if response.error.as_ref().is_some_and(|error| {
+                            matches!(
+                                error.reason,
+                                ApnsErrorReason::Unregistered | ApnsErrorReason::BadDeviceToken
+                            )
+                        }) =>
                     {
                         return Ok(PushSendResult::InvalidToken);
                     }
@@ -145,6 +252,12 @@ impl PushClients {
 
                 let mut message = FcmMessage::new();
                 message.set_notification(Some(notification));
+                if let Some(activity_id) = activity_id {
+                    message.set_data(Some(HashMap::from([(
+                        "activity_id".to_owned(),
+                        activity_id.to_string(),
+                    )])));
+                }
                 message.set_target(Target::Token(push_token.to_owned()));
 
                 if let Err(err) = self.fcm.send_notification(message).await {
@@ -163,6 +276,110 @@ impl PushClients {
     }
 }
 
+fn fcm_test_target_rejected(error: &str) -> bool {
+    error.contains("UNREGISTERED")
+        || (error.contains("INVALID_ARGUMENT") && error.contains("registration token"))
+}
+
+pub(crate) struct PushDevices {
+    pub device_ids: Vec<String>,
+    pub push_tokens: Vec<String>,
+}
+impl PushDevices {
+    pub async fn clear_failed(&self, txn: &mut Transaction<'_>) -> MinilithResult<()> {
+        sqlx::query!(
+            "delete from push_devices pd
+            using unnest($1::text[], $2::text[]) as t(device_id, push_token)
+            where pd.device_id = t.device_id and pd.push_token = t.push_token",
+            &self.device_ids,
+            &self.push_tokens,
+        )
+        .execute(&mut txn.executor())
+        .await?;
+        Ok(())
+    }
+}
+pub(crate) async fn send_notifications(
+    ctx: &ContextWrapper,
+    notification: &NotificationRow,
+    rows: impl IntoIterator<Item = PushDeviceRow>,
+) -> MinilithResult<PushDevices> {
+    if !ctx.has_notification_support() {
+        warn!(
+            notification_id = ?notification.id,
+            title = notification.title.resolve_intl("en", ""),
+            "push-notification not sent because setup failed"
+        );
+        return Ok(PushDevices {
+            device_ids: Vec::new(),
+            push_tokens: Vec::new(),
+        });
+    }
+
+    let mut sent = 0_u64;
+    let mut failed = 0_u64;
+    let mut removed_devices = PushDevices {
+        device_ids: Vec::new(),
+        push_tokens: Vec::new(),
+    };
+    for device in rows {
+        let language = ctx
+            .decrypt_string(device.language)
+            .wrap_err_encryption("notification recipient language")?;
+
+        let sender = notification.sender.resolve_intl(&language, "");
+        let title = notification.title.resolve_intl(&language, "");
+        let title = if sender.is_empty() {
+            title.to_owned()
+        } else {
+            format!("{sender}: {title}")
+        };
+        let content = notification.content.resolve_intl(&language, "");
+        match ctx
+            .send_notification(
+                device.platform,
+                &device.push_token,
+                notification.id,
+                notification.activity_id,
+                &title,
+                content,
+            )
+            .await
+        {
+            Ok(PushSendResult::Sent) => sent += 1,
+            Ok(PushSendResult::InvalidToken) => {
+                removed_devices.device_ids.push(device.device_id);
+                removed_devices.push_tokens.push(device.push_token);
+            }
+            Err(err) => {
+                if failed == 0 {
+                    alert(
+                        AlertLevel::L3,
+                        format!("failed to send push notification (id: {})", notification.id),
+                    );
+                }
+                failed += 1;
+                error!(
+                    ?err,
+                    notification_id = %notification.id,
+                    user_id = %device.user_id,
+                    device_id = %device.device_id,
+                    platform = ?device.platform,
+                    "failed to send push notification"
+                );
+            }
+        }
+    }
+    info!(
+        notification_id = %notification.id,
+        sent,
+        failed,
+        removed_devices=removed_devices.push_tokens.len(),
+        "processed push notification"
+    );
+    Ok(removed_devices)
+}
+
 #[derive(Clone, Debug)]
 pub struct Router {
     pub context: ContextWrapper,
@@ -174,22 +391,15 @@ impl Deref for Router {
     }
 }
 
-#[derive(Enum, Type, Clone, Copy, Debug)]
-#[oai(rename_all = "lowercase")]
-#[sqlx(rename_all = "lowercase")]
-pub enum PushPlatform {
-    Ios,
-    Android,
-}
 #[derive(Object)]
 struct RegisterRequest {
     platform: PushPlatform,
     push_token: String,
-    device_id: Uuid,
+    device_id: String,
 }
 #[derive(Object)]
 struct DeregisterRequest {
-    device_id: Uuid,
+    device_id: String,
 }
 
 #[OpenApi(prefix_path = "/push")]

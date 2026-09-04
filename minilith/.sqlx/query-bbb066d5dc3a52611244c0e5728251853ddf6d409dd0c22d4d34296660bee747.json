@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into activity_buyers_notifications (id, activity_id, notification_id)\n                values ($1, $2, $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bbb066d5dc3a52611244c0e5728251853ddf6d409dd0c22d4d34296660bee747"
+}

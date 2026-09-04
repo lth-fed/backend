@@ -8,3 +8,9 @@ create table images (
     size bigint not null,
     url text not null
 );
+
+-- Records every upload allowance, including uploads that are never attached to an entity.
+-- This is the root set for future object-storage garbage collection.
+create table image_uploads (
+    key text primary key
+);

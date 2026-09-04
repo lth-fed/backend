@@ -1,8 +1,9 @@
+use std::borrow::Cow;
 use std::ops::Deref;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use bin_common::{Transaction, setup_db};
+use bin_common::{DebugConfig, Transaction, setup_db};
 use ed25519_dalek::pkcs8::DecodePrivateKey as _;
 use jsonwebtoken::jwk::JwkSet;
 use poem_openapi::Object;
@@ -58,8 +59,8 @@ impl Deref for ValidatedAuthSession {
 pub enum CallbackUrlVersion<'a> {
     V1 { url: &'a str },
 }
-impl CallbackUrlVersion<'_> {
-    pub fn url(&self) -> &str {
+impl<'a> CallbackUrlVersion<'a> {
+    pub fn url(&self) -> &'a str {
         match self {
             Self::V1 { url } => url,
         }
@@ -75,9 +76,38 @@ impl CallbackUrl {
             url: &self.callback_url_v1,
         }
     }
+
+    fn url_for_request(&self, debug: DebugConfig) -> Cow<'_, str> {
+        let url = self.as_latest().url();
+        if !debug.service_urls {
+            return Cow::Borrowed(url);
+        }
+
+        let Ok(mut parsed) = reqwest::Url::parse(url) else {
+            return Cow::Borrowed(url);
+        };
+        let is_local_minilith = matches!(parsed.host_str(), Some("localhost" | "127.0.0.1"))
+            && matches!(
+                (parsed.scheme(), parsed.port_or_known_default()),
+                ("http", Some(8000)) | ("https", Some(8050))
+            );
+        if !is_local_minilith || parsed.set_host(Some("minilith")).is_err() {
+            return Cow::Borrowed(url);
+        }
+
+        Cow::Owned(parsed.into())
+    }
 }
 
 pub(crate) type ContextWrapper = Arc<Context>;
+
+// TODO: remove fed-lu hack
+#[derive(Clone)]
+pub(crate) struct FedLuConfig {
+    pub authorize_url: String,
+    pub token_url: String,
+    pub client_secret: Option<String>,
+}
 
 #[derive(Clone)]
 pub(crate) struct Context {
@@ -85,10 +115,21 @@ pub(crate) struct Context {
     pub db: PgPool,
     pub reqwest_client: reqwest::Client,
     pub email_client: Option<EmailClient>,
+    pub debug: DebugConfig,
+    pub api_domain: &'static str,
+    pub website_domain: &'static str,
+
+    // TODO: remove fed-lu hack
+    pub fed_lu: FedLuConfig,
 
     // keys
     pub private_key: EncodingKey,
     pub jwks: JwkSet,
+    // TODO: remove fed-lu hack
+    #[allow(
+        dead_code,
+        reason = "used again when the temporary LU bridge is removed"
+    )]
     pub saml_private_key: openssl::pkey::PKey<openssl::pkey::Private>,
 
     pub service_provider: ServiceProvider,
@@ -115,18 +156,25 @@ impl Context {
     /// services.
     pub async fn new(test_db: Option<PgPool>) -> color_eyre::Result<Self> {
         let _: Result<PathBuf, dotenvy::Error> = dotenvy::dotenv();
+        let debug = DebugConfig::from_env();
+        let api_domain = if debug.service_urls {
+            "http://localhost:8001"
+        } else if cfg!(debug_assertions) {
+            "https://localhost:8051"
+        } else {
+            "https://api.auth.teknologappen.se"
+        };
+        let website_domain = if debug.enabled {
+            "http://localhost:5174"
+        } else {
+            "https://auth.teknologappen.se"
+        };
 
         let email_client = if test_db.is_some() {
             None
         } else {
             configure_alert_email(EmailClient::new("ALERT")?)?;
-            let email_client = EmailClient::new("MAIL")?;
-            #[cfg(not(debug_assertions))]
-            let email_client = {
-                use color_eyre::eyre::ContextCompat as _;
-                Some(email_client.wrap_err("`MAIL_*` email configuration is required")?)
-            };
-            email_client
+            EmailClient::new("MAIL")?
         };
 
         // for tests we only want to attach once
@@ -146,21 +194,39 @@ impl Context {
             setup_db(
                 &std::env::var("DATABASE_URL").wrap_err("`DATABASE_URL` not set")?,
                 Some(migrate!("./migrations")),
+                8,
             )
             .await
             .wrap_err("Failed to set up the database")
             .suggestion("Start the database with `docker compose up -d`")?
         };
 
-        let (sp, saml_pk) = saml2::get_service_provider().await?;
+        let client = reqwest::Client::builder()
+            .tls_danger_accept_invalid_certs(debug.enabled)
+            .build()?;
+
+        // TODO: remove fed-lu hack
+        let fed_lu = FedLuConfig {
+            authorize_url: std::env::var("FED_LU_AUTHORIZE_URL")
+                .unwrap_or_else(|_| "https://auth.esek.se/fed-lu/authorize".to_owned()),
+            token_url: std::env::var("FED_LU_TOKEN_URL")
+                .unwrap_or_else(|_| "https://auth.esek.se/fed-lu/token".to_owned()),
+            client_secret: std::env::var("FED_LU_CLIENT_SECRET").ok(),
+        };
+
+        let (sp, saml_pk) = saml2::get_service_provider(api_domain).await?;
 
         // so they are grouped with the usual poem errors:
         // https://docs.rs/poem/latest/src/poem/middleware/opentelemetry_metrics.rs.html
         let meter = opentelemetry::global::meter("poem");
         let context = Context {
             db,
-            reqwest_client: reqwest::Client::new(),
+            reqwest_client: client,
             email_client,
+            debug,
+            api_domain,
+            website_domain,
+            fed_lu,
             private_key,
             jwks,
             service_provider: sp,
@@ -289,7 +355,12 @@ impl Context {
     ) -> Result<(), sqlx::Error> {
         sqlx::query!(
             "insert into session_validated_users
-            (session_id, sub, email, full_name, lth_guild) values ($1, $2, $3, $4, $5)",
+            (session_id, sub, email, full_name, lth_guild) values ($1, $2, $3, $4, $5)
+            on conflict (session_id) do update set
+                sub = excluded.sub,
+                email = excluded.email,
+                full_name = excluded.full_name,
+                lth_guild = excluded.lth_guild",
             session,
             user.sub,
             user.email,
@@ -311,7 +382,8 @@ impl Context {
     ) -> Result<String, ()> {
         if session.redirect_requires_datasharing && !session.datasharing_confirmed {
             Ok(format!(
-                "/confirm-datasharing/?code={code}&provider={}",
+                "{}/confirm-datasharing/?code={code}&provider={}",
+                self.website_domain,
                 session
                     .redirect_uri
                     .split('/')
@@ -333,14 +405,15 @@ impl Context {
                 )
                 .map_err(|_| ())?;
                 match cb_url.as_latest() {
-                    CallbackUrlVersion::V1 { url } => {
+                    CallbackUrlVersion::V1 { .. } => {
+                        let url = cb_url.url_for_request(self.debug);
                         let resp = self
                             .reqwest_client
-                            .post(url)
+                            .post(url.as_ref())
                             .body(token)
                             .send()
                             .await
-                            .inspect_err(|err| error!("auth callback POST failed: {err}"))
+                            .inspect_err(|err| error!("auth callback POST failed: {err:?}"))
                             .map_err(|_| ())?;
                         if !resp.status().is_success() {
                             let status = resp.status();
@@ -360,8 +433,8 @@ impl Context {
             }
             if additional_personal_information {
                 return Ok(format!(
-                    "/personal-information/?code={code}&sub={}",
-                    session.user.sub
+                    "{}/personal-information/?code={code}&sub={}",
+                    self.website_domain, session.user.sub
                 ));
             }
 
@@ -382,5 +455,44 @@ impl Context {
             };
             Ok(url)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bin_common::DebugConfig;
+
+    use super::CallbackUrl;
+
+    #[test]
+    fn compose_callbacks_use_the_minilith_service_name() {
+        let callback = CallbackUrl {
+            callback_url_v1: "http://localhost:8000/v0/user/auth-callback/v1".to_owned(),
+        };
+        let debug = DebugConfig {
+            enabled: true,
+            service_urls: true,
+        };
+
+        assert_eq!(
+            callback.url_for_request(debug),
+            "http://minilith:8000/v0/user/auth-callback/v1"
+        );
+    }
+
+    #[test]
+    fn host_debug_callbacks_keep_localhost() {
+        let callback = CallbackUrl {
+            callback_url_v1: "http://localhost:8000/v0/user/auth-callback/v1".to_owned(),
+        };
+        let debug = DebugConfig {
+            enabled: true,
+            service_urls: false,
+        };
+
+        assert_eq!(
+            callback.url_for_request(debug),
+            "http://localhost:8000/v0/user/auth-callback/v1"
+        );
     }
 }

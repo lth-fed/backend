@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select release_queue, reservation_queue, reservation\n            from users_in_purchase_flow where user_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "release_queue",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "reservation_queue",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "reservation",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "7811b1bf4bba1d6fa234979c6b2c7c43b1b9ed1125c5c2f4af98d818409d15ed"
+}

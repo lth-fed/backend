@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select name, language\n            from users where id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 1,
+        "name": "language",
+        "type_info": "Bytea"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "9d95de442e5a426e7f5665e8090dd7fdbc7aa9e6ea2eb06c2677f9fbbc5e6443"
+}
