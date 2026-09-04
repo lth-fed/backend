@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n            notifications.id,\n            coalesce(\n                (select activity_id from activity_notifications\n                    where notification_id = notifications.id),\n                (select activity_id from activity_buyers_notifications\n                    where notification_id = notifications.id),\n                (select activity_id from purchased_ticket_notifications\n                    where notification_id = notifications.id)\n            ) as \"activity_id?\",\n            notifications.sender as \"sender!: DIS\",\n            notifications.title as \"title!: DIS\",\n            notifications.content as \"content!: DIS\",\n            notifications.send_at\n        from notification_recipients\n        inner join notifications\n            on notifications.id = notification_recipients.notification_id\n        where notification_recipients.user_id = $1\n        and notification_recipients.visible = true\n        and notifications.sent = true\n        and notifications.send_at >= now() - '6 months'::interval\n        order by notifications.send_at desc, notifications.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "activity_id?",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "sender!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 3,
+        "name": "title!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "content!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 5,
+        "name": "send_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "18b57e24bd1efe5e64cf8a054fa2919d96c2e86583bbdb9e25775cd25ae598b7"
+}

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into user_group_settings (user_id, group_id, visible, notification_level)\n             values ($1, $2, true, 'none'::notification_level)\n             on conflict (user_id, group_id) do update set visible = excluded.visible",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6710d44542b08444cf43ad91d974f1bdb986a6d8249113fa8b2a923342604360"
+}

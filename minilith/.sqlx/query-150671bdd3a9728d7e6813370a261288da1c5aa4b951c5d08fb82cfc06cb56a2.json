@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select ticket_reservations.id, ticket_kind_id, timeout, transaction_id,\n                kind.name as \"ticket_kind_name!: DIS\",\n                activities.title as \"activity_title!: DIS\",\n                kind.price\n            from ticket_reservations\n            inner join ticket_kinds kind on (kind.id = ticket_kind_id)\n            inner join activities on (activities.id = kind.activity_id)\n            where user_id = $1",
+  "query": "select ticket_reservations.id, ticket_kind_id, timeout, transaction_id,\n                kind.name as \"ticket_kind_name!: DIS\",\n                activities.title as \"activity_title!: DIS\",\n                kind.price\n            from ticket_reservations\n            inner join ticket_kinds kind on (kind.id = ticket_kind_id)\n            inner join activities on (activities.id = kind.activity_id)\n            where user_id = $1\n            and activities.time_end > now()",
   "describe": {
     "columns": [
       {
@@ -54,5 +54,5 @@
       false
     ]
   },
-  "hash": "0c00a2fdeff43a2c9e11d4c48a284b9e62d0ae54993f48a56bc578653885d3ad"
+  "hash": "150671bdd3a9728d7e6813370a261288da1c5aa4b951c5d08fb82cfc06cb56a2"
 }

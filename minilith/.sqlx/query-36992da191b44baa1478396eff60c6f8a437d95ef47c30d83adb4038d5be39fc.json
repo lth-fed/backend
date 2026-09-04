@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n            activities.title as \"title!: DIS\",\n            creator.name as \"creator_name!: DIS\",\n            images.url as creator_logo_url\n        from activities\n        inner join groups creator on creator.id = activities.creator_id\n        inner join images on images.id = creator.logo_id\n        where activities.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "title!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 1,
+        "name": "creator_name!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 2,
+        "name": "creator_logo_url",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "36992da191b44baa1478396eff60c6f8a437d95ef47c30d83adb4038d5be39fc"
+}

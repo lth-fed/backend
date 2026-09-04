@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update activities set time_end = now() - interval '1 second',\n            time_start = now() - interval '1 hour'\n        where id = '00000000-0000-0000-0000-000000000003'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "c6aeec82bc55e3f985feca97461d0128807861a5e8ac1c74ef3a507451e3b0bf"
+}
