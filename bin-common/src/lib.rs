@@ -1,4 +1,5 @@
 use color_eyre::eyre::Context as _;
+use opentelemetry::trace::TraceContextExt as _;
 use opentelemetry::trace::TracerProvider as _;
 use opentelemetry_otlp::WithExportConfig as _;
 use opentelemetry_sdk::logs::log_processor_with_async_runtime::BatchLogProcessor;
@@ -6,6 +7,7 @@ use opentelemetry_sdk::metrics::periodic_reader_with_async_runtime::PeriodicRead
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::trace::span_processor_with_async_runtime::BatchSpanProcessor;
 use poem::listener::{Listener, RustlsCertificate, RustlsConfig, TcpListener};
+use poem::{Endpoint, Middleware, Request, Response};
 use sqlx::Postgres;
 use sqlx::migrate::{MigrateDatabase as _, Migrator};
 use sqlx::postgres::PgPoolOptions;
@@ -16,6 +18,110 @@ use tracing_subscriber::util::SubscriberInitExt as _;
 
 pub type PgPool = sqlx_tracing::Pool<Postgres>;
 pub type Transaction<'a> = sqlx_tracing::Transaction<'a, Postgres>;
+
+pub const APP_VERSION_HEADER: &str = "x-tappen-app-version";
+
+#[derive(Clone, Debug)]
+pub struct AppVersionMetrics {
+    requests: opentelemetry::metrics::Counter<u64>,
+}
+
+impl AppVersionMetrics {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            requests: opentelemetry::global::meter("bin-common")
+                .u64_counter("teknologappen.client.requests")
+                .build(),
+        }
+    }
+}
+
+impl Default for AppVersionMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<E: Endpoint> Middleware<E> for AppVersionMetrics {
+    type Output = AppVersionMetricsEndpoint<E>;
+
+    fn transform(&self, ep: E) -> Self::Output {
+        AppVersionMetricsEndpoint {
+            inner: ep,
+            requests: self.requests.clone(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct AppVersionMetricsEndpoint<E> {
+    inner: E,
+    requests: opentelemetry::metrics::Counter<u64>,
+}
+
+impl<E: Endpoint> Endpoint for AppVersionMetricsEndpoint<E> {
+    type Output = Response;
+
+    async fn call(&self, req: Request) -> poem::Result<Self::Output> {
+        if let Some(version) = req
+            .headers()
+            .get(APP_VERSION_HEADER)
+            .and_then(valid_app_version)
+        {
+            let attribute = opentelemetry::KeyValue::new("app.commit", version.to_owned());
+            opentelemetry::Context::current()
+                .span()
+                .set_attribute(attribute.clone());
+            self.requests.add(1, &[attribute]);
+        }
+
+        self.inner
+            .call(req)
+            .await
+            .map(poem::IntoResponse::into_response)
+    }
+}
+
+fn valid_app_version(value: &poem::http::HeaderValue) -> Option<&str> {
+    value.to_str().ok().filter(|value| {
+        !value.is_empty()
+            && value.len() <= 80
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+    })
+}
+
+#[cfg(test)]
+mod app_version_tests {
+    use super::valid_app_version;
+
+    #[test]
+    fn accepts_commit_like_versions() {
+        let version = poem::http::HeaderValue::from_static("1.4.0-a81f3c_dirty");
+        assert_eq!(valid_app_version(&version), Some("1.4.0-a81f3c_dirty"));
+    }
+
+    #[test]
+    fn rejects_values_that_could_create_unbounded_metric_labels() {
+        let spaces = poem::http::HeaderValue::from_static("arbitrary version");
+        let too_long = poem::http::HeaderValue::from_static(concat!(
+            "aaaaaaaaaa",
+            "aaaaaaaaaa",
+            "aaaaaaaaaa",
+            "aaaaaaaaaa",
+            "aaaaaaaaaa",
+            "aaaaaaaaaa",
+            "aaaaaaaaaa",
+            "aaaaaaaaaa",
+            "a",
+        ));
+
+        assert_eq!(valid_app_version(&spaces), None);
+        assert_eq!(valid_app_version(&too_long), None);
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct DebugConfig {

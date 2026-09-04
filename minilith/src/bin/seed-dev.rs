@@ -233,23 +233,41 @@ async fn seed_users(ctx: &ContextWrapper) -> color_eyre::Result<()> {
         .await
         .wrap_err_with(|| format!("seed user {id}"))?;
 
-        let group_id = group_id(ctx, guild_path).await?;
+        let membership_group_id = group_id(ctx, guild_path).await?;
         sqlx::query!(
             "insert into group_memberships (user_id, group_id) values ($1, $2)
              on conflict do nothing",
             id,
-            group_id,
+            membership_group_id,
         )
         .execute(&ctx.db)
         .await
         .wrap_err_with(|| format!("seed membership {id} -> {guild_path}"))?;
+
+        // Visibility is opt-in when no setting exists. Give fixture users a setting on their
+        // namespace root so its inheritance includes every seeded activity below that root.
+        let root_path = guild_path
+            .split('.')
+            .next()
+            .expect("fixture guild paths have a root");
+        let root_id = group_id(ctx, root_path).await?;
+        sqlx::query!(
+            "insert into user_group_settings (user_id, group_id, visible, notification_level)
+             values ($1, $2, true, 'none'::notification_level)
+             on conflict (user_id, group_id) do update set visible = excluded.visible",
+            id,
+            root_id,
+        )
+        .execute(&ctx.db)
+        .await
+        .wrap_err_with(|| format!("seed visibility {id} -> {root_path}"))?;
 
         if *is_admin {
             sqlx::query!(
                 "insert into group_adminships (user_id, group_id) values ($1, $2)
                  on conflict do nothing",
                 id,
-                group_id,
+                membership_group_id,
             )
             .execute(&ctx.db)
             .await

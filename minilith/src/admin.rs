@@ -4,7 +4,6 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::Deref;
-use std::sync::Arc;
 
 use fed_auth_verifier::User;
 use minilith_errors::{MinilithEndpointError, MinilithErrorResultExt as _, escape_email_html};
@@ -15,10 +14,8 @@ use sqlx::PgExecutor;
 use sqlx::postgres::types::PgMoney;
 use sqlx::types::Uuid;
 use sqlx::types::time::OffsetDateTime;
-use tracing::error;
 
 use crate::activities::PoemLocation;
-use crate::activities::Router as ActivityRouter;
 use crate::context::ContextWrapper;
 use crate::group::admin::{
     Adminship, check_activity_adminship, check_direct_adminship, check_direct_or_parent_adminship,
@@ -28,7 +25,7 @@ use crate::group::{self, Group};
 use crate::ticket::{self, AvailableAddon};
 use crate::{
     DbInternationalizedString as DIS, InternationalizedString, MinilithErrorOptionExt as _,
-    MinilithResult, report, transactions,
+    MinilithResult, accounting, report,
 };
 
 #[derive(Clone, Debug)]
@@ -1312,24 +1309,6 @@ impl Router {
         Json(body): Json<ReportRequest>,
     ) -> MinilithResult<Response<Binary<Vec<u8>>>> {
         check_activity_adminship(&self.db, user.get_id(), id).await?;
-        let ticket_kinds =
-            sqlx::query_scalar!("select id from ticket_kinds where activity_id = $1", id)
-                .fetch_all(&self.db)
-                .await?;
-        let mut tickets = Vec::new();
-        let mut kinds = HashMap::with_capacity(ticket_kinds.len());
-        for kind in &ticket_kinds {
-            tickets.extend(self.purchased_tickets(user.clone(), Path(*kind)).await?.0);
-            kinds.insert(
-                *kind,
-                ticket::load_ticket_kind_unchecked(self, *kind).await?,
-            );
-        }
-        let router = ActivityRouter {
-            context: Arc::clone(&self.context),
-        };
-        let activity = router.details(user.clone(), Path(id)).await?.0;
-
         let user_language =
             sqlx::query_scalar!("select language from users where id = $1", user.get_id())
                 .fetch_one(&self.db)
@@ -1343,154 +1322,20 @@ impl Router {
             "sv" => report::Language::Swedish,
             _ => report::Language::English,
         };
-
-        let creator_logo_url = sqlx::query_scalar!(
-            "select url from groups
-            inner join images on images.id = groups.logo_id
-            where groups.id = $1",
-            activity.creator_id
-        )
-        .fetch_one(&self.db)
-        .await?;
-        let extension = creator_logo_url
-            .rsplit('.')
-            .next()
-            .map(str::to_ascii_lowercase);
-        let mut format = match extension.as_deref() {
-            Some("jpg" | "jpeg") => Some(report::ImageKind::Jpg),
-            Some("png") => Some(report::ImageKind::Png),
-            Some("svg") => Some(report::ImageKind::Svg),
-            Some("webp") => Some(report::ImageKind::Webp),
-            _ => None,
-        };
-        let image_data = if format.is_some() {
-            let path = creator_logo_url
-                .rsplit('/')
-                .next()
-                .unwrap_or(&creator_logo_url);
-            match self.image_bucket().get_object(path).await {
-                Err(err) => {
-                    error!(error = ?err, "s3: Failed to get creator icon");
-                    format = None;
-                    None
-                }
-                Ok(resp) => Some(resp.into_bytes()),
-            }
-        } else {
-            None
-        };
-
-        let transaction_ids = tickets
-            .iter()
-            .map(|ticket| ticket.transaction_id)
-            .collect::<Vec<_>>();
-
-        let fees = self
-            .transactions_post("/v0/info")
-            .json(&transactions::InfoRequest { transaction_ids })
-            .send()
-            .await
-            .wrap_err_internal("report: failed to get transaction info")?
-            .error_for_status()
-            .wrap_err_internal("report: transaction non 2xx")?
-            .json::<Vec<transactions::SingleInfoResponse>>()
-            .await
-            .wrap_err_internal("report: failed to get/parse JSON body")?
-            .into_iter()
-            .map(|info| info.total_fees)
-            .sum();
-
-        let mut per_object = BTreeMap::new();
-        let mut per_alcohol_category = BTreeMap::new();
-        for ticket in &tickets {
-            let kind = kinds.get(&ticket.ticket_kind_id).wrap_err_internal(
-                "report: no ticket kind in this activity for the purchased tickets!!",
-            )?;
-            let kind_name = kind.inner.ticket_kind_name.resolve_intl(&lang, "");
-
-            per_object
-                .entry((report::Kind::Ticket, kind_name.to_owned()))
-                .or_insert((kind.price, 0))
-                .1 += 1;
-            *per_alcohol_category.entry("null".to_owned()).or_insert(0) += kind.price;
-
-            for addon in &ticket.addons {
-                let addon_data = kind
-                    .available_addons
-                    .iter()
-                    .find(|a_a| a_a.inner.id == addon.addon_id)
-                    .wrap_err_internal("report: no addon for purchased ticket in kind")?;
-                for option in &addon.selected_options {
-                    let option_data = addon_data
-                        .options
-                        .iter()
-                        .find(|opt| opt.idx == *option)
-                        .wrap_err_internal("report: no option for purchased ticket in kind")?;
-                    let name = format!(
-                        "{} - {}",
-                        addon_data.inner.name.resolve_intl(&lang, ""),
-                        option_data.name.resolve_intl(&lang, "")
-                    );
-
-                    per_object
-                        .entry((report::Kind::Option, name))
-                        .or_insert((option_data.price, 0))
-                        .1 += 1;
-
-                    for (category, price) in option_data
-                        .bookkeeping_price_categories
-                        .iter()
-                        .zip(option_data.bookkeeping_prices.iter())
-                    {
-                        *per_alcohol_category.entry(category.clone()).or_insert(0) += *price;
-                    }
-                }
-            }
-        }
-        for sale in body.external_sales {
-            per_object
-                .entry((report::Kind::External, String::new()))
-                .or_insert((0, 1))
-                .0 += sale.total;
-            *per_alcohol_category
-                .entry(sale.alcohol_category)
-                .or_insert(0) += sale.total;
-        }
-
-        let data = report::Data {
+        let report = accounting::generate_activity_report(
+            &self.context,
+            id,
             language,
-            activity_name: activity.title.resolve_intl(&lang, "<title>").to_owned(),
-            creator_name: activity
-                .hosts
-                .first()
-                .map_or("", |host| host.name.resolve_intl(&lang, ""))
-                .to_owned(),
-            creator_logo_format: format,
-            creator_logo_data: image_data,
-            // we also have to request the transaction api to get fees
-            fees,
-            fees_external: body.external_sale_fees,
-            per_object: per_object
+            body.external_sales
                 .into_iter()
-                .map(|((kind, name), (price, number))| report::Object {
-                    name,
-                    kind,
-                    price,
-                    number,
-                })
+                .map(|sale| (sale.alcohol_category, sale.total))
                 .collect(),
-            per_alcohol_category: per_alcohol_category
-                .into_iter()
-                .map(|(category, amount)| report::AlcoholCategory {
-                    name: category,
-                    amount,
-                })
-                .collect(),
-        };
+            body.external_sale_fees,
+            false,
+        )
+        .await?;
 
-        let pdf = report::compile(self.report_typst(), &data)?;
-
-        Ok(Response::new(Binary(pdf)).header(
+        Ok(Response::new(Binary(report.pdf)).header(
             "content-disposition",
             format!("attachment; filename=\"activity-report-{id}.pdf\""),
         ))
@@ -1983,7 +1828,14 @@ impl Router {
         Ok(())
     }
 
-    /// Creates or replaces an unsent notification for an activity.
+    /// Creates or replaces an unsent notification for a published activity.
+    ///
+    /// Hidden activities reject notification creation and editing. Sent
+    /// notifications are immutable.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keeps the notification replacement transaction in one endpoint"
+    )]
     #[oai(path = "/activities/:activity_id/notifications/:id", method = "put")]
     async fn put_activity_notification(
         &self,
@@ -1995,12 +1847,21 @@ impl Router {
         check_activity_adminship(&self.db, user.get_id(), activity_id).await?;
         let mut txn = self.db.begin().await?;
         lock_activity(&mut txn, activity_id).await?;
-        let sender = sqlx::query_scalar!(
-            r#"select title as "title!: DIS" from activities where id = $1"#,
+        let activity = sqlx::query!(
+            r#"select title as "title!: DIS", is_hidden from activities where id = $1"#,
             activity_id,
         )
         .fetch_one(&mut txn.executor())
         .await?;
+        if activity.is_hidden {
+            return Err(MinilithEndpointError::bad_user_input(
+                "cannot create a notification for an unpublished activity",
+                "activity is not published",
+                "Publish the activity before scheduling notifications.",
+                "activity_id",
+            ));
+        }
+        let sender = activity.title;
         let existing = sqlx::query!(
             r#"select notifications.id, notifications.sent
             from notifications where notifications.id in (

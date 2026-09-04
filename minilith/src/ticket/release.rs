@@ -53,11 +53,13 @@ async fn release_next_ticket(ctx: &ContextWrapper) -> MinilithResult<ControlFlow
 async fn send_release_notifications(
     ctx: &ContextWrapper,
     id: Uuid,
+    activity_id: Uuid,
     reservation_devices: Vec<PushDeviceRow>,
     reservation_queue_devices: Vec<PushDeviceRow>,
 ) -> MinilithResult<()> {
     let notification = NotificationRow {
         id,
+        activity_id: Some(activity_id),
         // people know where it's from since they just used the app
         sender: sqlx::types::Json(IS::empty()),
         title: IS(HashMap::from_iter([
@@ -84,6 +86,7 @@ async fn send_release_notifications(
     let removed1 = send_notifications(ctx, &notification, reservation_devices).await;
     let notification = NotificationRow {
         id,
+        activity_id: Some(activity_id),
         // people know where it's from since they just used the app
         sender: sqlx::types::Json(IS::empty()),
         title: IS(HashMap::from_iter([
@@ -293,8 +296,14 @@ pub(super) async fn release(
     tokio::spawn(async move {
         // MinilithEndpointError creation causes error! & alert
         drop(
-            send_release_notifications(&ctx, id, reservation_devices, reservation_queue_devices)
-                .await,
+            send_release_notifications(
+                &ctx,
+                id,
+                ticket_kind.activity_id,
+                reservation_devices,
+                reservation_queue_devices,
+            )
+            .await,
         );
     });
     Ok(())

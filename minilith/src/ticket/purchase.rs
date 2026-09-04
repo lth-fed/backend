@@ -72,7 +72,8 @@ pub(super) async fn begin(
             from ticket_reservations
             inner join ticket_kinds kind on (kind.id = ticket_kind_id)
             inner join activities on (activities.id = kind.activity_id)
-            where user_id = $1",
+            where user_id = $1
+            and activities.time_end > now()",
         user.get_id()
     )
     .fetch_optional(&mut txn.executor())

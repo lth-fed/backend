@@ -2,7 +2,7 @@ use bin_common::PgPool;
 use uuid::Uuid;
 
 use super::{
-    access::ensure_user_may_receive_transferred_ticket,
+    access::{ensure_user_may_purchase_ticket, ensure_user_may_receive_transferred_ticket},
     allocation::{give_reservations, reserve_ticket_capacity},
     flow::{
         reserve_user_purchase_flow, set_user_purchase_flow_release_queue,
@@ -374,6 +374,47 @@ async fn transfer_groups_include_descendant_members(db: sqlx::PgPool) {
     .unwrap();
     assert!(
         ensure_user_may_receive_transferred_ticket(&db, "test:purchase-flow-1", ticket_kind,)
+            .await
+            .is_err()
+    );
+}
+
+#[sqlx::test(fixtures("../fixtures/ticket_capacity.sql"))]
+async fn cannot_purchase_ticket_after_activity_ends(db: sqlx::PgPool) {
+    let ticket_kind = Uuid::parse_str("00000000-0000-0000-0000-000000000004").unwrap();
+    let group = Uuid::parse_str("00000000-0000-0000-0000-000000000002").unwrap();
+    sqlx::query!(
+        "insert into group_memberships (user_id, group_id) values ($1, $2)",
+        "test:purchase-flow-1",
+        group,
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    sqlx::query!(
+        "insert into ticket_kind_allowed_groups (ticket_kind_id, group_id) values ($1, $2)",
+        ticket_kind,
+        group,
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+
+    ensure_user_may_purchase_ticket(&db, "test:purchase-flow-1", ticket_kind)
+        .await
+        .unwrap();
+
+    sqlx::query!(
+        "update activities set time_end = now() - interval '1 second',
+            time_start = now() - interval '1 hour'
+        where id = '00000000-0000-0000-0000-000000000003'"
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+
+    assert!(
+        ensure_user_may_purchase_ticket(&db, "test:purchase-flow-1", ticket_kind)
             .await
             .is_err()
     );

@@ -169,6 +169,13 @@ settings_by_host as (
     left join activity_notification_overrides activity_override
         on activity_override.user_id = eligible_users.user_id
         and activity_override.activity_id = eligible_users.activity_id
+    where eligible_users.activity_id is null
+        or exists (
+            select 1
+            from activities
+            where activities.id = eligible_users.activity_id
+            and activities.is_hidden = false
+        )
 )
 select
     notification_id,

@@ -96,8 +96,19 @@ select a.id,
         inner join groups ug on ag.path @> ug.path
         inner join group_memberships m on m.group_id = ug.id
         where tk.activity_id = a.id
-        and max_tickets > 0
+        and tk.max_tickets > 0
         and m.user_id = $1
+        and purchasing_available_stop > now()
+        and tk.reserved_or_purchased_tickets < tk.max_tickets
+        and tk.reserved_or_purchased_tickets + (
+            select coalesce(sum(greatest(
+                tk2.reserved_or_purchased_tickets,
+                tk2.min_tickets
+            )), 0)
+            from ticket_kinds tk2
+            where tk2.activity_id = a.id
+            and tk2.id != tk.id
+        ) < a.max_tickets
         order by purchasing_available_start
         limit 1
     ) as "earliest_ticket_release?"

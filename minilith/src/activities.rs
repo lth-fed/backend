@@ -225,6 +225,8 @@ impl Router {
                 creator_id,
                 is_hidden,
                 is_hidden_for_other_admins,
+                -- NOT SAME as activity-list.sql, because it filters for if it's not sold out
+                -- either. This controls the tappableness of the button
                 (select purchasing_available_start
                     from ticket_kinds tk
                     inner join ticket_kind_allowed_groups g on g.ticket_kind_id = tk.id

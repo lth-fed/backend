@@ -37,6 +37,7 @@ pub struct Context {
     push_clients: Option<PushClients>,
 
     email_client: Option<EmailClient>,
+    accountant: Option<String>,
     report_typst: report::OurWonderfulTypstWorldBase,
 
     s3_image_bucket: Box<s3::Bucket>,
@@ -57,6 +58,13 @@ impl Context {
         } else {
             configure_alert_email(EmailClient::new("ALERT")?)?;
             EmailClient::new("MAIL")?
+        };
+        let accountant = if is_test {
+            None
+        } else {
+            std::env::var("ACCOUNTANT")
+                .ok()
+                .filter(|address| !address.trim().is_empty())
         };
 
         let db = if let Some(db) = test_db {
@@ -192,6 +200,20 @@ impl Context {
             }
         }
 
+        if !is_test && (accountant.is_none() || email_client.is_none()) {
+            if !debug.enabled {
+                alert(
+                    AlertLevel::L2,
+                    "automatic bookkeeping email is disabled; ACCOUNTANT or MAIL SMTP settings are missing",
+                );
+            }
+            warn!(
+                accountant_configured = accountant.is_some(),
+                mail_configured = email_client.is_some(),
+                "automatic bookkeeping email is disabled"
+            );
+        }
+
         let context = Self {
             db,
             debug,
@@ -203,6 +225,7 @@ impl Context {
             push_clients,
 
             email_client,
+            accountant,
             report_typst: report::OurWonderfulTypstWorldBase::default(),
 
             s3_image_bucket,
@@ -336,6 +359,11 @@ impl Context {
         self.email_client.as_ref()
     }
 
+    #[must_use]
+    pub(crate) fn accounting_email(&self) -> Option<(&EmailClient, &str)> {
+        self.email_client.as_ref().zip(self.accountant.as_deref())
+    }
+
     /// # Errors
     ///
     /// Returns an internal error if the push provider rejects the notification.
@@ -344,6 +372,7 @@ impl Context {
         platform: PushPlatform,
         push_token: &str,
         notification_id: Uuid,
+        activity_id: Option<Uuid>,
         title: &str,
         content: &str,
     ) -> MinilithResult<PushSendResult> {
@@ -354,7 +383,14 @@ impl Context {
             )
         })?;
         sender
-            .send(platform, push_token, notification_id, title, content)
+            .send(
+                platform,
+                push_token,
+                notification_id,
+                activity_id,
+                title,
+                content,
+            )
             .await
     }
 

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use bin_common::get_otel;
+use bin_common::{APP_VERSION_HEADER, AppVersionMetrics, get_otel};
 use fed_auth_verifier::{AuthUrl, JwkContext, TransactionsUrl};
 use opentelemetry::trace::TracerProvider as _;
 use poem::http::Method;
@@ -9,6 +9,7 @@ use poem::middleware::{Cors, OpenTelemetryMetrics, OpenTelemetryTracing};
 use poem::{Endpoint, EndpointExt as _, Route};
 use poem_openapi::OpenApiService;
 
+mod accounting;
 pub mod activities;
 pub mod admin;
 mod api;
@@ -157,6 +158,7 @@ pub async fn get_endpoint(
         .nest("/v0/docs", ui)
         .nest("/v0/spec.json", spec)
         .with(OpenTelemetryMetrics::new())
+        .with(AppVersionMetrics::new())
         .with(OpenTelemetryTracing::new(
             otel.tracer(env!("CARGO_PKG_NAME")),
         ))
@@ -182,5 +184,6 @@ fn minilith_cors(debug: bin_common::DebugConfig) -> Cors {
         .allow_method(Method::DELETE)
         .allow_header("content-type")
         .allow_header("authorization")
+        .allow_header(APP_VERSION_HEADER)
         .allow_credentials(true)
 }

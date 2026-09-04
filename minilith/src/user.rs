@@ -50,6 +50,7 @@ struct Me {
 #[derive(Debug, Object)]
 struct Notification {
     id: Uuid,
+    activity_id: Option<Uuid>,
     sender: InternationalizedString,
     title: InternationalizedString,
     content: InternationalizedString,
@@ -63,6 +64,14 @@ async fn load_notification_history(
     sqlx::query!(
         r#"select
             notifications.id,
+            coalesce(
+                (select activity_id from activity_notifications
+                    where notification_id = notifications.id),
+                (select activity_id from activity_buyers_notifications
+                    where notification_id = notifications.id),
+                (select activity_id from purchased_ticket_notifications
+                    where notification_id = notifications.id)
+            ) as "activity_id?",
             notifications.sender as "sender!: DIS",
             notifications.title as "title!: DIS",
             notifications.content as "content!: DIS",
@@ -79,6 +88,7 @@ async fn load_notification_history(
     )
     .map(|row| Notification {
         id: row.id,
+        activity_id: row.activity_id,
         sender: row.sender.0,
         title: row.title.0,
         content: row.content.0,
@@ -449,5 +459,22 @@ mod tests {
                 ("no-settings", NotificationLevel::None, false),
             ]
         );
+
+        sqlx::query!(
+            "update activities set is_hidden = true
+			where id = '50000000-0000-0000-0000-000000000001'"
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+        assert!(history_ids(&db, "owner-muted").await.is_empty());
+        let hidden_rules = sqlx::query_scalar!(
+            "select user_id from notification_recipients where notification_id = $1",
+            Uuid::parse_str("30000000-0000-0000-0000-000000000006").unwrap(),
+        )
+        .fetch_all(&db)
+        .await
+        .unwrap();
+        assert!(hidden_rules.is_empty());
     }
 }

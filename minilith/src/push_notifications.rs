@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -56,6 +57,7 @@ pub(crate) struct PushDeviceRow {
 }
 pub(crate) struct NotificationRow {
     pub id: Uuid,
+    pub activity_id: Option<Uuid>,
     pub sender: DIS,
     pub title: DIS,
     pub content: DIS,
@@ -201,13 +203,14 @@ impl PushClients {
         platform: PushPlatform,
         push_token: &str,
         notification_id: Uuid,
+        activity_id: Option<Uuid>,
         title: &str,
         content: &str,
     ) -> MinilithResult<PushSendResult> {
         match platform {
             PushPlatform::Ios => {
                 let apns_id = notification_id.to_string();
-                let payload = DefaultNotificationBuilder::new()
+                let mut payload = DefaultNotificationBuilder::new()
                     .set_title(title)
                     .set_body(content)
                     .set_sound("default")
@@ -220,6 +223,11 @@ impl PushClients {
                             ..NotificationOptions::default()
                         },
                     );
+                if let Some(activity_id) = activity_id {
+                    payload
+                        .add_custom_data("activity_id", &activity_id.to_string())
+                        .wrap_err_internal("failed to add activity id to APNs payload")?;
+                }
                 match self.apns.send(payload).await {
                     Ok(_) => {}
                     Err(ApnsError::ResponseError(response))
@@ -244,6 +252,12 @@ impl PushClients {
 
                 let mut message = FcmMessage::new();
                 message.set_notification(Some(notification));
+                if let Some(activity_id) = activity_id {
+                    message.set_data(Some(HashMap::from([(
+                        "activity_id".to_owned(),
+                        activity_id.to_string(),
+                    )])));
+                }
                 message.set_target(Target::Token(push_token.to_owned()));
 
                 if let Err(err) = self.fcm.send_notification(message).await {
@@ -326,6 +340,7 @@ pub(crate) async fn send_notifications(
                 device.platform,
                 &device.push_token,
                 notification.id,
+                notification.activity_id,
                 &title,
                 content,
             )

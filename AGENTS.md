@@ -33,6 +33,8 @@
   the human
 - if anything can be refactored to clean up the code and understanding when
   reading the code, notify the human
+- don't EVER use chrono
+- only make targeted unit tests if it's very hard to reason about code
 
 You are not writing code to make something work, you are writing the code to
 make the project more maintainable.

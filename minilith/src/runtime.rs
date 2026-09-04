@@ -2,13 +2,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fed_auth_verifier::callbacks::{TransactionCallbackInfo, TransactionInfo};
-use minilith_errors::{AlertLevel, MinilithResult, alert};
+use minilith_errors::{
+    AlertLevel, MinilithErrorResultExt as _, MinilithResult, alert, escape_email_html,
+};
 use tracing::error;
 
+use crate::accounting;
 use crate::push_notifications::{NotificationRow, PushDeviceRow, send_notifications};
-use crate::{ContextWrapper, DbInternationalizedString as DIS, ticket, transactions};
+use crate::{ContextWrapper, DbInternationalizedString as DIS, report, ticket, transactions};
 
 const NOTIFICATION_POLL_INTERVAL: Duration = Duration::from_secs(10);
+const ACCOUNTING_POLL_INTERVAL: Duration = Duration::from_hours(1);
 
 /// TODO: make these only run 1 instance if multiple instances are deployed from cold-start.
 ///
@@ -111,6 +115,14 @@ async fn check_next_notification(ctx: &ContextWrapper) -> MinilithResult<bool> {
         NotificationRow,
         r#"select
             id,
+            coalesce(
+                (select activity_id from activity_notifications
+                    where notification_id = notifications.id),
+                (select activity_id from activity_buyers_notifications
+                    where notification_id = notifications.id),
+                (select activity_id from purchased_ticket_notifications
+                    where notification_id = notifications.id)
+            ) as "activity_id?",
             sender as "sender!: DIS",
             title as "title!: DIS",
             content as "content!: DIS"
@@ -166,6 +178,74 @@ async fn check_next_notification(ctx: &ContextWrapper) -> MinilithResult<bool> {
 
     txn.commit().await?;
 
+    Ok(true)
+}
+
+fn is_accounting_window(now: time::PrimitiveDateTime) -> bool {
+    now.weekday() == time::Weekday::Monday && now.hour() >= 17
+}
+
+async fn accounting_window(ctx: &ContextWrapper) -> MinilithResult<bool> {
+    let now = sqlx::query_scalar!(
+        r#"select (now() at time zone 'Europe/Stockholm')
+            as "now!: time::PrimitiveDateTime""#,
+    )
+    .fetch_one(&ctx.db)
+    .await?;
+    Ok(is_accounting_window(now))
+}
+
+async fn check_next_accounting_report(ctx: &ContextWrapper) -> MinilithResult<bool> {
+    let Some((email_client, accountant)) = ctx.accounting_email() else {
+        return Ok(false);
+    };
+    let mut transaction = ctx.db.begin().await?;
+    let activity_id = sqlx::query_scalar!(
+        r#"select id from activities
+        where bookkept = false
+        and time_end < now() - interval '1 day'
+        order by time_end, id
+        limit 1
+        for update skip locked"#,
+    )
+    .fetch_optional(&mut transaction.executor())
+    .await?;
+    let Some(activity_id) = activity_id else {
+        transaction.commit().await?;
+        return Ok(false);
+    };
+
+    let generated = accounting::generate_activity_report(
+        ctx,
+        activity_id,
+        report::Language::Swedish,
+        Vec::new(),
+        0,
+        true,
+    )
+    .await?;
+    let safe_name = escape_email_html(&generated.activity_name);
+    email_client
+        .send_html_with_pdf(
+            "Teknologappen",
+            [accountant],
+            &format!("Försäljningsrapport – {}", generated.activity_name),
+            format!(
+                "<p>Här kommer den automatiska försäljningsrapporten för <strong>{safe_name}</strong>. Kvittokopior ligger sist i den bifogade PDF-filen.</p>"
+            ),
+            format!("forsaljningsrapport-{activity_id}.pdf"),
+            generated.pdf,
+        )
+        .await
+        .wrap_err_internal("failed to email automatic accounting report")?;
+
+    sqlx::query!(
+        "update activities set bookkept = true where id = $1 and bookkept = false",
+        activity_id,
+    )
+    .execute(&mut transaction.executor())
+    .await?;
+    transaction.commit().await?;
     Ok(true)
 }
 
@@ -229,4 +309,31 @@ pub fn spawn(ctx: &ContextWrapper) {
             tokio::time::sleep(NOTIFICATION_POLL_INTERVAL).await;
         }
     });
+
+    if ctx.accounting_email().is_some() {
+        let accounting_ctx = Arc::clone(ctx);
+        tokio::spawn(async move {
+            loop {
+                match accounting_window(&accounting_ctx).await {
+                    Ok(true) => loop {
+                        match check_next_accounting_report(&accounting_ctx).await {
+                            Ok(true) => {}
+                            Ok(false) => break,
+                            Err(err) => {
+                                alert(
+                                    AlertLevel::L2,
+                                    "automatic accounting report failed; see logs",
+                                );
+                                error!(?err, "automatic accounting report failed");
+                                break;
+                            }
+                        }
+                    },
+                    Ok(false) => {}
+                    Err(err) => error!(?err, "failed to check the accounting schedule"),
+                }
+                tokio::time::sleep(ACCOUNTING_POLL_INTERVAL).await;
+            }
+        });
+    }
 }

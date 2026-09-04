@@ -430,6 +430,64 @@ impl EmailClient {
             return Ok(());
         }
 
+        let message = message
+            .body(html.into())
+            .wrap_err_internal("email: failed to format email")?;
+
+        self.send_message(message, from_name, subject).await
+    }
+
+    /// Sends an HTML message with one PDF attachment.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if there are no recipients, an address or message is
+    /// invalid, or the SMTP server rejects delivery.
+    pub async fn send_html_with_pdf<'a>(
+        &self,
+        from_name: &str,
+        to: impl IntoIterator<Item = &'a str>,
+        subject: &str,
+        html: impl Into<String>,
+        filename: String,
+        pdf: Vec<u8>,
+    ) -> MinilithResult<()> {
+        let mut message = lettre::Message::builder()
+            .from(lettre::message::Mailbox::new(
+                Some(from_name.to_owned()),
+                self.from.clone(),
+            ))
+            .subject(subject);
+
+        let mut has_recipient = false;
+        for recipient in to {
+            let mailbox = lettre::message::Mailbox::from_str(recipient)
+                .wrap_err_bad_user("email: invalid recipient email address", "email")?;
+            message = message.to(mailbox);
+            has_recipient = true;
+        }
+        if !has_recipient {
+            return Ok(());
+        }
+
+        let content_type = lettre::message::header::ContentType::parse("application/pdf")
+            .wrap_err_internal("email: invalid PDF content type")?;
+        let body = lettre::message::MultiPart::mixed()
+            .singlepart(lettre::message::SinglePart::html(html.into()))
+            .singlepart(lettre::message::Attachment::new(filename).body(pdf, content_type));
+        let message = message
+            .multipart(body)
+            .wrap_err_internal("email: failed to format email with PDF")?;
+
+        self.send_message(message, from_name, subject).await
+    }
+
+    async fn send_message(
+        &self,
+        message: lettre::Message,
+        from_name: &str,
+        subject: &str,
+    ) -> MinilithResult<()> {
         let mut labels = Vec::with_capacity(4);
         labels.push(KeyValue::new(
             "email.request.from".to_owned(),
@@ -439,10 +497,6 @@ impl EmailClient {
             "email.request.subject".to_owned(),
             subject.to_owned(),
         ));
-
-        let message = message
-            .body(html.into())
-            .wrap_err_internal("email: failed to format email")?;
 
         let mut tries = 0;
         let max_tries = 5;
@@ -481,6 +535,10 @@ impl EmailClient {
             // );
             error!("email: Failed to send email: {:?}", response.code());
             self.metrics_error.add(1, &labels);
+            return Err(MinilithEndpointError::internal_error(
+                "email: SMTP rejected email",
+                response.code(),
+            ));
         }
         Ok(())
     }

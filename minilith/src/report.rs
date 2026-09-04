@@ -68,6 +68,9 @@ pub struct Data {
     pub fees_external: i64,
     pub per_object: Vec<Object>,
     pub per_alcohol_category: Vec<AlcoholCategory>,
+    pub receipt_count: usize,
+    #[serde(skip)]
+    pub receipts: Vec<bytes::Bytes>,
 }
 
 pub(crate) struct OurWonderfulTypstWorldBase {
@@ -136,7 +139,8 @@ impl typst::World for OurWonderfulTypstWorld<'_> {
             return Err(FileError::Package(PackageError::Other(None)));
         }
 
-        let data = match id.vpath().get_without_slash() {
+        let path = id.vpath().get_without_slash();
+        let data = match path {
             "receipt.typ" => Bytes::new(TYPST_DOC),
             "data.json" => Bytes::new(serde_json::to_string(&self.data).map_err(|error| {
                 alert(AlertLevel::L2, "Failed to serialize data.json for receipt.");
@@ -146,7 +150,15 @@ impl typst::World for OurWonderfulTypstWorld<'_> {
             "image" if let Some(data) = &self.data.creator_logo_data => {
                 Bytes::new(bytes::Bytes::clone(data))
             }
-            _ => return Err(FileError::NotFound(id.vpath().get_without_slash().into())),
+            _ => {
+                let receipt = path
+                    .strip_prefix("transaction-receipt-")
+                    .and_then(|path| path.strip_suffix(".pdf"))
+                    .and_then(|index| index.parse::<usize>().ok())
+                    .and_then(|index| self.data.receipts.get(index))
+                    .ok_or_else(|| FileError::NotFound(path.into()))?;
+                Bytes::new(bytes::Bytes::clone(receipt))
+            }
         };
         Ok(data)
     }
@@ -196,4 +208,37 @@ pub fn compile(world: &OurWonderfulTypstWorldBase, data: &Data) -> MinilithResul
         ..Default::default()
     };
     typst_pdf::pdf(&doc, &pdf_opts).wrap_err_internal("typst: pdf")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Data, Language, OurWonderfulTypstWorldBase, compile};
+
+    fn empty_data() -> Data {
+        Data {
+            language: Language::Swedish,
+            activity_name: "Testaktivitet".to_owned(),
+            creator_name: "Testsektionen".to_owned(),
+            creator_logo_format: None,
+            creator_logo_data: None,
+            fees: 0,
+            fees_external: 0,
+            per_object: Vec::new(),
+            per_alcohol_category: Vec::new(),
+            receipt_count: 0,
+            receipts: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn appends_pdf_receipts() -> minilith_errors::MinilithResult<()> {
+        let world = OurWonderfulTypstWorldBase::default();
+        let receipt = compile(&world, &empty_data())?;
+        let mut report = empty_data();
+        report.receipt_count = 1;
+        report.receipts.push(bytes::Bytes::from(receipt));
+
+        compile(&world, &report)?;
+        Ok(())
+    }
 }
