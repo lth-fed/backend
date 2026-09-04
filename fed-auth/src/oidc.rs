@@ -31,6 +31,7 @@ const TEKNOLOGAPPEN_ALLOWED_DOMAINS: &[&str] = &[
     "https://api.teknologappen.se",
     // ios app
     "capacitor://localhost",
+    "se.teknologappen.tappen://auth-callback",
     // android app
     "https://localhost",
     "tappen://oauth_callback",
