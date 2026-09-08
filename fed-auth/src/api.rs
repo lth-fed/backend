@@ -74,9 +74,9 @@ impl MainRouter {
             .body(format!("id={pn}"))
             .send()
             .await
-            .wrap_err_internal(format!("noalert medcheck: transport error (for {sub})"))?
+            .wrap_err_internal(format!("medcheck: transport error (for {sub})"))?
             .error_for_status()
-            .wrap_err_internal(format!("noalert medcheck: status error (for {sub})"))?;
+            .wrap_err_internal(format!("medcheck: status error (for {sub})"))?;
         let body = resp
             .text()
             .await
@@ -161,14 +161,7 @@ impl MainRouter {
                 ));
             }
 
-            // TODO: remove hack, we fall back to E if medcheck is bad
-            Some(
-                self.get_guild(pn, &sub)
-                    .await
-                    .ok()
-                    .flatten()
-                    .unwrap_or(Guild::E),
-            )
+            self.get_guild(pn, &sub).await.ok().flatten()
         } else {
             None
         };

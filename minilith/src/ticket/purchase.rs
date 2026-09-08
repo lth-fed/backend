@@ -333,7 +333,7 @@ pub(super) async fn begin(
     Ok(response)
 }
 
-pub(super) async fn callback(
+pub(crate) async fn callback(
     ctx: &ContextWrapper,
     events: fed_auth_verifier::callbacks::TransactionsCallbackDataV1,
 ) -> MinilithResult<()> {

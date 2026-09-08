@@ -51,6 +51,7 @@ impl Deref for Router {
 }
 
 pub(crate) use catalog::load_ticket_kind_unchecked;
+pub(crate) use purchase::callback;
 pub(crate) use release::check_all_tickets;
 
 fn ensure_affected_rows(

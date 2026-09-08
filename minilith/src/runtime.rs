@@ -78,21 +78,17 @@ async fn check_unpaid_transactions(ctx: &ContextWrapper) -> MinilithResult<()> {
             return Ok(());
         }
     };
-    // dumb hack to simulate HTTP request.
-    let router = ticket::Router {
-        context: Arc::clone(ctx),
-    };
     for info in data {
-        router
-            .callback(
-                fed_auth_verifier::callbacks::TransactionsCallbackDataV1::single(
-                    TransactionCallbackInfo {
-                        transaction_id: info.id,
-                        inner: TransactionInfo { state: info.state },
-                    },
-                ),
-            )
-            .await?;
+        ticket::callback(
+            ctx,
+            fed_auth_verifier::callbacks::TransactionsCallbackDataV1::single(
+                TransactionCallbackInfo {
+                    transaction_id: info.id,
+                    inner: TransactionInfo { state: info.state },
+                },
+            ),
+        )
+        .await?;
     }
 
     Ok(())
