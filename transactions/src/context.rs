@@ -395,6 +395,9 @@ impl Context {
                 {
                     Ok(session) => session,
                     Err(reconcile_error) => {
+                        // if matches!(&reconcile_error, stripe::StripeError::Stripe(_, 400)) {
+                        //     return Ok(());
+                        // }
                         tracing::warn!(
                             ?expire_error,
                             ?reconcile_error,
