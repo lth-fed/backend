@@ -46,6 +46,7 @@ pub async fn user_groups_tree(
         r#"
             select distinct
                 g.id, g.path, g.limit_membership_visibility,
+                g.propogate_member_visibility_access as "propagate_member_visibility_access!",
                 g.name as "name!: DIS",
                 g.description as "description!: DIS",
                 g.deleted,

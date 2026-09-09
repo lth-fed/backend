@@ -23,6 +23,10 @@ create table groups (
     name jsonb not null,
     description jsonb not null,
     logo_id uuid not null references images(id),
+    -- only acts as a barrier "upwards" when admin, i.e. if I'm part of E-guild
+    -- board & this is set for E-guild, I still see members in subgroups, but
+    -- their admins don't see E-guild's members.
+    propogate_member_visibility_access bool not null default false,
     deleted boolean not null default false
 );
 

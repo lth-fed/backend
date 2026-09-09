@@ -84,13 +84,23 @@ impl<E: Endpoint> Endpoint for AppVersionMetricsEndpoint<E> {
 }
 
 fn valid_app_version(value: &poem::http::HeaderValue) -> Option<&str> {
-    value.to_str().ok().filter(|value| {
-        !value.is_empty()
-            && value.len() <= 80
-            && value
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
-    })
+    let value = value.to_str().ok()?;
+    if value.is_empty() || value.len() > 80 {
+        return None;
+    }
+
+    let (tag, commit) = value.split_once(" (")?;
+    let commit = commit.strip_suffix(')')?;
+    let tag = tag.strip_suffix("-old").unwrap_or(tag);
+    let commit = commit.strip_suffix("-modified").unwrap_or(commit);
+
+    (!tag.is_empty()
+        && tag
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+        && (4..=40).contains(&commit.len())
+        && commit.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    .then_some(value)
 }
 
 #[cfg(test)]
@@ -99,13 +109,20 @@ mod app_version_tests {
 
     #[test]
     fn accepts_commit_like_versions() {
-        let version = poem::http::HeaderValue::from_static("1.4.0-a81f3c_dirty");
-        assert_eq!(valid_app_version(&version), Some("1.4.0-a81f3c_dirty"));
+        let tagged = poem::http::HeaderValue::from_static("0.3.0 (a81f3c0)");
+        let modified = poem::http::HeaderValue::from_static("0.3.0-old (a81f3c0-modified)");
+
+        assert_eq!(valid_app_version(&tagged), Some("0.3.0 (a81f3c0)"));
+        assert_eq!(
+            valid_app_version(&modified),
+            Some("0.3.0-old (a81f3c0-modified)")
+        );
     }
 
     #[test]
     fn rejects_values_that_could_create_unbounded_metric_labels() {
-        let spaces = poem::http::HeaderValue::from_static("arbitrary version");
+        let malformed = poem::http::HeaderValue::from_static("arbitrary version");
+        let non_hex_commit = poem::http::HeaderValue::from_static("0.3.0 (not-a-commit)");
         let too_long = poem::http::HeaderValue::from_static(concat!(
             "aaaaaaaaaa",
             "aaaaaaaaaa",
@@ -118,7 +135,8 @@ mod app_version_tests {
             "a",
         ));
 
-        assert_eq!(valid_app_version(&spaces), None);
+        assert_eq!(valid_app_version(&malformed), None);
+        assert_eq!(valid_app_version(&non_hex_commit), None);
         assert_eq!(valid_app_version(&too_long), None);
     }
 }
