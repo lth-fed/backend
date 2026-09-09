@@ -149,6 +149,7 @@ struct PutGroup {
     name: InternationalizedString,
     description: InternationalizedString,
     limit_membership_visibility: bool,
+    propagate_member_visibility_access: bool,
     logo_id: Uuid,
 }
 
@@ -324,6 +325,7 @@ struct AdminPurchasedTicket {
     ticket_kind_id: Uuid,
     purchaser_id: String,
     owner_id: String,
+    owner_name: String,
     transaction_id: Uuid,
     owner_memberships: Vec<Uuid>,
     addons: Vec<AdminPurchasedAddon>,
@@ -1144,6 +1146,7 @@ impl Router {
             r#"select
                 groups.id, groups.path,
                 groups.limit_membership_visibility,
+                groups.propogate_member_visibility_access as "propagate_member_visibility_access!",
                 groups.name as "name!: DIS",
                 groups.description as "description!: DIS",
                 groups.deleted,
@@ -1223,12 +1226,21 @@ impl Router {
         &self,
         user: User,
         Path(activity_id): Path<Uuid>,
-    ) -> MinilithResult<Json<Vec<String>>> {
+    ) -> MinilithResult<Json<Vec<AdminUser>>> {
         check_activity_adminship(&self.db, user.get_id(), activity_id).await?;
-        let verifiers = sqlx::query_scalar!(
-            "select user_id from activity_verifiers where activity_id = $1 order by user_id",
+        let verifiers = sqlx::query!(
+            "select user_id, name from activity_verifiers
+            join users on users.id = user_id
+            where activity_id = $1 order by user_id",
             activity_id,
         )
+        .map(|row| AdminUser {
+            user_id: row.user_id,
+            name: self
+                .decrypt_string(row.name)
+                .wrap_err_encryption("verifiers username")
+                .ok(),
+        })
         .fetch_all(&self.db)
         .await?;
         Ok(Json(verifiers))
@@ -1387,10 +1399,12 @@ impl Router {
                 purchased_tickets.ticket_kind_id,
                 purchased_tickets.purchaser_id,
                 purchased_tickets.owner_id,
+                owner.name as owner_name,
                 purchased_tickets.transaction_id,
                 (select array(select group_id from group_memberships 
                  where user_id = owner_id)) as owner_memberships
             from purchased_tickets
+            join users owner on owner.id = owner_id
             where purchased_tickets.ticket_kind_id = $1
             order by purchased_tickets.id"#,
             id,
@@ -1400,6 +1414,10 @@ impl Router {
             ticket_kind_id: row.ticket_kind_id,
             purchaser_id: row.purchaser_id,
             owner_id: row.owner_id,
+            owner_name: self
+                .decrypt_string(row.owner_name)
+                .wrap_err_encryption("purchased: owner name")
+                .unwrap_or_default(),
             transaction_id: row.transaction_id,
             owner_memberships: row.owner_memberships.unwrap_or_default(),
             addons: addons.get(&row.id).cloned().unwrap_or_default(),
@@ -2166,12 +2184,14 @@ impl Router {
                         name = $2,
                         description = $3,
                         limit_membership_visibility = $4,
-                        logo_id = $5
+                        propogate_member_visibility_access = $5,
+                        logo_id = $6
                     where id = $1"#,
                     id,
                     body.name.to_json_value(),
                     body.description.to_json_value(),
                     body.limit_membership_visibility,
+                    body.propagate_member_visibility_access,
                     body.logo_id,
                 )
                 .execute(&mut txn.executor())
@@ -2190,7 +2210,11 @@ impl Router {
                         when id = $1 then $6
                         else limit_membership_visibility
                     end,
-                    logo_id = case when id = $1 then $7 else logo_id end
+                    propogate_member_visibility_access = case
+                        when id = $1 then $7
+                        else propogate_member_visibility_access
+                    end,
+                    logo_id = case when id = $1 then $8 else logo_id end
                 where path <@ $3::ltree"#,
                     id,
                     body.path.0,
@@ -2198,6 +2222,7 @@ impl Router {
                     body.name.to_json_value(),
                     body.description.to_json_value(),
                     body.limit_membership_visibility,
+                    body.propagate_member_visibility_access,
                     body.logo_id,
                 )
                 .execute(&mut txn.executor())
@@ -2207,13 +2232,14 @@ impl Router {
             sqlx::query!(
                 r#"insert into groups (
                     id, path, name, description,
-                    limit_membership_visibility, logo_id
-                ) values ($1, $2, $3, $4, $5, $6)"#,
+                    limit_membership_visibility, propogate_member_visibility_access, logo_id
+                ) values ($1, $2, $3, $4, $5, $6, $7)"#,
                 id,
                 body.path.0,
                 body.name.to_json_value(),
                 body.description.to_json_value(),
                 body.limit_membership_visibility,
+                body.propagate_member_visibility_access,
                 body.logo_id,
             )
             .execute(&mut txn.executor())
@@ -2352,6 +2378,68 @@ impl Router {
         Ok(())
     }
 
+    /// List all members we have visibility access for.
+    #[oai(path = "/groups/visible-members", method = "get")]
+    async fn list_visible_members(&self, user: User) -> MinilithResult<Json<Vec<AdminUser>>> {
+        let mut txn = self.db.begin().await?;
+        let members = sqlx::query!(
+            r#"(
+                with roots as (
+                    -- distinct: one per adminship
+                    select distinct on (ag.id) ag.id, nlevel(member_root.path) as level,
+                    member_root.id, member_root.path,
+                    member_root.propogate_member_visibility_access
+                    from group_adminships
+                    join groups ag on ag.id = group_id
+                    join groups member_root
+                        on member_root.path @> ag.path
+                    left outer join groups root_parent
+                        on root_parent.path = member_root.parent_path
+                    where user_id = $1
+                    and (
+                        root_parent.id is null
+                        or root_parent.propogate_member_visibility_access = false
+                    )
+                    -- find first with parent with no propogate visibility, use it for root
+                    -- IF it itself has no propogate, don't use it! (see below)
+                    order by ag.id, level desc
+                )
+                select distinct membership.user_id as "user_id!", users.name as "name?"
+                from roots
+                join groups child on child.path <@ roots.path
+                join group_memberships membership
+                    on membership.group_id = child.id
+                left outer join users on users.id = membership.user_id
+                where roots.propogate_member_visibility_access
+                order by membership.user_id
+            )
+
+            union
+
+            (
+                select distinct gm.user_id as "user_id!", users.name as "name?"
+                from group_adminships ga
+                join group_memberships gm on gm.group_id = ga.group_id
+                left outer join users on users.id = gm.user_id
+                where ga.user_id = $1
+                order by gm.user_id
+            )
+            "#,
+            user.get_id()
+        )
+        .map(|row| AdminUser {
+            user_id: row.user_id,
+            name: row.name.and_then(|name| {
+                self.decrypt_string(name)
+                    .wrap_err_encryption("list_members name")
+                    .ok()
+            }),
+        })
+        .fetch_all(&mut txn.executor())
+        .await?;
+
+        Ok(Json(members))
+    }
     /// List all members of a group. To do it, you need to be an admin of the
     /// group.
     ///
@@ -2476,41 +2564,6 @@ impl Router {
         Ok(Json(admins))
     }
 
-    /// Lists the distinct member and administrator identities in every group
-    /// directly administered by the caller. Intended for cached user pickers.
-    #[oai(path = "/group-users", method = "get")]
-    async fn list_group_users(&self, user: User) -> MinilithResult<Json<Vec<AdminUser>>> {
-        let users = sqlx::query!(
-            r#"with administered_groups as (
-                select group_id from group_adminships where user_id = $1
-            ), related_users as (
-                select memberships.user_id
-                from group_memberships memberships
-                inner join administered_groups using (group_id)
-                union
-                select admins.user_id
-                from group_adminships admins
-                inner join administered_groups using (group_id)
-            )
-            select related_users.user_id as "user_id!", users.name as "name?"
-            from related_users
-            left join users on users.id = related_users.user_id
-            order by related_users.user_id"#,
-            user.get_id(),
-        )
-        .map(|row| AdminUser {
-            user_id: row.user_id,
-            name: row.name.and_then(|name| {
-                self.decrypt_string(name)
-                    .wrap_err_encryption("list_members name")
-                    .ok()
-            }),
-        })
-        .fetch_all(&self.db)
-        .await?;
-        Ok(Json(users))
-    }
-
     /// Create an adminship for a user in a group.
     ///
     /// The user performing this action must be a literal super-admin, meaning
@@ -2623,6 +2676,7 @@ impl Router {
             r#"select
                 groups.id, groups.path,
                 groups.limit_membership_visibility,
+                groups.propogate_member_visibility_access as "propagate_member_visibility_access!",
                 groups.name as "name!: DIS",
                 groups.description as "description!: DIS",
                 groups.deleted,
@@ -2693,6 +2747,7 @@ impl Router {
             r#"select
                 groups.id, groups.path,
                 groups.limit_membership_visibility,
+                groups.propogate_member_visibility_access as "propagate_member_visibility_access!",
                 groups.name as "name!: DIS",
                 groups.description as "description!: DIS",
                 groups.deleted,
