@@ -33,6 +33,7 @@ create table session_validated_users (
     sub text not null,
     email text,
     full_name text,
+    language text,
     -- lowercase, single letter or close (e, doct)
     lth_guild text
 );

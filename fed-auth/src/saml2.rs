@@ -304,6 +304,7 @@ impl SamlRouter {
             email: None,
             full_name: None,
             lth_guild: None,
+            language: None,
         };
         self.validate_session(request_id, &user).await?;
         Ok(Response::new(()).status(StatusCode::SEE_OTHER).header(

@@ -149,6 +149,8 @@ pub struct AuthCallbackDataV1 {
     pub email: Option<String>,
     /// Will be Some the request after you returned 201, if you do.
     pub full_name: Option<String>,
+    /// Will be Some the request after you returned 201, if you do.
+    pub language: Option<String>,
     /// Only for lu provider.
     pub lth_guild: Option<Guild>,
 }

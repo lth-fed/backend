@@ -916,6 +916,7 @@ impl MainRouter {
             email: None,
             full_name: None,
             lth_guild: None,
+            language: None,
         };
         if let Err(err) = self.validate_session(&query.state, &user).await {
             drop(MinilithEndpointError::from(err));

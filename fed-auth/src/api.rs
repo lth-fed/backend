@@ -9,8 +9,8 @@ use poem_openapi::{Enum, Object, OpenApi};
 use sqlx::query;
 use uuid::Uuid;
 
-use crate::context::{ValidatedAuthSession, ValidatedUser};
-use crate::oidc::ACCESS_TOKEN_VALID_FOR;
+use crate::context::{CallbackUrl, CallbackUrlVersion, ValidatedAuthSession, ValidatedUser};
+use crate::oidc::{ACCESS_TOKEN_VALID_FOR, CALLBACK_TOKEN_VALID_FOR};
 use crate::{Context, ContextWrapper, jwt};
 
 #[derive(Object, Clone)]
@@ -26,8 +26,9 @@ enum EmailLanguage {
     Sv,
 }
 #[derive(Object)]
-struct EmailApproveResponse {
+struct EmailApproveRequest {
     token: Uuid,
+    language: Option<String>,
 }
 #[derive(Object, Clone)]
 struct TestLoginRequest {
@@ -46,6 +47,13 @@ pub(crate) struct InfoCompletion {
 #[derive(Object)]
 struct ApiKeyRequest {
     key: Uuid,
+    /// Should be something like `https://api.teknologappen.se/v0/user/auth-callback/v1`.
+    #[oai(flatten)]
+    server_callback: Option<CallbackUrl>,
+    /// Defaults to `API user`.
+    default_name: Option<String>,
+    /// Defaults to `en`.
+    default_language: Option<String>,
 }
 #[derive(Object)]
 struct ApiKeyResponse {
@@ -256,7 +264,7 @@ impl MainRouter {
     #[oai(path = "/providers/email/approve", method = "post")]
     async fn mail_approve(
         &self,
-        body: Json<EmailApproveResponse>,
+        Json(body): Json<EmailApproveRequest>,
         headers: &poem::http::HeaderMap,
     ) -> MinilithResult<PlainText<String>> {
         if headers
@@ -285,6 +293,7 @@ impl MainRouter {
             full_name: None,
             email: Some(login_data.email),
             lth_guild: None,
+            language: body.language,
         };
         self.validate_session(&login_data.code, &user).await?;
 
@@ -322,6 +331,7 @@ impl MainRouter {
             full_name: None,
             email: None,
             lth_guild: None,
+            language: None
         };
         self.validate_session(&body.code, &user).await?;
 
@@ -332,7 +342,10 @@ impl MainRouter {
         ))
     }
     #[oai(path = "/api-key-get-access-token", method = "post")]
-    async fn get_at(&self, body: Json<ApiKeyRequest>) -> MinilithResult<Json<ApiKeyResponse>> {
+    async fn get_at(
+        &self,
+        Json(body): Json<ApiKeyRequest>,
+    ) -> MinilithResult<Json<ApiKeyResponse>> {
         let row = query!(
             "select user_id, client_id from api_keys where key = $1",
             body.key
@@ -340,6 +353,44 @@ impl MainRouter {
         .fetch_one(&self.db)
         .await
         .wrap_err_unauthorized("KEY")?;
+
+        if let Some(cb_url) = body.server_callback {
+            let token = jwt::encode(
+                &jwt::StandardClaims::new(
+                    &row.client_id,
+                    CALLBACK_TOKEN_VALID_FOR,
+                    &ValidatedUser {
+                        sub: row.user_id.clone(),
+                        email: None,
+                        full_name: Some(body.default_name.unwrap_or_else(|| "API user".to_owned())),
+                        language: Some(body.default_language.unwrap_or_else(|| "en".to_owned())),
+                        lth_guild: None,
+                    },
+                ),
+                &self.private_key,
+            )?;
+            match cb_url.as_latest() {
+                CallbackUrlVersion::V1 { .. } => {
+                    let url = cb_url.url_for_request(self.debug);
+                    let resp = self
+                        .reqwest_client
+                        .post(url.as_ref())
+                        .body(token)
+                        .send()
+                        .await
+                        .wrap_err_internal("auth callback POST transport failed")?;
+                    if !resp.status().is_success() {
+                        let status = resp.status();
+                        let body = resp.text().await.ok();
+                        return Err(MinilithEndpointError::internal_error(
+                            "auth callback POST failed",
+                            (status, body),
+                        ));
+                    }
+                }
+            }
+        }
+
         let claims = jwt::StandardClaims::new(
             row.client_id,
             ACCESS_TOKEN_VALID_FOR,

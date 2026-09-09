@@ -41,6 +41,7 @@ pub struct ValidatedUser {
     pub sub: String,
     pub email: Option<String>,
     pub full_name: Option<String>,
+    pub language: Option<String>,
     pub lth_guild: Option<String>,
     // ALSO UPDATE `fed_auth_verifier`
 }
@@ -77,7 +78,7 @@ impl CallbackUrl {
         }
     }
 
-    fn url_for_request(&self, debug: DebugConfig) -> Cow<'_, str> {
+    pub fn url_for_request(&self, debug: DebugConfig) -> Cow<'_, str> {
         let url = self.as_latest().url();
         if !debug.service_urls {
             return Cow::Borrowed(url);
@@ -304,6 +305,7 @@ impl Context {
                 email: row.email,
                 full_name: row.full_name,
                 lth_guild: row.lth_guild,
+                language: row.language,
             },
         })
         .fetch_optional(&self.db)
@@ -339,6 +341,7 @@ impl Context {
                 email: row.email,
                 full_name: row.full_name,
                 lth_guild: row.lth_guild,
+                language: row.language,
             },
         })
         .fetch_optional(&mut txn.executor())

@@ -333,11 +333,11 @@ impl Router {
 
             sqlx::query!(
                 "insert into users (id, name, language)
-                    values ($1, $2, $3) on conflict (id) do update
-                        set name = excluded.name",
+                values ($1, $2, $3) on conflict (id) do update
+                    set name = excluded.name",
                 cb_data.sub,
                 name,
-                self.encrypt("")
+                self.encrypt(cb_data.language.as_deref().unwrap_or(""))
             )
             .execute(&self.db)
             .await?;
