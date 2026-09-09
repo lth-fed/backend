@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "(\n                with roots as (\n                    -- distinct: one per adminship\n                    select distinct on (ag.id) ag.id, nlevel(member_root.path) as level,\n                    member_root.id, member_root.path,\n                    member_root.propogate_member_visibility_access\n                    from group_adminships\n                    join groups ag on ag.id = group_id\n                    join groups member_root\n                        on member_root.path @> ag.path\n                    left outer join groups root_parent\n                        on root_parent.path = member_root.parent_path\n                    where user_id = $1\n                    and (\n                        root_parent.id is null\n                        or root_parent.propogate_member_visibility_access = false\n                    )\n                    -- find first with parent with no propogate visibility, use it for root\n                    -- IF it itself has no propogate, don't use it! (see below)\n                    order by ag.id, level desc\n                )\n                select distinct membership.user_id as \"user_id!\", users.name as \"name?\"\n                from roots\n                join groups child on child.path <@ roots.path\n                join group_memberships membership\n                    on membership.group_id = child.id\n                left outer join users on users.id = membership.user_id\n                where roots.propogate_member_visibility_access\n                order by membership.user_id\n            )\n\n            union\n\n            (\n                select distinct gm.user_id as \"user_id!\", users.name as \"name?\"\n                from group_adminships ga\n                join group_memberships gm on gm.group_id = ga.group_id\n                left outer join users on users.id = gm.user_id\n                where ga.user_id = $1\n                order by gm.user_id\n            )\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "name?",
+        "type_info": "Bytea"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "8d3679d186c7283d7a53ff921ae081f66cca034135558a9f894ac2875d265290"
+}

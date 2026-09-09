@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "insert into groups (\n                    id, path, name, description,\n                    limit_membership_visibility, logo_id\n                ) values ($1, $2, $3, $4, $5, $6)",
+  "query": "insert into groups (\n                    id, path, name, description,\n                    limit_membership_visibility, propogate_member_visibility_access, logo_id\n                ) values ($1, $2, $3, $4, $5, $6, $7)",
   "describe": {
     "columns": [],
     "parameters": {
@@ -15,10 +15,11 @@
         "Jsonb",
         "Jsonb",
         "Bool",
+        "Bool",
         "Uuid"
       ]
     },
     "nullable": []
   },
-  "hash": "a9b4d6ce135aa187ef0f3ec8a04f34e12925519ce253d7ebe552731fd803135e"
+  "hash": "10cb5cadf39f71e19288d6c09b2c9853f4b97026ecd33bb6e3d1fe4528c27ca5"
 }

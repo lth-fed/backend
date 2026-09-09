@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select\n                groups.id, groups.path,\n                groups.limit_membership_visibility,\n                groups.name as \"name!: DIS\",\n                groups.description as \"description!: DIS\",\n                groups.deleted,\n                logo.id as logo_id,\n                logo.url as logo_url\n            from activity_host_invites\n            inner join groups on groups.id = activity_host_invites.group_id\n            inner join images logo on logo.id = groups.logo_id\n            where activity_host_invites.activity_id = $1\n            order by groups.path",
+  "query": "select\n                groups.id, groups.path,\n                groups.limit_membership_visibility,\n                groups.propogate_member_visibility_access as \"propagate_member_visibility_access!\",\n                groups.name as \"name!: DIS\",\n                groups.description as \"description!: DIS\",\n                groups.deleted,\n                logo.id as logo_id,\n                logo.url as logo_url\n            from groups_ask_to_join\n            inner join groups on groups.id = groups_ask_to_join.joiner_id\n            inner join images logo on logo.id = groups.logo_id\n            where groups_ask_to_join.target_id = $1\n            order by groups.path",
   "describe": {
     "columns": [
       {
@@ -25,26 +25,31 @@
       },
       {
         "ordinal": 3,
+        "name": "propagate_member_visibility_access!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 4,
         "name": "name!: DIS",
         "type_info": "Jsonb"
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "description!: DIS",
         "type_info": "Jsonb"
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "deleted",
         "type_info": "Bool"
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "logo_id",
         "type_info": "Uuid"
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "logo_url",
         "type_info": "Text"
       }
@@ -62,8 +67,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "40110364ca57387a2509203c52513fc6017696fce005366ac9c6450d70ecc474"
+  "hash": "9e984ea70587191bef5017b1728b7207e12d5178fbf78fbfa51b6d98b3c9f669"
 }
