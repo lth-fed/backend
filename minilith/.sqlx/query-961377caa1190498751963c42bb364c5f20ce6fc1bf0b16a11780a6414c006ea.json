@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "with roots as (\n                select member_root.id, member_root.path\n                from group_adminships\n                join groups ag on ag.id = group_id\n                join groups member_root\n                    on member_root.path @> ag.path\n                    and member_root.propogate_member_visibility_access = true\n                left outer join groups root_parent\n                    on root_parent.path = member_root.parent_path\n                where user_id = $1\n                and (\n                    root_parent.id is null\n                    or root_parent.propogate_member_visibility_access = false\n                )\n            )\n            select distinct membership.user_id, users.name as \"name?\"\n            from roots\n            join groups child on child.path <@ roots.path\n            join group_memberships membership\n                on membership.group_id = child.id\n            left join users on users.id = membership.user_id\n            order by membership.user_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "name?",
+        "type_info": "Bytea"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "961377caa1190498751963c42bb364c5f20ce6fc1bf0b16a11780a6414c006ea"
+}

@@ -80,6 +80,11 @@ visible_activity_ids as (
 )
 
 select a.id,
+    array(
+        select host.group_id
+        from activity_hosts host
+        where host.activity_id = a.id
+    ) as "host_ids!: Vec<Uuid>",
     a.title as "title!: DIS",
     a.description as "description!: DIS",
     a.location as "location!: Location",

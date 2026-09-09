@@ -91,6 +91,8 @@ pub struct Activity {
 #[derive(Object)]
 struct BriefActivity {
     id: Uuid,
+    /// Includes the creator and every additional host.
+    host_ids: Vec<Uuid>,
     creator_name: InternationalizedString,
     creator_path: String,
     title: InternationalizedString,
@@ -172,6 +174,7 @@ impl Router {
         )
         .map(|activity| BriefActivity {
             id: activity.id,
+            host_ids: activity.host_ids,
             creator_path: activity.creator_path.to_string(),
             creator_name: activity.creator_name.0,
             title: activity.title.0,
