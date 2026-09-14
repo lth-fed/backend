@@ -29,6 +29,10 @@ pub(super) struct ValidateRequest {
     created_at: OffsetDateTime,
 }
 #[derive(Object)]
+pub(super) struct GetAllBuyersRequest {
+    validate_activity: Uuid,
+}
+#[derive(Object)]
 pub(super) struct Validation {
     at: OffsetDateTime,
 }
@@ -41,6 +45,17 @@ pub(super) struct ValidateResponse {
     has_been_transfered: bool,
     purchaser_name: Option<String>,
     previous_verifications: Vec<Validation>,
+    purchased_addons: Vec<PurchasedAddon>,
+}
+
+#[derive(Object)]
+pub(super) struct GetAllBuyersResponse {
+    purchased_ticket_id: Uuid,
+    ticket_kind_name: IS,
+    owner_id: Option<String>,
+    owner_name: Option<String>,
+    has_been_transferred: bool,
+    purchaser_name: Option<String>,
     purchased_addons: Vec<PurchasedAddon>,
 }
 impl ValidateResponse {
@@ -212,4 +227,135 @@ pub(super) async fn validate(
         previous_verifications,
         purchased_addons,
     })
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "linear validation and response mapping"
+)]
+pub(super) async fn get_all_buyers(
+    ctx: &ContextWrapper,
+    auth: User,
+    body: GetAllBuyersRequest,
+) -> MinilithResult<Vec<GetAllBuyersResponse>> {
+    let purchased_tickets_stub = sqlx::query!(
+        "select owner_id, purchaser_id, owner.name as oname, purchaser.name as pname,
+            ticket_kind_id, kind.name as \"ticket_kind_name: DIS\", purchased_tickets.id as purchased_ticket_id
+            from purchased_tickets
+            inner join ticket_kinds kind on kind.id = purchased_tickets.ticket_kind_id
+            inner join activity_verifiers on activity_verifiers.activity_id = kind.activity_id
+            inner join users owner on owner.id = owner_id
+            inner join users purchaser on purchaser.id = purchaser_id
+            where kind.activity_id = $1
+                and activity_verifiers.user_id = $2",
+        body.validate_activity,
+        auth.get_id()
+    )
+    .fetch_all(&ctx.db).await?;
+    let available_options: HashMap<Uuid, Vec<AddonOption>> = sqlx::query!(
+        "select opt.id, opt.idx, opt.name as \"name!: DIS\", opt.price,
+            bookkeeping_prices as \"bp!: Vec<i64>\", bookkeeping_price_categories,
+            add.id as add_id
+            from ticket_kinds kind
+            inner join ticket_addons add on add.ticket_kind_id = kind.id
+            inner join ticket_addon_options opt on opt.ticket_addon_id = add.id
+            where activity_id = $1",
+        body.validate_activity
+    )
+    .map(|row| {
+        (
+            row.add_id,
+            AddonOption {
+                id: row.id,
+                idx: row.idx,
+                name: row.name.0,
+                price: row.price.0,
+                bookkeeping_prices: row.bp,
+                bookkeeping_price_categories: row.bookkeeping_price_categories,
+            },
+        )
+    })
+    .fetch_all(&ctx.db)
+    .await?
+    .into_iter()
+    .fold(HashMap::new(), |mut map, (addon_id, option)| {
+        map.entry(addon_id).or_default().push(option);
+        map
+    });
+    let mut purchased_addons = sqlx::query!(
+        r#"
+        select
+            purchased_ticket_addons.ticket_id as "ticket_id!",
+            ticket_addons.id as "addon_id!",
+            ticket_addons.name as "addon_name: DIS",
+            ticket_addons.multiple_alternatives,
+            ticket_addons.has_text_field,
+            ticket_addons.required,
+            purchased_ticket_addons.selected_options,
+            purchased_ticket_addons.selected_text
+        from purchased_ticket_addons
+        inner join ticket_addons
+            on ticket_addons.id = purchased_ticket_addons.addon_id
+        where purchased_ticket_addons.ticket_id = any($1)
+        order by
+            ticket_addons.idx
+        "#,
+        &purchased_tickets_stub
+            .iter()
+            .map(|row| row.purchased_ticket_id)
+            .collect::<Vec<_>>(),
+    )
+    .map(|row| {
+        (
+            row.ticket_id,
+            PurchasedAddon {
+                inner: Addon {
+                    id: row.addon_id,
+                    name: row.addon_name.0,
+                    multiple_alternatives: row.multiple_alternatives,
+                    has_text_field: row.has_text_field,
+                    required: row.required,
+                },
+                selected_options: row.selected_options,
+                selected_text: row.selected_text,
+                options: available_options
+                    .get(&row.addon_id)
+                    .cloned()
+                    .unwrap_or_default(),
+            },
+        )
+    })
+    .fetch_all(&ctx.db)
+    .await?
+    .into_iter()
+    .fold(
+        HashMap::<Uuid, Vec<PurchasedAddon>>::new(),
+        |mut map, row| {
+            map.entry(row.0).or_default().push(row.1);
+            map
+        },
+    );
+    Ok(purchased_tickets_stub
+        .into_iter()
+        .map(|row| -> MinilithResult<GetAllBuyersResponse> {
+            let has_been_transferred = row.owner_id != row.purchaser_id;
+            Ok(GetAllBuyersResponse {
+                purchased_ticket_id: row.purchased_ticket_id,
+                ticket_kind_name: row.ticket_kind_name.0,
+                owner_id: Some(row.owner_id),
+                owner_name: Some(
+                    ctx.decrypt_string(row.oname)
+                        .wrap_err_encryption("validate name")?,
+                ),
+                has_been_transferred: has_been_transferred,
+                purchaser_name: Some(
+                    ctx.decrypt_string(row.pname)
+                        .wrap_err_encryption("validate purchaser name")?,
+                ),
+                purchased_addons: purchased_addons
+                    .remove(&row.purchased_ticket_id)
+                    .unwrap_or_default(),
+            })
+        })
+        .collect::<MinilithResult<Vec<GetAllBuyersResponse>>>()?)
 }
