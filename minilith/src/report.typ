@@ -46,7 +46,7 @@
 #if sv [Aktivitet] else [Activity]: #data.activity_name \
 #if sv [Skapare av aktiviteten] else [Activity creator]: #data.creator_name
 #if data.exported_at != none [
-  #if sv [Bokföringsdatum] else [Date of bookkeeping]: #data.customer_id
+  #if sv [Bokföringsdatum] else [Date of bookkeeping]: #data.exported_at
 ]
 
 #let total_sales = data.per_object.map(obj => obj.price * obj.number).sum(default: 0)
