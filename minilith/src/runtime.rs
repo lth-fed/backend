@@ -199,7 +199,7 @@ async fn check_next_accounting_report(ctx: &ContextWrapper) -> MinilithResult<bo
     let activity_id = sqlx::query_scalar!(
         r#"select id from activities
         where bookkept = false
-        and time_end < now() - interval '1 day'
+        and time_end < now() - '3 days'::interval
         order by time_end, id
         limit 1
         for update skip locked"#,
@@ -220,20 +220,24 @@ async fn check_next_accounting_report(ctx: &ContextWrapper) -> MinilithResult<bo
         true,
     )
     .await?;
-    let safe_name = escape_email_html(&generated.activity_name);
-    email_client
-        .send_html_with_pdf(
-            "Teknologappen",
-            [accountant],
-            &format!("Försäljningsrapport – {}", generated.activity_name),
-            format!(
-                "<p>Här kommer den automatiska försäljningsrapporten för <strong>{safe_name}</strong>. Kvittokopior ligger sist i den bifogade PDF-filen.</p>"
-            ),
-            format!("forsaljningsrapport-{activity_id}.pdf"),
-            generated.pdf,
-        )
-        .await
-        .wrap_err_internal("failed to email automatic accounting report")?;
+    if generated.total_sales != 0 {
+        let safe_name = escape_email_html(&generated.activity_name);
+        email_client
+            .send_html_with_pdf(
+                "Teknologappen",
+                [accountant],
+                &format!("Försäljningsrapport – {}", generated.activity_name),
+                format!(
+                    "<p>Här kommer den automatiska försäljningsrapporten för \
+                    <strong>{safe_name}</strong>. Kvittokopior ligger sist i \
+                    den bifogade PDF-filen.</p>"
+                ),
+                format!("forsaljningsrapport-{activity_id}.pdf"),
+                generated.pdf,
+            )
+            .await
+            .wrap_err_internal("failed to email automatic accounting report")?;
+    }
 
     sqlx::query!(
         "update activities set bookkept = true where id = $1 and bookkept = false",

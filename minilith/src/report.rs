@@ -69,6 +69,7 @@ pub struct Data {
     pub per_object: Vec<Object>,
     pub per_alcohol_category: Vec<AlcoholCategory>,
     pub receipt_count: usize,
+    pub exported_at: Option<String>,
     #[serde(skip)]
     pub receipts: Vec<bytes::Bytes>,
 }
@@ -226,6 +227,7 @@ mod tests {
             per_object: Vec::new(),
             per_alcohol_category: Vec::new(),
             receipt_count: 0,
+            exported_at: None,
             receipts: Vec::new(),
         }
     }

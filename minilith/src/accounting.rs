@@ -24,6 +24,7 @@ struct PurchasedAddon {
 
 pub(crate) struct GeneratedReport {
     pub activity_name: String,
+    pub total_sales: i64,
     pub pdf: Vec<u8>,
 }
 
@@ -261,6 +262,9 @@ pub(crate) async fn generate_activity_report(
             }
         }
     }
+    let total_sales = per_object
+        .iter()
+        .fold(0, |acc, object| acc + object.1.0 * object.1.1);
     for (category, total) in external_sales {
         per_object
             .entry((report::Kind::External, String::new()))
@@ -297,8 +301,18 @@ pub(crate) async fn generate_activity_report(
             .map(|(name, amount)| report::AlcoholCategory { name, amount })
             .collect(),
         receipt_count: receipts.len(),
+        exported_at: append_receipts.then(|| {
+            time::OffsetDateTime::now_utc()
+                .time()
+                .format(&time::format_description::well_known::Iso8601::DATE)
+                .unwrap_or_default()
+        }),
         receipts,
     };
     let pdf = report::compile(ctx.report_typst(), &data)?;
-    Ok(GeneratedReport { activity_name, pdf })
+    Ok(GeneratedReport {
+        activity_name,
+        total_sales,
+        pdf,
+    })
 }
