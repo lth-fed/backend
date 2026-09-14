@@ -31,6 +31,10 @@ async fn check_unpaid_transactions(ctx: &ContextWrapper) -> MinilithResult<()> {
     .fetch_all(&ctx.db)
     .await?;
 
+    if unpaid_transactions.is_empty() {
+        return Ok(());
+    }
+
     let resp = match ctx
         .transactions_post("/v0/info")
         .json(&transactions::InfoRequest {
