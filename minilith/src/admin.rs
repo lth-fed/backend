@@ -289,8 +289,8 @@ async fn sync_ticket_pre_release_notification(
             notification_id,
             release.sender.to_json_value(),
             serde_json::json!({
-                "sv": "Biljetterna släpps snart!",
-                "en": "The tickets are released soon!",
+                "sv": "biljetterna släpps snart!",
+                "en": "tickets are released soon!",
             }),
             serde_json::json!({
                 "sv": "Gå in i appen och ställ dig i kö för att få plats.",
