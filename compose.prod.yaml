@@ -1,5 +1,21 @@
 name: fed-production
 
+# We want to scale up the number of runtime tasks & possibly binaries too (probably not needed!).
+#
+# Can scale down to 0 if:
+# - reservations length is 0
+# - unpaid for transactions is 0
+# - no web traffic
+# - not close to any ticket kind purchasing_start
+# - not close to 17:00 on monday afternoons
+#
+# In general: check runtimes. If nothing happens in runtime or web traffic, we're good.
+#
+# to scale down to 0 on fly.io:
+# - stop the binaries (&all containers? how?) when no traffic comes
+# - auto_start_machines = true
+# - have a second machine which starts the first on purchasing_start & 17:00 on mondays
+
 include:
   - compose.base.yaml
 
