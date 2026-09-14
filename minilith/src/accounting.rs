@@ -303,7 +303,7 @@ pub(crate) async fn generate_activity_report(
         receipt_count: receipts.len(),
         exported_at: append_receipts.then(|| {
             time::OffsetDateTime::now_utc()
-                .time()
+                .date()
                 .format(&time::format_description::well_known::Iso8601::DATE)
                 .unwrap_or_default()
         }),
