@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select id from activities\n        where bookkept = false\n        and time_end < now() - '3 days'::interval\n        order by time_end, id\n        limit 1\n        for update skip locked",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "ba0940b29adb26733901a0a1e6769246582d2c3fd45306b5296a5eb1dd361c52"
+}
