@@ -7,7 +7,9 @@ use poem_openapi::{
 use uuid::Uuid;
 
 use super::transfer::TransferRequest;
-use super::validation::{ValidateActivity, ValidateRequest, ValidateResponse};
+use super::validation::{
+    GetAllBuyersRequest, GetAllBuyersResponse, ValidateActivity, ValidateRequest, ValidateResponse,
+};
 use super::{
     Router, catalog,
     models::{
@@ -154,6 +156,17 @@ impl Router {
         body: Json<ValidateRequest>,
     ) -> MinilithResult<Json<ValidateResponse>> {
         validation::validate(self, auth, body.0).await.map(Json)
+    }
+
+    #[oai(path = "/validate/get_all_buyers", method = "post")]
+    async fn get_all_buyers(
+        &self,
+        auth: User,
+        body: Json<GetAllBuyersRequest>,
+    ) -> MinilithResult<Json<Vec<GetAllBuyersResponse>>> {
+        validation::get_all_buyers(self, auth, body.0)
+            .await
+            .map(Json)
     }
 
     /// `/v0/tickets/callback`
