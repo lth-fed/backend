@@ -131,7 +131,8 @@ pub(super) async fn validate(
             bookkeeping_prices as \"bp!: Vec<i64>\", bookkeeping_price_categories,
             add.id as add_id
             from ticket_kinds kind
-            inner join ticket_addons add on add.ticket_kind_id = kind.id 
+            inner join ticket_kind_addons links on links.ticket_kind_id = kind.id
+            inner join ticket_addons add on add.id = links.addon_id
             inner join ticket_addon_options opt on opt.ticket_addon_id = add.id
             where kind.id = $1",
         row.ticket_kind_id

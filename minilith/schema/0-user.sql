@@ -12,3 +12,9 @@ create table users (
     inactive_since timestamptz
     -- constraint no_name_when_deleted check ((not is_active) and name = null or is_active and name != null)
 );
+
+create table admin_personal_accounts (
+    admin_id text primary key references users(id) on delete cascade check (admin_id like 'email:%'),
+    user_id text not null references users(id) on delete cascade
+);
+create index admin_personal_accounts_user on admin_personal_accounts(user_id);

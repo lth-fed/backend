@@ -242,7 +242,14 @@ async fn reservation_queue_promotion_moves_child_and_flow(db: sqlx::PgPool) {
         .unwrap();
 
     let mut txn = db.begin().await.unwrap();
-    give_reservations(ticket_kind, 1, &mut txn).await.unwrap();
+    let promoted = give_reservations(ticket_kind, 1, &mut txn).await.unwrap();
+    assert_eq!(promoted, ["test:purchase-flow-1"]);
+    assert!(
+        give_reservations(ticket_kind, 1, &mut txn)
+            .await
+            .unwrap()
+            .is_empty()
+    );
     txn.commit().await.unwrap();
 
     let state = sqlx::query!(

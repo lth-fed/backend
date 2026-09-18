@@ -12,6 +12,7 @@ use poem_openapi::OpenApiService;
 mod accounting;
 pub mod activities;
 pub mod admin;
+mod admin_addons;
 mod api;
 pub mod context;
 pub mod group;

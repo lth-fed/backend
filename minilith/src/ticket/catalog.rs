@@ -27,7 +27,7 @@ pub(crate) async fn load_ticket_kind_unchecked(
         "select
             name as \"name!: DIS\", activity_id, price,
             purchasing_available_start, purchasing_available_stop,
-            max_tickets, min_tickets, reserved_or_purchased_tickets,
+            max_tickets, for_visibility, min_tickets, reserved_or_purchased_tickets,
             allow_transfer_ticket_start, allow_transfer_ticket_stop,
             has_been_purchased,
             has_been_released
@@ -44,6 +44,7 @@ pub(crate) async fn load_ticket_kind_unchecked(
         purchasing_available_start: row.purchasing_available_start,
         purchasing_available_stop: row.purchasing_available_stop,
         max_tickets: row.max_tickets,
+        for_visibility: row.for_visibility,
         min_tickets: row.min_tickets,
         reserved_or_purchased_tickets: row.reserved_or_purchased_tickets,
         allow_transfer_ticket_start: row.allow_transfer_ticket_start,
@@ -74,16 +75,33 @@ pub(crate) async fn load_ticket_kind_unchecked(
     .fetch_all(&ctx.db)
     .await?;
 
+    ticket_kind.available_addons = load_addons(
+        &mut ctx.db.begin().await?,
+        ticket_kind.activity_id(),
+        Some(id),
+    )
+    .await?;
+
+    Ok(ticket_kind)
+}
+
+pub(crate) async fn load_addons(
+    db: &mut bin_common::Transaction<'_>,
+    activity_id: Uuid,
+    ticket_kind_id: Option<Uuid>,
+) -> MinilithResult<Vec<AvailableAddon>> {
     let options: HashMap<Uuid, Vec<AddonOption>> = sqlx::query!(
-        "select ticket_addon_options.id, ticket_addon_id, ticket_addon_options.idx,
+        "select distinct ticket_addon_options.id, ticket_addon_id, ticket_addon_options.idx,
         ticket_addon_options.name as \"name: DIS\", price,
         -- wait wtf this Vec<i64> syntax actually works??
         bookkeeping_prices as \"bkp: Vec<i64>\", bookkeeping_price_categories
         from ticket_addon_options
         inner join ticket_addons on (ticket_addons.id = ticket_addon_options.ticket_addon_id)
-        where ticket_kind_id = $1
+        left join ticket_kind_addons links on links.addon_id = ticket_addons.id
+        where ticket_addons.activity_id = $1 and ($2::uuid is null or links.ticket_kind_id = $2)
         order by ticket_addon_options.idx",
-        id
+        activity_id,
+        ticket_kind_id
     )
     .map(|row| {
         (
@@ -98,20 +116,21 @@ pub(crate) async fn load_ticket_kind_unchecked(
             },
         )
     })
-    .fetch_all(&ctx.db)
+    .fetch_all(&mut db.executor())
     .await?
     .into_iter()
     .fold(HashMap::new(), |mut map, (addon_id, option)| {
         map.entry(addon_id).or_default().push(option);
         map
     });
-    ticket_kind.available_addons = sqlx::query!(
+    let addons = sqlx::query!(
         "select id, name as \"name: DIS\",
         multiple_alternatives, has_text_field, required
         from ticket_addons
-        where ticket_kind_id = $1
+        where activity_id = $1 and ($2::uuid is null or id in (select addon_id from ticket_kind_addons where ticket_kind_id = $2))
         order by ticket_addons.idx",
-        id
+        activity_id,
+        ticket_kind_id
     )
     .map(|row| AvailableAddon {
         inner: Addon {
@@ -123,10 +142,10 @@ pub(crate) async fn load_ticket_kind_unchecked(
         },
         options: options.get(&row.id).cloned().unwrap_or_default(),
     })
-    .fetch_all(&ctx.db)
+    .fetch_all(&mut db.executor())
     .await?;
 
-    Ok(ticket_kind)
+    Ok(addons)
 }
 
 /// Loads a ticket kind after verifying that the user may view its activity.
@@ -150,12 +169,13 @@ pub(super) async fn my_tickets(
     let id = user.get_id();
 
     let available_options: HashMap<Uuid, Vec<AddonOption>> = sqlx::query!(
-        "select opt.id, opt.idx, opt.name as \"name!: DIS\", opt.price,
+        "select distinct opt.id, opt.idx, opt.name as \"name!: DIS\", opt.price,
         bookkeeping_prices as \"bp!: Vec<i64>\", bookkeeping_price_categories,
         add.id as add_id
         from purchased_tickets
         inner join ticket_kinds kind on purchased_tickets.ticket_kind_id = kind.id
-        inner join ticket_addons add on add.ticket_kind_id = kind.id 
+        inner join ticket_kind_addons links on links.ticket_kind_id = kind.id
+        inner join ticket_addons add on add.id = links.addon_id
         inner join ticket_addon_options opt on opt.ticket_addon_id = add.id
         where purchased_tickets.owner_id = $1 or purchased_tickets.purchaser_id = $1",
         user.get_id()

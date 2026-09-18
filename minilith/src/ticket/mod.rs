@@ -23,6 +23,7 @@ mod api;
 mod catalog;
 mod flow;
 mod models;
+mod notifications;
 mod purchase;
 mod queue;
 mod release;
@@ -50,7 +51,7 @@ impl Deref for Router {
     }
 }
 
-pub(crate) use catalog::load_ticket_kind_unchecked;
+pub(crate) use catalog::{load_addons, load_ticket_kind_unchecked};
 pub(crate) use purchase::callback;
 pub(crate) use release::check_all_tickets;
 

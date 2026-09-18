@@ -5,6 +5,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::Deref;
 
+use crate::admin_addons::save_addon;
+
 use fed_auth_verifier::User;
 use minilith_errors::{MinilithEndpointError, MinilithErrorResultExt as _, escape_email_html};
 use poem_openapi::payload::{Binary, Json, Response};
@@ -58,6 +60,28 @@ async fn replace_ticket_kind_transfer_groups(
     )
     .execute(&mut txn.executor())
     .await?;
+    Ok(())
+}
+
+async fn sync_default_transfer_groups(
+    txn: &mut bin_common::Transaction<'_>,
+    activity_id: Uuid,
+) -> MinilithResult<()> {
+    sqlx::query!(
+        "delete from ticket_kind_transfer_groups transfer using ticket_kinds kind
+        where transfer.ticket_kind_id = kind.id and kind.activity_id = $1
+        and kind.min_tickets = 0 and not kind.for_visibility",
+        activity_id
+    )
+    .execute(&mut txn.executor())
+    .await?;
+    sqlx::query!("insert into ticket_kind_transfer_groups (ticket_kind_id, group_id)
+        select distinct recipient.id, allowed.group_id
+        from ticket_kinds recipient
+        join ticket_kinds buyer on buyer.activity_id = recipient.activity_id and not buyer.for_visibility
+        join ticket_kind_allowed_groups allowed on allowed.ticket_kind_id = buyer.id
+        where recipient.activity_id = $1 and recipient.min_tickets = 0 and not recipient.for_visibility", activity_id)
+        .execute(&mut txn.executor()).await?;
     Ok(())
 }
 
@@ -134,13 +158,15 @@ struct PutTicketKind {
     purchasing_available_start: OffsetDateTime,
     purchasing_available_stop: OffsetDateTime,
     max_tickets: i32,
+    #[oai(default)]
+    for_visibility: bool,
     min_tickets: i32,
     allow_transfer_ticket_start: OffsetDateTime,
     allow_transfer_ticket_stop: OffsetDateTime,
     /// Recipients may belong to any selected group or one of its descendants.
     transfer_group_ids: Vec<Uuid>,
     allowed_group_ids: Vec<Uuid>,
-    addons: Vec<AvailableAddon>,
+    addon_ids: Vec<Uuid>,
 }
 
 #[derive(Debug, Object)]
@@ -251,7 +277,7 @@ async fn sync_ticket_pre_release_notification(
         from activities
         left join ticket_kinds
             on ticket_kinds.activity_id = activities.id
-            and ticket_kinds.max_tickets > 0
+            and not ticket_kinds.for_visibility
             and ticket_kinds.purchasing_available_start > now()
         where activities.id = $1
         group by activities.id, activities.title"#,
@@ -262,7 +288,7 @@ async fn sync_ticket_pre_release_notification(
     let Some(released_at) = release.released_at else {
         return Ok(());
     };
-    let send_at: OffsetDateTime = released_at - time::Duration::MINUTE * 15;
+    let send_at: OffsetDateTime = released_at - time::Duration::MINUTE * 14;
 
     let existing = sqlx::query_scalar!(
         r#"select notification_id from activity_buyers_notifications
@@ -813,6 +839,134 @@ fn is_allowed_image_extension(extension: &str) -> bool {
 
 #[OpenApi(prefix_path = "/admin")]
 impl Router {
+    /// Links the caller's email admin identity to an existing personal account.
+    /// Unprefixed IDs use `lund-university:`. This grants activity viewing only,
+    /// never purchasing rights or administrative mutation permissions.
+    #[oai(path = "/personal-account", method = "put")]
+    async fn set_personal_account(
+        &self,
+        user: User,
+        Json(account): Json<String>,
+    ) -> MinilithResult<()> {
+        group::admin::check_has_any_adminship(&self.db, user.get_id()).await?;
+        if !user.get_id().starts_with("email:") || account.trim().is_empty() {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "expected an email admin and a personal account ID",
+                "",
+            ));
+        }
+        let account = account.trim();
+        let saved = sqlx::query!(
+            "insert into admin_personal_accounts (admin_id, user_id)
+            select $1, id from users where id = $2
+            on conflict (admin_id) do update set user_id = excluded.user_id",
+            user.get_id(),
+            account,
+        )
+        .execute(&self.db)
+        .await?;
+        if saved.rows_affected() == 0 {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "personal account does not exist",
+                "",
+            ));
+        }
+        Ok(())
+    }
+
+    #[oai(path = "/personal-account", method = "get")]
+    async fn personal_account(&self, user: User) -> MinilithResult<Json<Option<String>>> {
+        Ok(Json(
+            sqlx::query_scalar!(
+                "select user_id from admin_personal_accounts where admin_id = $1",
+                user.get_id()
+            )
+            .fetch_optional(&self.db)
+            .await?,
+        ))
+    }
+
+    #[oai(path = "/personal-account", method = "delete")]
+    async fn unlink_personal_account(&self, user: User) -> MinilithResult<()> {
+        sqlx::query!(
+            "delete from admin_personal_accounts where admin_id = $1",
+            user.get_id()
+        )
+        .execute(&self.db)
+        .await?;
+        Ok(())
+    }
+
+    /// Lists all activity add-ons, including those not assigned to a ticket kind.
+    #[oai(path = "/activities/:activity_id/addons", method = "get")]
+    async fn activity_addons(
+        &self,
+        user: User,
+        Path(activity_id): Path<Uuid>,
+    ) -> MinilithResult<Json<Vec<AvailableAddon>>> {
+        check_activity_adminship(&self.db, user.get_id(), activity_id).await?;
+        Ok(Json(
+            ticket::load_addons(&mut self.db.begin().await?, activity_id, None).await?,
+        ))
+    }
+
+    /// Creates or edits an activity add-on. Changes affect every ticket kind
+    /// referencing it. Once purchased, only option bookkeeping may change.
+    #[oai(path = "/activities/:activity_id/addons", method = "put")]
+    async fn put_activity_addon(
+        &self,
+        user: User,
+        Path(activity_id): Path<Uuid>,
+        Json(addon): Json<AvailableAddon>,
+    ) -> MinilithResult<()> {
+        check_activity_adminship(&self.db, user.get_id(), activity_id).await?;
+        let mut txn = self.db.begin().await?;
+        lock_activity(&mut txn, activity_id).await?;
+        save_addon(&mut txn, activity_id, &addon).await?;
+        txn.commit().await?;
+        Ok(())
+    }
+
+    /// Deletes an add-on only when it is not assigned to any ticket kind.
+    #[oai(path = "/activities/:activity_id/addons/:addon_id", method = "delete")]
+    async fn delete_activity_addon(
+        &self,
+        user: User,
+        Path(activity_id): Path<Uuid>,
+        Path(addon_id): Path<Uuid>,
+    ) -> MinilithResult<()> {
+        check_activity_adminship(&self.db, user.get_id(), activity_id).await?;
+        let mut txn = self.db.begin().await?;
+        lock_activity(&mut txn, activity_id).await?;
+        let editable = sqlx::query_scalar!(
+            r#"select exists (
+            select 1 from ticket_addons where id = $1 and activity_id = $2
+            and not exists (select 1 from ticket_kind_addons links where links.addon_id = $1)
+        ) as "editable!""#,
+            addon_id,
+            activity_id
+        )
+        .fetch_one(&mut txn.executor())
+        .await?;
+        if !editable {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "addon missing or assigned to a ticket kind",
+                "unassign it from every ticket kind before deleting",
+            ));
+        }
+        sqlx::query!(
+            "delete from ticket_addon_options where ticket_addon_id = $1",
+            addon_id
+        )
+        .execute(&mut txn.executor())
+        .await?;
+        sqlx::query!("delete from ticket_addons where id = $1", addon_id)
+            .execute(&mut txn.executor())
+            .await?;
+        txn.commit().await?;
+        Ok(())
+    }
+
     /// Creates or fully replaces an activity. A new activity must name a group
     /// directly administered by the caller as its creator and initially has no
     /// additional hosts. The creator is immutable. An existing additional host
@@ -1083,6 +1237,11 @@ impl Router {
             ));
         }
 
+        sqlx::query!("delete from ticket_addon_options where ticket_addon_id in (select id from ticket_addons where activity_id = $1)", id)
+            .execute(&mut txn.executor()).await?;
+        sqlx::query!("delete from ticket_addons where activity_id = $1", id)
+            .execute(&mut txn.executor())
+            .await?;
         sqlx::query!("delete from activities where id = $1", id)
             .execute(&mut txn.executor())
             .await?;
@@ -1437,8 +1596,7 @@ impl Router {
         let names = sqlx::query!(
             r#"select distinct addons.name as "name!: DIS"
             from ticket_addons addons
-            inner join ticket_kinds kinds on kinds.id = addons.ticket_kind_id
-            inner join activity_hosts hosts on hosts.activity_id = kinds.activity_id
+            inner join activity_hosts hosts on hosts.activity_id = addons.activity_id
             inner join group_adminships admins on admins.group_id = hosts.group_id
             where admins.user_id = $1
             order by addons.name"#,
@@ -1450,9 +1608,10 @@ impl Router {
         Ok(Json(names))
     }
 
-    /// Creates or fully replaces an unpurchased ticket kind, including its
-    /// allowlist, addons, and options. After the first purchase, only the
-    /// purchasing window and option bookkeeping may change.
+    /// Creates or replaces a ticket kind, linking existing activity add-ons by ID.
+    /// Purchased kinds retain their price, buyer groups and add-on assignments.
+    /// Buyer-group changes reset ordinary kinds' transfer groups to the activity's
+    /// buyer union; allocated kinds retain their transfer groups.
     #[oai(path = "/ticket-kinds/:id", method = "put")]
     #[allow(
         clippy::too_many_lines,
@@ -1476,6 +1635,8 @@ impl Router {
         }
         check_activity_adminship(&self.db, user.get_id(), body.activity_id).await?;
 
+        body.addon_ids.sort_unstable();
+        body.addon_ids.dedup();
         body.allowed_group_ids.sort_unstable();
         body.allowed_group_ids.dedup();
         body.transfer_group_ids.sort_unstable();
@@ -1485,6 +1646,14 @@ impl Router {
         } else {
             None
         };
+
+        let audience_changed = existing.as_ref().is_none_or(|kind| {
+            kind.allowed_group_ids != body.allowed_group_ids
+                || kind.for_visibility != body.for_visibility
+        });
+        if existing.is_none() && body.min_tickets > 0 {
+            body.transfer_group_ids.clone_from(&body.allowed_group_ids);
+        }
 
         let already_reserved = existing
             .as_ref()
@@ -1526,7 +1695,7 @@ impl Router {
                 body.activity_id,
                 body.price,
                 &body.allowed_group_ids,
-                &body.addons,
+                &body.addon_ids,
             );
             if !immutable_fields_match {
                 return Err(MinilithEndpointError::bad_frontend_code(
@@ -1545,7 +1714,8 @@ impl Router {
                     max_tickets = $5,
                     min_tickets = $6,
                     allow_transfer_ticket_start = $7,
-                    allow_transfer_ticket_stop = $8
+                    allow_transfer_ticket_stop = $8,
+                    for_visibility = $9
                 where id = $1"#,
                 id,
                 body.purchasing_available_start,
@@ -1555,46 +1725,11 @@ impl Router {
                 body.min_tickets,
                 body.allow_transfer_ticket_start,
                 body.allow_transfer_ticket_stop,
+                body.for_visibility,
             )
             .execute(&mut txn.executor())
             .await?;
             replace_ticket_kind_transfer_groups(&mut txn, id, &body.transfer_group_ids).await?;
-            for addon in &body.addons {
-                for option in &addon.options {
-                    let prices: Vec<PgMoney> = option
-                        .bookkeeping_prices
-                        .iter()
-                        .copied()
-                        .map(PgMoney)
-                        .collect();
-                    sqlx::query!(
-                        r#"update ticket_addon_options set
-                            bookkeeping_prices = $2,
-                            bookkeeping_price_categories = $3
-                        where id = $1 and ticket_addon_id = $4"#,
-                        option.id,
-                        &prices,
-                        &option.bookkeeping_price_categories,
-                        addon.inner.id,
-                    )
-                    .execute(&mut txn.executor())
-                    .await
-                    .map_err(|err| {
-                        if let Some(dberr) = err.as_database_error()
-                            && dberr.message().contains("bookkeeping_prices_add_up")
-                        {
-                            MinilithEndpointError::bad_user_input(
-                                "bookkeeping_prices_add_up failed",
-                                err,
-                                "bookkeeping doesn't add upp",
-                                "bookkeeping_prices",
-                            )
-                        } else {
-                            err.into()
-                        }
-                    })?;
-                }
-            }
             sync_ticket_pre_release_notification(&mut txn, body.activity_id, false).await?;
             txn.commit().await?;
             return Ok(());
@@ -1631,9 +1766,9 @@ impl Router {
                 purchasing_available_start, purchasing_available_stop,
                 max_tickets, min_tickets, reserved_or_purchased_tickets,
                 allow_transfer_ticket_start, allow_transfer_ticket_stop,
-                has_been_purchased, has_been_released
+                has_been_purchased, has_been_released, for_visibility
             ) values (
-                $1, $2, $3, $4, $5, $6, $7, $8, 0, $9, $10, false, false
+                $1, $2, $3, $4, $5, $6, $7, $8, 0, $9, $10, false, false, $11
             )
             on conflict (id) do update set
                 name = excluded.name,
@@ -1643,7 +1778,8 @@ impl Router {
                 max_tickets = excluded.max_tickets,
                 min_tickets = excluded.min_tickets,
                 allow_transfer_ticket_start = excluded.allow_transfer_ticket_start,
-                allow_transfer_ticket_stop = excluded.allow_transfer_ticket_stop"#,
+                allow_transfer_ticket_stop = excluded.allow_transfer_ticket_stop,
+                for_visibility = excluded.for_visibility"#,
             id,
             body.activity_id,
             body.name.to_json_value(),
@@ -1654,6 +1790,7 @@ impl Router {
             body.min_tickets,
             body.allow_transfer_ticket_start,
             body.allow_transfer_ticket_stop,
+            body.for_visibility,
         )
         .execute(&mut txn.executor())
         .await?;
@@ -1678,95 +1815,23 @@ impl Router {
         .execute(&mut txn.executor())
         .await?;
 
-        // ========
-        // Options for addons
-        // ========
         sqlx::query!(
-            r#"delete from ticket_addon_options
-            where ticket_addon_id in (
-                select id from ticket_addons where ticket_kind_id = $1
-            )"#,
-            id,
+            "delete from ticket_kind_addons where ticket_kind_id = $1",
+            id
         )
-        // ========
-        // Addons
-        // ========
         .execute(&mut txn.executor())
         .await?;
-        sqlx::query!("delete from ticket_addons where ticket_kind_id = $1", id)
-            .execute(&mut txn.executor())
-            .await?;
-
-        for (addon_idx, addon) in body.addons.iter().enumerate() {
-            #[allow(
-                clippy::cast_possible_wrap,
-                clippy::cast_possible_truncation,
-                reason = "we won't have more than i32::MAX addons!"
-            )]
-            let addon_idx = addon_idx as i32;
-            sqlx::query!(
-                r#"insert into ticket_addons (
-                    id, ticket_kind_id, idx, name,
-                    multiple_alternatives, has_text_field, required
-                ) values ($1, $2, $3, $4, $5, $6, $7)"#,
-                addon.inner.id,
-                id,
-                addon_idx,
-                addon.inner.name.to_json_value(),
-                addon.inner.multiple_alternatives,
-                addon.inner.has_text_field,
-                addon.inner.required,
-            )
-            .execute(&mut txn.executor())
-            .await?;
-            for (option_idx, option) in addon.options.iter().enumerate() {
-                #[allow(
-                    clippy::cast_possible_wrap,
-                    clippy::cast_possible_truncation,
-                    reason = "we won't have more than i32::MAX options for an addon, i really hope"
-                )]
-                let option_idx = option_idx as i32;
-                let prices: Vec<PgMoney> = option
-                    .bookkeeping_prices
-                    .iter()
-                    .copied()
-                    .map(PgMoney)
-                    .collect();
-                sqlx::query!(
-                    r#"insert into ticket_addon_options (
-                        id, ticket_addon_id, idx, name, price,
-                        bookkeeping_prices, bookkeeping_price_categories
-                    ) values ($1, $2, $3, $4, $5, $6, $7)"#,
-                    option.id,
-                    addon.inner.id,
-                    option_idx,
-                    option.name.to_json_value(),
-                    PgMoney(option.price),
-                    &prices,
-                    &option.bookkeeping_price_categories,
-                )
-                .execute(&mut txn.executor())
-                .await
-                .map_err(|err| {
-                    if let Some(dberr) = err.as_database_error()
-                        && dberr.message().contains("bookkeeping_prices_add_up")
-                    {
-                        MinilithEndpointError::bad_user_input(
-                            "bookkeeping_prices_add_up failed",
-                            err,
-                            "bookkeeping doesn't add upp",
-                            "bookkeeping_prices",
-                        )
-                    } else {
-                        err.into()
-                    }
-                })?;
-            }
+        for addon_id in &body.addon_ids {
+            sqlx::query!("insert into ticket_kind_addons (ticket_kind_id, addon_id) values ($1, $2)",
+                id, addon_id).execute(&mut txn.executor()).await?;
+        }
+        if audience_changed {
+            sync_default_transfer_groups(&mut txn, body.activity_id).await?;
         }
         sync_ticket_pre_release_notification(
             &mut txn,
             body.activity_id,
-            existing_id.is_none() && body.max_tickets > 0,
+            existing_id.is_none() && !body.for_visibility,
         )
         .await?;
         txn.commit().await?;
@@ -1786,7 +1851,7 @@ impl Router {
                 activity_id,
                 purchasing_available_start,
                 has_been_released,
-                max_tickets,
+                for_visibility,
                 exists (
                     select 1 from purchased_tickets where ticket_kind_id = $1
                 ) as "has_buyers!"
@@ -1804,13 +1869,13 @@ impl Router {
                 "",
             ));
         }
-        if ticket.max_tickets != 0 && ticket.has_been_released {
+        if !ticket.for_visibility && ticket.has_been_released {
             return Err(MinilithEndpointError::bad_frontend_code(
                 "cannot delete a ticket kind that has been released",
                 "",
             ));
         }
-        if ticket.max_tickets != 0
+        if !ticket.for_visibility
             && ticket.purchasing_available_start
                 <= OffsetDateTime::now_utc() + time::Duration::minutes(20)
         {
@@ -1821,18 +1886,6 @@ impl Router {
         }
 
         sqlx::query!(
-            r#"delete from ticket_addon_options
-            where ticket_addon_id in (
-                select id from ticket_addons where ticket_kind_id = $1
-            )"#,
-            id,
-        )
-        .execute(&mut txn.executor())
-        .await?;
-        sqlx::query!("delete from ticket_addons where ticket_kind_id = $1", id)
-            .execute(&mut txn.executor())
-            .await?;
-        sqlx::query!(
             "delete from ticket_kind_allowed_groups where ticket_kind_id = $1",
             id,
         )
@@ -1841,6 +1894,7 @@ impl Router {
         sqlx::query!("delete from ticket_kinds where id = $1", id)
             .execute(&mut txn.executor())
             .await?;
+        sync_default_transfer_groups(&mut txn, ticket.activity_id).await?;
         sync_ticket_pre_release_notification(&mut txn, ticket.activity_id, false).await?;
         txn.commit().await?;
         Ok(())
@@ -2972,6 +3026,103 @@ impl Router {
 mod tests {
     use super::*;
     use sqlx::PgPool;
+
+    #[sqlx::test(fixtures("ticket_capacity"))]
+    async fn shared_addons_keep_assignments_and_lock_after_purchase(db: PgPool) {
+        let db = bin_common::PgPool::from(db);
+        let mut txn = db.begin().await.unwrap();
+        let activity = Uuid::from_u128(3);
+        let mut addon = AvailableAddon {
+            inner: ticket::Addon {
+                id: Uuid::from_u128(10),
+                name: InternationalizedString::empty(),
+                multiple_alternatives: false,
+                has_text_field: true,
+                required: false,
+            },
+            options: vec![],
+        };
+        save_addon(&mut txn, activity, &addon).await.unwrap();
+        sqlx::query!(
+            "insert into ticket_kind_addons (ticket_kind_id, addon_id)
+            values (id, $1)",
+            addon.inner.id,
+        )
+        .execute(&mut txn.executor())
+        .await
+        .unwrap();
+        addon.inner.required = true;
+        save_addon(&mut txn, activity, &addon).await.unwrap();
+        let assigned = sqlx::query_scalar!(
+            "select count(*) from ticket_kind_addons where addon_id = $1",
+            addon.inner.id
+        )
+        .fetch_one(&mut txn.executor())
+        .await
+        .unwrap();
+        assert_eq!(assigned, Some(2));
+        assert_eq!(
+            ticket::load_addons(&mut txn, activity, None)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        sqlx::query!(
+            "update ticket_kinds set has_been_purchased = true where id = $1",
+            Uuid::from_u128(4)
+        )
+        .execute(&mut txn.executor())
+        .await
+        .unwrap();
+        save_addon(&mut txn, activity, &addon).await.unwrap();
+        addon.inner.required = false;
+        assert!(save_addon(&mut txn, activity, &addon).await.is_err());
+        txn.commit().await.unwrap();
+        assert!(
+            sqlx::query!("delete from ticket_addons where id = $1", addon.inner.id)
+                .execute(&db)
+                .await
+                .is_err()
+        );
+    }
+
+    #[sqlx::test(fixtures("ticket_capacity"))]
+    async fn transfer_defaults_preserve_allocated_groups_and_windows(db: PgPool) {
+        let db = bin_common::PgPool::from(db);
+        let mut txn = db.begin().await.unwrap();
+        let activity = Uuid::from_u128(3);
+        sqlx::query!(
+            "update ticket_kinds set min_tickets = 1 where id = $1",
+            Uuid::from_u128(5)
+        )
+        .execute(&mut txn.executor())
+        .await
+        .unwrap();
+        sqlx::query!(
+            "insert into ticket_kind_allowed_groups (ticket_kind_id, group_id) values ($1, $2)",
+            Uuid::from_u128(5),
+            Uuid::from_u128(2)
+        )
+        .execute(&mut txn.executor())
+        .await
+        .unwrap();
+        sync_default_transfer_groups(&mut txn, activity)
+            .await
+            .unwrap();
+        let recipients =
+            sqlx::query!("select ticket_kind_id, group_id from ticket_kind_transfer_groups")
+                .fetch_all(&mut txn.executor())
+                .await
+                .unwrap();
+        assert_eq!(recipients.len(), 1);
+        let recipient = recipients.first().unwrap();
+        assert_eq!(recipient.ticket_kind_id, Uuid::from_u128(4));
+        assert_eq!(recipient.group_id, Uuid::from_u128(2));
+        let unchanged_windows = sqlx::query_scalar!("select bool_and(allow_transfer_ticket_start = purchasing_available_start) from ticket_kinds where activity_id = $1", activity)
+            .fetch_one(&mut txn.executor()).await.unwrap();
+        assert_eq!(unchanged_windows, Some(true));
+    }
 
     fn id(suffix: u128) -> Uuid {
         Uuid::from_u128(0x1000_0000_0000_0000_0000_0000_0000_0000 + suffix)

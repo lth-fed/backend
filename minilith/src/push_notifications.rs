@@ -331,6 +331,8 @@ pub(crate) async fn send_notifications(
         let title = notification.title.resolve_intl(&language, "");
         let title = if sender.is_empty() {
             title.to_owned()
+        } else if title.trim().is_empty() {
+            sender.to_owned()
         } else {
             format!("{sender}: {title}")
         };

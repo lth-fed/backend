@@ -444,7 +444,8 @@ impl Context {
                         on group_adminships.group_id = admin_group.id
                     inner join activities on activities.id = activity_hosts.activity_id
                     where activity_hosts.activity_id = $2
-                    and group_adminships.user_id = $1
+                    and (group_adminships.user_id = $1 or group_adminships.user_id in
+                        (select admin_id from admin_personal_accounts where user_id = $1))
                     and (activities.is_hidden_for_other_admins = false
                         or activity_hosts.group_id = admin_group.id)
                 )
@@ -457,7 +458,8 @@ impl Context {
                     inner join group_adminships
                         on group_adminships.group_id = admin_group.id
                     where activity_hosts.activity_id = $2
-                    and group_adminships.user_id = $1
+                    and (group_adminships.user_id = $1 or group_adminships.user_id in
+                        (select admin_id from admin_personal_accounts where user_id = $1))
                 )
             ) as "exists!""#,
             user,

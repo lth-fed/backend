@@ -12,6 +12,7 @@ create table ticket_kinds (
     purchasing_available_start timestamptz not null,
     purchasing_available_stop timestamptz not null,
     max_tickets integer not null default 2147483647 check (max_tickets >= 0),
+    for_visibility boolean not null default false check (not for_visibility or max_tickets = 0),
     min_tickets integer not null check (min_tickets >= 0), -- default MAX_INT
     check (
         (min_tickets = 0 and max_tickets = 0)
@@ -46,7 +47,7 @@ create table ticket_kind_transfer_groups (
 -- matpref val: options ["vego", "vegan", "nötter"], has_text_field = true, required=false, multiple_alternatives=true
 create table ticket_addons (
     id uuid primary key,
-    ticket_kind_id uuid not null references ticket_kinds(id),
+    activity_id uuid not null references activities(id),
     -- for sorting
     idx integer not null,
     name jsonb not null,
@@ -55,6 +56,11 @@ create table ticket_addons (
     multiple_alternatives boolean not null,
     has_text_field boolean not null,
     required boolean not null
+);
+create table ticket_kind_addons (
+    ticket_kind_id uuid not null references ticket_kinds(id) on delete cascade,
+    addon_id uuid not null references ticket_addons(id) on delete cascade,
+    primary key (ticket_kind_id, addon_id)
 );
 -- this is basically an array
 create table ticket_addon_options (

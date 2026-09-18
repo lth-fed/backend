@@ -98,7 +98,7 @@ with eligible_users as (
         on allowed_group.path @> member_group.path
     inner join group_memberships
         on group_memberships.group_id = member_group.id
-    where kind.max_tickets > 0
+    where not kind.for_visibility
         and (
             member_group.limit_membership_visibility = false
             or member_group.id = allowed_group.id

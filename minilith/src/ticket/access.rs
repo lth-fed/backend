@@ -34,6 +34,7 @@ pub(super) async fn ensure_user_may_purchase_ticket(
 
                 where group_memberships.user_id = $2
                 and activities.time_end > now()
+                and not ticket_kinds.for_visibility
                 and (
                     member_group.limit_membership_visibility = false
                     or tk_ag.group_id = group_memberships.group_id

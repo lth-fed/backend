@@ -50,7 +50,8 @@ with visible_activities as (
     inner join activity_hosts host on (host.group_id = allowed_to_view.host_group_id)
     inner join activities a on a.id = host.activity_id
     where
-        group_adminships.user_id = $1
+        (group_adminships.user_id = $1 or group_adminships.user_id in
+            (select admin_id from admin_personal_accounts where user_id = $1))
         and (
             a.is_hidden_for_other_admins = false
             or host.group_id = admin_group.id
@@ -69,7 +70,8 @@ with visible_activities as (
         or admin_group.path <@ subgroup.path)
     inner join activity_hosts host on (host.group_id = subgroup.id)
     where
-        group_adminships.user_id = $1
+        (group_adminships.user_id = $1 or group_adminships.user_id in
+            (select admin_id from admin_personal_accounts where user_id = $1))
 ),
 -- this is here so that if the query gets a result from an admin and non-admin pathway, we always
 -- get the admin_access = true
@@ -101,7 +103,7 @@ select a.id,
         inner join groups ug on ag.path @> ug.path
         inner join group_memberships m on m.group_id = ug.id
         where tk.activity_id = a.id
-        and tk.max_tickets > 0
+        and not tk.for_visibility
         and m.user_id = $1
         and purchasing_available_stop > now()
         and tk.reserved_or_purchased_tickets < tk.max_tickets

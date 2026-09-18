@@ -13,6 +13,7 @@ use super::{
         wait_for_user_purchase_flow,
     },
     models::{PurchaseStatus, QueueRequest, QueueResponse},
+    notifications::{TicketNotification, notify_ticket_users},
 };
 use crate::{ContextWrapper, MinilithEndpointError, MinilithResult};
 
@@ -34,11 +35,16 @@ pub(super) async fn queue(
             let (mut txn, ticket_kind_to_fill) = flow.cancel(ctx, user.get_id(), txn).await?;
             unlist_user_purchase_flow(&mut txn, user.get_id()).await?;
 
-            if let Some(ticket_kind) = ticket_kind_to_fill {
-                drop(give_reservations(ticket_kind, 1, &mut txn).await);
-            }
+            let promoted = if let Some(ticket_kind) = ticket_kind_to_fill {
+                give_reservations(ticket_kind, 1, &mut txn).await?
+            } else {
+                Vec::new()
+            };
 
             txn.commit().await?;
+            if let Some(ticket_kind) = ticket_kind_to_fill {
+                notify_ticket_users(ctx, ticket_kind, promoted, TicketNotification::Reservation);
+            }
             return Err(MinilithEndpointError::bad_frontend_code(
                 "your current flow is cancelled, press the button again to place in this queue",
                 "",
@@ -228,9 +234,14 @@ pub(super) async fn drop_transaction_flow(ctx: &ContextWrapper, user: User) -> M
     let (mut txn, ticket_kind_to_fill) = flow.cancel(ctx, user.get_id(), txn).await?;
     unlist_user_purchase_flow(&mut txn, user.get_id()).await?;
 
-    if let Some(ticket_kind) = ticket_kind_to_fill {
-        drop(give_reservations(ticket_kind, 1, &mut txn).await);
-    }
+    let promoted = if let Some(ticket_kind) = ticket_kind_to_fill {
+        give_reservations(ticket_kind, 1, &mut txn).await?
+    } else {
+        Vec::new()
+    };
     txn.commit().await?;
+    if let Some(ticket_kind) = ticket_kind_to_fill {
+        notify_ticket_users(ctx, ticket_kind, promoted, TicketNotification::Reservation);
+    }
     Ok(())
 }

@@ -416,9 +416,7 @@ pub(crate) async fn callback(
                 }
                 txn.commit().await?;
                 if row.has_timed_out {
-                    drop(
-                        give_reservations_in_new_transaction(&ctx.db, row.ticket_kind_id, 1).await,
-                    );
+                    drop(give_reservations_in_new_transaction(ctx, row.ticket_kind_id, 1).await);
                 }
             }
         }
@@ -587,7 +585,8 @@ async fn validate_addons(
         name as \"name!: DIS\"
         from unnest($1::uuid[]) as t(id) 
         inner join ticket_addons on ticket_addons.id = t.id
-            and ticket_kind_id = $2
+        inner join ticket_kind_addons links on links.addon_id = t.id
+            and links.ticket_kind_id = $2
         order by t.id",
         &addon_ids,
         ticket_kind

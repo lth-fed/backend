@@ -8,8 +8,9 @@ use uuid::Uuid;
 use super::{
     ensure_affected_rows,
     flow::{unlist_user_purchase_flow, unlist_users_purchase_flow},
+    notifications::{TicketNotification, notify_ticket_users},
 };
-use crate::MinilithResult;
+use crate::{ContextWrapper, MinilithResult};
 
 /// # Panics
 ///
@@ -159,6 +160,7 @@ pub(super) async fn remove_reservation(db: &PgPool) -> MinilithResult<ControlFlo
 /// If there are reservation spots left, a person from the `reservation_queue` will get a reservation.
 ///
 /// Also handles the case where there's a stray in the reservation queue.
+/// Returns promoted users for push delivery after the caller commits.
 ///
 /// # Errors
 ///
@@ -167,7 +169,7 @@ pub(super) async fn give_reservations(
     ticket_kind: Uuid,
     fetch_n: i32,
     db: &mut Transaction<'_>,
-) -> MinilithResult<()> {
+) -> MinilithResult<Vec<String>> {
     let mut new_reservations = sqlx::query_scalar!(
         "select flow.user_id
         from users_in_purchase_flow flow
@@ -185,7 +187,7 @@ pub(super) async fn give_reservations(
     .fetch_all(&mut db.executor())
     .await?;
     if new_reservations.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
     #[allow(
         clippy::cast_possible_truncation,
@@ -197,7 +199,7 @@ pub(super) async fn give_reservations(
     #[allow(clippy::cast_sign_loss, reason = "removed will always be positive")]
     new_reservations.truncate(granted as usize);
     if new_reservations.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let timestamps: Vec<PgInterval> = std::iter::repeat_with(new_timeout_interval)
         .take(new_reservations.len())
@@ -249,17 +251,19 @@ pub(super) async fn give_reservations(
         affected.rows_affected(),
         new_reservations.len(),
         "failed to remove promoted reservation queuers",
-    )
+    )?;
+    Ok(new_reservations)
 }
 
 pub(super) async fn give_reservations_in_new_transaction(
-    db: &PgPool,
+    ctx: &ContextWrapper,
     ticket_kind: Uuid,
     fetch_n: i32,
 ) -> MinilithResult<()> {
-    let mut txn = db.begin().await?;
-    give_reservations(ticket_kind, fetch_n, &mut txn).await?;
+    let mut txn = ctx.db.begin().await?;
+    let promoted = give_reservations(ticket_kind, fetch_n, &mut txn).await?;
     txn.commit().await?;
+    notify_ticket_users(ctx, ticket_kind, promoted, TicketNotification::Reservation);
     Ok(())
 }
 /// Clear reservation queue when there are no more tickets.

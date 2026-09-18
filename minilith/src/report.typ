@@ -44,7 +44,7 @@
 = #if sv [Försäljningsrapport] else [Sales report]
 
 #if sv [Aktivitet] else [Activity]: #data.activity_name \
-#if sv [Skapare av aktiviteten] else [Activity creator]: #data.creator_name
+#if sv [Skapare av aktiviteten] else [Activity creator]: #data.creator_name \
 #if data.exported_at != none [
   #if sv [Bokföringsdatum] else [Date of bookkeeping]: #data.exported_at
 ]
@@ -109,7 +109,7 @@
   ..data
     .per_alcohol_category
     .map(obj => (
-      if obj.name == "null" [#if sv [Icke-alkohol] else [Non-alcohol]] else [#obj.name],
+      if obj.name == "null" [#if sv [Biljetter / annat] else [Tickets / other]] else [#obj.name],
       format_currency(obj.amount),
     ))
     .flatten(),

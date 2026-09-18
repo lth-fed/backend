@@ -140,6 +140,7 @@ pub struct Kind {
     pub purchasing_available_start: OffsetDateTime,
     pub purchasing_available_stop: OffsetDateTime,
     pub max_tickets: i32,
+    pub for_visibility: bool,
     pub min_tickets: i32,
     pub reserved_or_purchased_tickets: i32,
     pub allow_transfer_ticket_start: OffsetDateTime,
@@ -170,28 +171,36 @@ impl Kind {
         activity_id: Uuid,
         price: i64,
         allowed_group_ids: &[Uuid],
-        addons: &[AvailableAddon],
+        addon_ids: &[Uuid],
     ) -> bool {
         self.inner.activity_id == activity_id
             && self.price == price
             && self.allowed_group_ids == allowed_group_ids
-            && self.available_addons.len() == addons.len()
-            && self.available_addons.iter().zip(addons).all(|(old, new)| {
-                old.inner.id == new.inner.id
-                    && old.inner.name == new.inner.name
-                    && old.inner.multiple_alternatives == new.inner.multiple_alternatives
-                    && old.inner.has_text_field == new.inner.has_text_field
-                    && old.inner.required == new.inner.required
-                    && old.options.len() == new.options.len()
-                    && old
-                        .options
-                        .iter()
-                        .zip(&new.options)
-                        .all(|(old_option, new_option)| {
-                            old_option.id == new_option.id
-                                && old_option.name == new_option.name
-                                && old_option.price == new_option.price
-                        })
-            })
+            && self.available_addons.len() == addon_ids.len()
+            && self
+                .available_addons
+                .iter()
+                .all(|old| addon_ids.contains(&old.inner.id))
+    }
+}
+
+impl AvailableAddon {
+    pub(crate) fn immutable_fields_match(&self, new: &Self) -> bool {
+        let old = self;
+        old.inner.id == new.inner.id
+            && old.inner.name == new.inner.name
+            && old.inner.multiple_alternatives == new.inner.multiple_alternatives
+            && old.inner.has_text_field == new.inner.has_text_field
+            && old.inner.required == new.inner.required
+            && old.options.len() == new.options.len()
+            && old
+                .options
+                .iter()
+                .zip(&new.options)
+                .all(|(old_option, new_option)| {
+                    old_option.id == new_option.id
+                        && old_option.name == new_option.name
+                        && old_option.price == new_option.price
+                })
     }
 }

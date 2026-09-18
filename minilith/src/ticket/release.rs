@@ -8,11 +8,12 @@ use uuid::Uuid;
 
 use super::{
     allocation::{
-        give_reservations, new_timeout_interval, remove_queuers_when_sold_out, remove_reservation,
-        reserve_ticket_capacity,
+        give_reservations_in_new_transaction, new_timeout_interval, remove_queuers_when_sold_out,
+        remove_reservation, reserve_ticket_capacity,
     },
     ensure_affected_rows,
     flow::{PurchaseFlow, unlist_users_purchase_flow, wait_for_user_purchase_flow},
+    notifications::reservation_notification,
 };
 use crate::{
     ContextWrapper, InternationalizedString as IS, MinilithEndpointError, MinilithResult,
@@ -57,31 +58,7 @@ async fn send_release_notifications(
     reservation_devices: Vec<PushDeviceRow>,
     reservation_queue_devices: Vec<PushDeviceRow>,
 ) -> MinilithResult<()> {
-    let notification = NotificationRow {
-        id,
-        activity_id: Some(activity_id),
-        // people know where it's from since they just used the app
-        sender: sqlx::types::Json(IS::empty()),
-        title: IS(HashMap::from_iter([
-            ("sv".to_owned(), "Gå in och köp biljetten!".to_owned()),
-            (
-                "en".to_owned(),
-                "Open the app to buy your ticket!".to_owned(),
-            ),
-        ]))
-        .into(),
-        content: IS(HashMap::from_iter([(
-            "sv".to_owned(),
-            "Du fick en reservation. Köp biljetten snart, annars får någon annan din reservation."
-                .to_owned(),
-        ),
-            (
-                "en".to_owned(),
-                "You got a reservation. Buy the ticket soon, else someone else will get your reservation.".to_owned(),
-            ),
-        ]))
-        .into(),
-    };
+    let notification = reservation_notification(id, activity_id);
     // errors are logged & alerted when creating MinilithEndpointError
     let removed1 = send_notifications(ctx, &notification, reservation_devices).await;
     let notification = NotificationRow {
@@ -421,14 +398,12 @@ pub(crate) async fn check_all_tickets(ctx: &ContextWrapper) -> MinilithResult<()
     // node so we don't get as many "for update skip locked" in the start:)
     reservations.shuffle(&mut rng());
     for reservation in reservations {
-        let mut txn = ctx.db.begin().await?;
-        give_reservations(
+        give_reservations_in_new_transaction(
+            ctx,
             reservation.ticket_kind_id,
             reservation.available_tickets,
-            &mut txn,
         )
         .await?;
-        txn.commit().await?;
     }
 
     let mut txn = ctx.db.begin().await?;

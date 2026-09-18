@@ -8,6 +8,7 @@ use super::{
     access::ensure_user_may_receive_transferred_ticket,
     ensure_affected_rows,
     flow::{reserve_user_purchase_flow, unlist_user_purchase_flow},
+    notifications::{TicketNotification, notify_ticket_users},
 };
 use crate::{ContextWrapper, MinilithEndpointError, MinilithResult};
 
@@ -17,6 +18,10 @@ pub(super) struct TransferRequest {
     to_user: String,
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "keeps transfer validation, lock order, and post-commit notification together"
+)]
 pub(super) async fn transfer(
     ctx: &ContextWrapper,
     auth: User,
@@ -121,6 +126,13 @@ pub(super) async fn transfer(
     unlist_user_purchase_flow(&mut txn, &to_user).await?;
 
     txn.commit().await?;
+
+    notify_ticket_users(
+        ctx,
+        ticket_kind,
+        vec![to_user],
+        TicketNotification::Transfer,
+    );
 
     Ok(())
 }

@@ -237,7 +237,7 @@ impl Router {
                     inner join groups ug on ag.path @> ug.path
                     inner join group_memberships m on m.group_id = ug.id
                     where tk.activity_id = $1
-                    and max_tickets > 0
+                    and not for_visibility
                     and m.user_id = $2
                     order by purchasing_available_start
                     limit 1
@@ -246,7 +246,7 @@ impl Router {
                     select 1
                     from ticket_kinds tk
                     where tk.activity_id = $1
-                    and max_tickets > 0
+                    and not for_visibility
                 )) as "tickets_exist!"
             from activities
             inner join images on images.id = image_id
@@ -338,7 +338,7 @@ impl Router {
             where kind.activity_id = $1
             and (
                 (
-                    kind.max_tickets > 0
+                    not kind.for_visibility
                     and exists (
                         select 1
                         from group_memberships

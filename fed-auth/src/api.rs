@@ -331,7 +331,7 @@ impl MainRouter {
             full_name: None,
             email: None,
             lth_guild: None,
-            language: None
+            language: None,
         };
         self.validate_session(&body.code, &user).await?;
 
