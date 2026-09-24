@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "delete from ticket_addons where ticket_kind_id = $1",
+  "query": "delete from ticket_addons where activity_id = $1",
   "describe": {
     "columns": [],
     "parameters": {
@@ -10,5 +10,5 @@
     },
     "nullable": []
   },
-  "hash": "2900ffc894ccaa79c4dfd5a9c6d9539267e945b1aca300ccf0dc7c0d501efeb0"
+  "hash": "a5b9e909ba3e1ff0a17cdc80900b0c915b9159ea1df08d769d33967ed6251ac1"
 }

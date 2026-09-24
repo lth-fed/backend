@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select activity.id, activity.title as \"title!: crate::DbInternationalizedString\"\n        from ticket_kinds kind join activities activity on activity.id = kind.activity_id\n        where kind.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "title!: crate::DbInternationalizedString",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "1599f7a245e4c4a6d4776e7c262e0504b03c7cb31c414e420f331ffc6aeb734f"
+}

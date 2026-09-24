@@ -63,28 +63,6 @@ async fn replace_ticket_kind_transfer_groups(
     Ok(())
 }
 
-async fn sync_default_transfer_groups(
-    txn: &mut bin_common::Transaction<'_>,
-    activity_id: Uuid,
-) -> MinilithResult<()> {
-    sqlx::query!(
-        "delete from ticket_kind_transfer_groups transfer using ticket_kinds kind
-        where transfer.ticket_kind_id = kind.id and kind.activity_id = $1
-        and kind.min_tickets = 0 and not kind.for_visibility",
-        activity_id
-    )
-    .execute(&mut txn.executor())
-    .await?;
-    sqlx::query!("insert into ticket_kind_transfer_groups (ticket_kind_id, group_id)
-        select distinct recipient.id, allowed.group_id
-        from ticket_kinds recipient
-        join ticket_kinds buyer on buyer.activity_id = recipient.activity_id and not buyer.for_visibility
-        join ticket_kind_allowed_groups allowed on allowed.ticket_kind_id = buyer.id
-        where recipient.activity_id = $1 and recipient.min_tickets = 0 and not recipient.for_visibility", activity_id)
-        .execute(&mut txn.executor()).await?;
-    Ok(())
-}
-
 #[derive(Object, Debug)]
 pub struct ExternalSaleCategory {
     /// Use `"null"` for if it's not alcohol.
@@ -1610,8 +1588,7 @@ impl Router {
 
     /// Creates or replaces a ticket kind, linking existing activity add-ons by ID.
     /// Purchased kinds retain their price, buyer groups and add-on assignments.
-    /// Buyer-group changes reset ordinary kinds' transfer groups to the activity's
-    /// buyer union; allocated kinds retain their transfer groups.
+    /// Transfer groups are stored as supplied; the admin frontend manages defaults.
     #[oai(path = "/ticket-kinds/:id", method = "put")]
     #[allow(
         clippy::too_many_lines,
@@ -1646,14 +1623,6 @@ impl Router {
         } else {
             None
         };
-
-        let audience_changed = existing.as_ref().is_none_or(|kind| {
-            kind.allowed_group_ids != body.allowed_group_ids
-                || kind.for_visibility != body.for_visibility
-        });
-        if existing.is_none() && body.min_tickets > 0 {
-            body.transfer_group_ids.clone_from(&body.allowed_group_ids);
-        }
 
         let already_reserved = existing
             .as_ref()
@@ -1822,11 +1791,13 @@ impl Router {
         .execute(&mut txn.executor())
         .await?;
         for addon_id in &body.addon_ids {
-            sqlx::query!("insert into ticket_kind_addons (ticket_kind_id, addon_id) values ($1, $2)",
-                id, addon_id).execute(&mut txn.executor()).await?;
-        }
-        if audience_changed {
-            sync_default_transfer_groups(&mut txn, body.activity_id).await?;
+            sqlx::query!(
+                "insert into ticket_kind_addons (ticket_kind_id, addon_id) values ($1, $2)",
+                id,
+                addon_id
+            )
+            .execute(&mut txn.executor())
+            .await?;
         }
         sync_ticket_pre_release_notification(
             &mut txn,
@@ -1894,7 +1865,6 @@ impl Router {
         sqlx::query!("delete from ticket_kinds where id = $1", id)
             .execute(&mut txn.executor())
             .await?;
-        sync_default_transfer_groups(&mut txn, ticket.activity_id).await?;
         sync_ticket_pre_release_notification(&mut txn, ticket.activity_id, false).await?;
         txn.commit().await?;
         Ok(())
@@ -3026,103 +2996,6 @@ impl Router {
 mod tests {
     use super::*;
     use sqlx::PgPool;
-
-    #[sqlx::test(fixtures("ticket_capacity"))]
-    async fn shared_addons_keep_assignments_and_lock_after_purchase(db: PgPool) {
-        let db = bin_common::PgPool::from(db);
-        let mut txn = db.begin().await.unwrap();
-        let activity = Uuid::from_u128(3);
-        let mut addon = AvailableAddon {
-            inner: ticket::Addon {
-                id: Uuid::from_u128(10),
-                name: InternationalizedString::empty(),
-                multiple_alternatives: false,
-                has_text_field: true,
-                required: false,
-            },
-            options: vec![],
-        };
-        save_addon(&mut txn, activity, &addon).await.unwrap();
-        sqlx::query!(
-            "insert into ticket_kind_addons (ticket_kind_id, addon_id)
-            values (id, $1)",
-            addon.inner.id,
-        )
-        .execute(&mut txn.executor())
-        .await
-        .unwrap();
-        addon.inner.required = true;
-        save_addon(&mut txn, activity, &addon).await.unwrap();
-        let assigned = sqlx::query_scalar!(
-            "select count(*) from ticket_kind_addons where addon_id = $1",
-            addon.inner.id
-        )
-        .fetch_one(&mut txn.executor())
-        .await
-        .unwrap();
-        assert_eq!(assigned, Some(2));
-        assert_eq!(
-            ticket::load_addons(&mut txn, activity, None)
-                .await
-                .unwrap()
-                .len(),
-            1
-        );
-        sqlx::query!(
-            "update ticket_kinds set has_been_purchased = true where id = $1",
-            Uuid::from_u128(4)
-        )
-        .execute(&mut txn.executor())
-        .await
-        .unwrap();
-        save_addon(&mut txn, activity, &addon).await.unwrap();
-        addon.inner.required = false;
-        assert!(save_addon(&mut txn, activity, &addon).await.is_err());
-        txn.commit().await.unwrap();
-        assert!(
-            sqlx::query!("delete from ticket_addons where id = $1", addon.inner.id)
-                .execute(&db)
-                .await
-                .is_err()
-        );
-    }
-
-    #[sqlx::test(fixtures("ticket_capacity"))]
-    async fn transfer_defaults_preserve_allocated_groups_and_windows(db: PgPool) {
-        let db = bin_common::PgPool::from(db);
-        let mut txn = db.begin().await.unwrap();
-        let activity = Uuid::from_u128(3);
-        sqlx::query!(
-            "update ticket_kinds set min_tickets = 1 where id = $1",
-            Uuid::from_u128(5)
-        )
-        .execute(&mut txn.executor())
-        .await
-        .unwrap();
-        sqlx::query!(
-            "insert into ticket_kind_allowed_groups (ticket_kind_id, group_id) values ($1, $2)",
-            Uuid::from_u128(5),
-            Uuid::from_u128(2)
-        )
-        .execute(&mut txn.executor())
-        .await
-        .unwrap();
-        sync_default_transfer_groups(&mut txn, activity)
-            .await
-            .unwrap();
-        let recipients =
-            sqlx::query!("select ticket_kind_id, group_id from ticket_kind_transfer_groups")
-                .fetch_all(&mut txn.executor())
-                .await
-                .unwrap();
-        assert_eq!(recipients.len(), 1);
-        let recipient = recipients.first().unwrap();
-        assert_eq!(recipient.ticket_kind_id, Uuid::from_u128(4));
-        assert_eq!(recipient.group_id, Uuid::from_u128(2));
-        let unchanged_windows = sqlx::query_scalar!("select bool_and(allow_transfer_ticket_start = purchasing_available_start) from ticket_kinds where activity_id = $1", activity)
-            .fetch_one(&mut txn.executor()).await.unwrap();
-        assert_eq!(unchanged_windows, Some(true));
-    }
 
     fn id(suffix: u128) -> Uuid {
         Uuid::from_u128(0x1000_0000_0000_0000_0000_0000_0000_0000 + suffix)

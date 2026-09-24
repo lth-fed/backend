@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select exists (\n        select 1 from ticket_kind_addons links\n        join ticket_kinds kind on kind.id = links.ticket_kind_id\n        where links.addon_id = $1 and kind.has_been_purchased\n    ) as \"locked!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "locked!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "dda862534b386a9ff74f6ef3531cc67444b4174199274d85cb1890fbe838473b"
+}

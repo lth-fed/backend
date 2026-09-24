@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from ticket_addon_options where ticket_addon_id in (select id from ticket_addons where activity_id = $1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b2bfb0536faa888895ccd8d8d0436ca1a1089f0f0ab2652ee3e9e5f319affc0b"
+}

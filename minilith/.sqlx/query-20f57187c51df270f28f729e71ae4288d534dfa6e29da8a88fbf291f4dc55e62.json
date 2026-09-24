@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update ticket_addon_options set bookkeeping_prices = $2, bookkeeping_price_categories = $3 where id = $1 and ticket_addon_id = $4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "MoneyArray",
+        "TextArray",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "20f57187c51df270f28f729e71ae4288d534dfa6e29da8a88fbf291f4dc55e62"
+}

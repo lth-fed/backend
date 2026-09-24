@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select\n            name as \"name!: DIS\", activity_id, price,\n            purchasing_available_start, purchasing_available_stop,\n            max_tickets, min_tickets, reserved_or_purchased_tickets,\n            allow_transfer_ticket_start, allow_transfer_ticket_stop,\n            has_been_purchased,\n            has_been_released\n        from ticket_kinds where id = $1",
+  "query": "select\n            name as \"name!: DIS\", activity_id, price,\n            purchasing_available_start, purchasing_available_stop,\n            max_tickets, for_visibility, min_tickets, reserved_or_purchased_tickets,\n            allow_transfer_ticket_start, allow_transfer_ticket_stop,\n            has_been_purchased,\n            has_been_released\n        from ticket_kinds where id = $1",
   "describe": {
     "columns": [
       {
@@ -35,31 +35,36 @@
       },
       {
         "ordinal": 6,
+        "name": "for_visibility",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 7,
         "name": "min_tickets",
         "type_info": "Int4"
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "reserved_or_purchased_tickets",
         "type_info": "Int4"
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "allow_transfer_ticket_start",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "allow_transfer_ticket_stop",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "has_been_purchased",
         "type_info": "Bool"
       },
       {
-        "ordinal": 11,
+        "ordinal": 12,
         "name": "has_been_released",
         "type_info": "Bool"
       }
@@ -81,8 +86,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "d03f0590191be82fd5ba6e51f6d9f64cb8b25c970a505406d36ac1394f7230ae"
+  "hash": "cfce34c4755c2732f0e4e77325755be9a781ccf1b2860565e5ea729bda989340"
 }

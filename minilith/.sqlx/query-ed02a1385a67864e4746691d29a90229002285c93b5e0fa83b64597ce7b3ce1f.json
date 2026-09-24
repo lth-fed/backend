@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select id, name as \"name: DIS\",\n        multiple_alternatives, has_text_field, required\n        from ticket_addons\n        where ticket_kind_id = $1\n        order by ticket_addons.idx",
+  "query": "select id, name as \"name: DIS\",\n        multiple_alternatives, has_text_field, required\n        from ticket_addons\n        where activity_id = $1 and ($2::uuid is null or id in (select addon_id from ticket_kind_addons where ticket_kind_id = $2))\n        order by ticket_addons.idx",
   "describe": {
     "columns": [
       {
@@ -31,6 +31,7 @@
     ],
     "parameters": {
       "Left": [
+        "Uuid",
         "Uuid"
       ]
     },
@@ -42,5 +43,5 @@
       false
     ]
   },
-  "hash": "b3bda7c5d90dee5696f2e85f479cb06429193f8e0b5085fd24f6f0f70478bea2"
+  "hash": "ed02a1385a67864e4746691d29a90229002285c93b5e0fa83b64597ce7b3ce1f"
 }

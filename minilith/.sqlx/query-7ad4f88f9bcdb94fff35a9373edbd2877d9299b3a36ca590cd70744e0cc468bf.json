@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into admin_personal_accounts (admin_id, user_id)\n            select $1, id from users where id = $2\n            on conflict (admin_id) do update set user_id = excluded.user_id",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7ad4f88f9bcdb94fff35a9373edbd2877d9299b3a36ca590cd70744e0cc468bf"
+}

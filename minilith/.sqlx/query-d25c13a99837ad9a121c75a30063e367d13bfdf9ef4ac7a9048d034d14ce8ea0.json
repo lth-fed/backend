@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select\n                activity_id,\n                purchasing_available_start,\n                has_been_released,\n                max_tickets,\n                exists (\n                    select 1 from purchased_tickets where ticket_kind_id = $1\n                ) as \"has_buyers!\"\n            from ticket_kinds\n            where id = $1\n            for update",
+  "query": "select\n                activity_id,\n                purchasing_available_start,\n                has_been_released,\n                for_visibility,\n                exists (\n                    select 1 from purchased_tickets where ticket_kind_id = $1\n                ) as \"has_buyers!\"\n            from ticket_kinds\n            where id = $1\n            for update",
   "describe": {
     "columns": [
       {
@@ -20,8 +20,8 @@
       },
       {
         "ordinal": 3,
-        "name": "max_tickets",
-        "type_info": "Int4"
+        "name": "for_visibility",
+        "type_info": "Bool"
       },
       {
         "ordinal": 4,
@@ -42,5 +42,5 @@
       null
     ]
   },
-  "hash": "be864f434748e9ebd43da7d80f18a71dbb14e04cf91eb11d3ae260829681bb5d"
+  "hash": "d25c13a99837ad9a121c75a30063e367d13bfdf9ef4ac7a9048d034d14ce8ea0"
 }

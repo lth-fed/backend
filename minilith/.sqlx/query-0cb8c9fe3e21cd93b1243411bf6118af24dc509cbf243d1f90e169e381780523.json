@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select exists (\n            select 1 from ticket_addons where id = $1 and activity_id = $2\n            and not exists (select 1 from ticket_kind_addons links where links.addon_id = $1)\n        ) as \"editable!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "editable!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "0cb8c9fe3e21cd93b1243411bf6118af24dc509cbf243d1f90e169e381780523"
+}

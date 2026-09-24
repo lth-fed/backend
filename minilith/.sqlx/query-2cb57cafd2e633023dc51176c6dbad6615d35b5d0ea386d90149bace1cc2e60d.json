@@ -67,6 +67,11 @@
         "ordinal": 12,
         "name": "has_been_released",
         "type_info": "Bool"
+      },
+      {
+        "ordinal": 13,
+        "name": "for_visibility",
+        "type_info": "Bool"
       }
     ],
     "parameters": {
@@ -75,6 +80,7 @@
       ]
     },
     "nullable": [
+      false,
       false,
       false,
       false,
