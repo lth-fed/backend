@@ -3,7 +3,7 @@ use fed_auth_verifier::{User, callbacks::TransactionState};
 use minilith_errors::{
     AlertLevel, MinilithErrorOptionExt as _, MinilithErrorResultExt as _, alert,
 };
-use tracing::error;
+use tracing::{Instrument, error};
 use uuid::Uuid;
 
 use super::{
@@ -40,9 +40,11 @@ pub(super) async fn begin(
     // ========
     // Get UUID (first, so we don't hog a DB connection)
     // ========
+    let post_init_span = tracing::info_span!("transaction init id");
     let transaction_id: Uuid = ctx
         .transactions_post("/v0/init")
         .send()
+        .instrument(post_init_span)
         .await
         .wrap_err_internal("init transport failed")?
         .error_for_status()
