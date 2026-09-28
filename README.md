@@ -65,7 +65,7 @@ The deployment host needs this repository's `compose.yaml`, `compose.prod.yaml`,
 observability configuration, and the three service `.env` files. It does not
 need the Rust source or build tooling. It's however the easiest to just pull
 this repo (or run
-`rsync compose.prod.yaml compose.yaml grafana.yml loki-config.yaml otel-collector.yaml prometheus.yml tempo.yaml macapar@extrovert:/srv/teknologappen/backend/staging`
+`rsync compose.base.yaml compose.prod.yaml compose.yaml grafana.yml loki-config.yaml otel-collector.yaml prometheus.yml tempo.yaml macapar@extrovert:/srv/teknologappen/backend/staging`
 and then `sudo cp staging/* .` from the directory).
 
 Create an untracked `backend/.env`:

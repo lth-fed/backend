@@ -53,9 +53,13 @@ services:
       - fed-loki
   fed-prometheus:
     image: prom/prometheus:v3.13.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=60d
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus-data:/var/prometheus
+      - prometheus-data:/prometheus
     depends_on:
       - fed-collector
   fed-tempo:

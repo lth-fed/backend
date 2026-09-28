@@ -41,6 +41,8 @@ storage:
 
 overrides:
   defaults:
+    compaction:
+      block_retention: 1440h # 60 days
     metrics_generator:
       processors: ["span-metrics", "service-graphs", "service-graphs-connection-info"]
       generate_native_histograms: both
