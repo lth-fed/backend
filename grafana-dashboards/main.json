@@ -5,8 +5,8 @@
     "name": "adrtdhg",
     "namespace": "default",
     "uid": "333ac565-63a1-41e7-9d50-6bc8c7464be5",
-    "resourceVersion": "1788541394221007",
-    "generation": 12,
+    "resourceVersion": "1790349896593009",
+    "generation": 13,
     "creationTimestamp": "2026-07-28T21:07:58Z",
     "labels": {
       "grafana.app/deprecatedInternalID": "1548458260774912"
@@ -16,7 +16,7 @@
       "grafana.app/folder": "",
       "grafana.app/saved-from-ui": "Grafana v13.0.3 (3ca0684c7c)",
       "grafana.app/updatedBy": "user:afti9v3mbmjnkf",
-      "grafana.app/updatedTimestamp": "2026-09-04T17:03:14Z"
+      "grafana.app/updatedTimestamp": "2026-09-25T15:24:56Z"
     }
   },
   "spec": {
@@ -184,8 +184,8 @@
                         "name": "P1809F7CD0C75ACF3"
                       },
                       "spec": {
-                        "editorMode": "builder",
-                        "expr": "sum by(app_commit) (increase(default_teknologappen_client_requests_total[1h]))",
+                        "editorMode": "code",
+                        "expr": "sum by (app_commit) (\n  increase(default_teknologappen_client_requests_total[12h])\n)\n/\nscalar(\n  sum(\n    increase(default_teknologappen_client_requests_total[12h])\n  )\n)",
                         "legendFormat": "__auto",
                         "range": true
                       }
@@ -223,16 +223,13 @@
               },
               "fieldConfig": {
                 "defaults": {
+                  "unit": "percentunit",
                   "thresholds": {
                     "mode": "absolute",
                     "steps": [
                       {
                         "value": 0,
                         "color": "green"
-                      },
-                      {
-                        "value": 80,
-                        "color": "red"
                       }
                     ]
                   },
