@@ -412,8 +412,8 @@ async fn lock_group_for_adminship_change(
     Ok(())
 }
 
-fn email_from_admin_id(user_id: &str) -> &str {
-    user_id.strip_prefix("email:").unwrap_or(user_id)
+fn email_from_admin_id(user_id: &str) -> Option<&str> {
+    user_id.strip_prefix("email:")
 }
 
 async fn send_adminship_emails(
@@ -427,10 +427,17 @@ async fn send_adminship_emails(
         return Ok(());
     };
 
-    let actor = email_from_admin_id(actor_id);
-    let affected_user = email_from_admin_id(affected_user_id);
+    let Some(actor) = email_from_admin_id(actor_id) else {
+        return Ok(());
+    };
+    let Some(affected_user) = email_from_admin_id(affected_user_id) else {
+        return Ok(());
+    };
     let mut messages: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
     for recipient in recipients {
+        let Some(email) = email_from_admin_id(&recipient.user_id) else {
+            continue;
+        };
         let language = match recipient.language {
             Some(language) => context
                 .decrypt_string(language)
@@ -476,7 +483,7 @@ async fn send_adminship_emails(
         messages
             .entry((subject, html))
             .or_default()
-            .push(email_from_admin_id(&recipient.user_id).to_owned());
+            .push(email.to_owned());
     }
 
     for ((subject, html), recipients) in messages {

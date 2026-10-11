@@ -233,7 +233,7 @@ services:
       traefik.docker.network: traefik
       traefik.http.routers.memos-public.rule: Host(`memos.teknologappen.se`)
       traefik.http.routers.memos-public.entrypoints: ${TRAEFIK_ENTRYPOINT:-websecure}
-      traefik.http.routers.fed-s3-console.tls: "true"
-      traefik.http.routers.fed-s3-console.tls.certresolver: ${TRAEFIK_CERT_RESOLVER:-letsencrypt}
+      traefik.http.routers.memos-public.tls: "true"
+      traefik.http.routers.memos-public.tls.certresolver: ${TRAEFIK_CERT_RESOLVER:-letsencrypt}
       traefik.http.routers.memos-public.service: memos
       traefik.http.routers.memos-public.middlewares: https-redirect@file
