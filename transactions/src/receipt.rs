@@ -153,9 +153,6 @@ impl typst::World for OurWonderfulTypstWorld<'_> {
 pub fn compile(world: &OurWonderfulTypstWorldBase, data: &Data) -> MinilithResult<Vec<u8>> {
     let _span = info_span!("typst receipt compilation").entered();
 
-    let mut fonts = typst_kit::fonts::FontStore::default();
-    fonts.extend(typst_kit::fonts::embedded());
-
     let world = OurWonderfulTypstWorld {
         inner: world,
         now: typst_kit::datetime::Time::system(),
@@ -187,7 +184,7 @@ mod tests {
     use super::{Data, Language, OurWonderfulTypstWorldBase, compile};
 
     #[test]
-    fn compiles_bookkeeping_receipt_without_customer_name() {
+    fn compiles_receipt_without_customer_name() {
         let result = compile(
             &OurWonderfulTypstWorldBase::default(),
             &Data {
@@ -213,7 +210,7 @@ mod tests {
                 merchant_svg_icon: None,
             },
         );
-        assert!(result.is_ok(), "bookkeeping receipt should compile");
+        assert!(result.is_ok(), "receipt should compile");
         if let Ok(pdf) = result {
             assert!(pdf.starts_with(b"%PDF"), "receipt should be a PDF");
         }

@@ -3,7 +3,7 @@ use fed_auth_verifier::{User, callbacks::TransactionState};
 use minilith_errors::{
     AlertLevel, MinilithErrorOptionExt as _, MinilithErrorResultExt as _, alert,
 };
-use tracing::{Instrument, error};
+use tracing::{Instrument as _, error};
 use uuid::Uuid;
 
 use super::{

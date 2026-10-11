@@ -28,56 +28,6 @@ pub(crate) struct GeneratedReport {
     pub pdf: Vec<u8>,
 }
 
-async fn fetch_receipts(
-    ctx: &ContextWrapper,
-    activity_id: Uuid,
-) -> MinilithResult<Vec<bytes::Bytes>> {
-    let transactions = sqlx::query!(
-        r#"select distinct on (purchased_tickets.transaction_id)
-            purchased_tickets.transaction_id,
-            users.name,
-            users.language
-        from purchased_tickets
-        inner join ticket_kinds on ticket_kinds.id = purchased_tickets.ticket_kind_id
-        inner join users on users.id = purchased_tickets.purchaser_id
-        where ticket_kinds.activity_id = $1
-        order by purchased_tickets.transaction_id, purchased_tickets.id"#,
-        activity_id,
-    )
-    .fetch_all(&ctx.db)
-    .await?;
-
-    let mut receipts = Vec::with_capacity(transactions.len());
-    for transaction in transactions {
-        let language = ctx
-            .decrypt_string(transaction.language)
-            .wrap_err_encryption("accounting receipt user language")?;
-        let language = match language.split('-').next() {
-            Some("sv") => transactions::Language::Swedish,
-            _ => transactions::Language::English,
-        };
-        let customer_name = ctx
-            .decrypt_string(transaction.name)
-            .wrap_err_encryption("accounting receipt customer name")?;
-        let receipt = ctx
-            .transactions_post(format!("/v0/{}/receipt", transaction.transaction_id))
-            .json(&transactions::ReceiptRequest {
-                language,
-                customer_name,
-            })
-            .send()
-            .await
-            .wrap_err_internal("accounting: failed to fetch receipt")?
-            .error_for_status()
-            .wrap_err_internal("accounting: receipt returned non-2xx")?
-            .bytes()
-            .await
-            .wrap_err_internal("accounting: failed to read receipt")?;
-        receipts.push(receipt);
-    }
-    Ok(receipts)
-}
-
 #[allow(
     clippy::too_many_lines,
     reason = "the report calculation is linear and mirrors the bookkeeping document"
@@ -88,7 +38,7 @@ pub(crate) async fn generate_activity_report(
     language: report::Language,
     external_sales: Vec<(String, i64)>,
     external_sale_fees: i64,
-    append_receipts: bool,
+    bookkeeping_export: bool,
 ) -> MinilithResult<GeneratedReport> {
     let lang = match language {
         report::Language::Swedish => "sv",
@@ -225,10 +175,9 @@ pub(crate) async fn generate_activity_report(
             .get(&purchased_ticket.ticket_kind_id)
             .wrap_err_internal("accounting: purchased ticket kind is missing")?;
         let kind_name = kind.inner.ticket_kind_name.resolve_intl(lang, "");
-        per_object
-            .entry((report::Kind::Ticket, kind_name.to_owned()))
-            .or_insert((kind.price, 0))
-            .1 += 1;
+        *per_object
+            .entry((report::Kind::Ticket, kind_name.to_owned(), kind.price))
+            .or_insert(0) += 1;
         *per_alcohol_category.entry("null".to_owned()).or_insert(0) += kind.price;
 
         for addon in addons.get(&purchased_ticket.id).into_iter().flatten() {
@@ -248,10 +197,9 @@ pub(crate) async fn generate_activity_report(
                     addon_data.inner.name.resolve_intl(lang, ""),
                     option.name.resolve_intl(lang, "")
                 );
-                per_object
-                    .entry((report::Kind::Option, name))
-                    .or_insert((option.price, 0))
-                    .1 += 1;
+                *per_object
+                    .entry((report::Kind::Option, name, option.price))
+                    .or_insert(0) += 1;
                 for (category, price) in option
                     .bookkeeping_price_categories
                     .iter()
@@ -264,20 +212,14 @@ pub(crate) async fn generate_activity_report(
     }
     let total_sales = per_object
         .iter()
-        .fold(0, |acc, object| acc + object.1.0 * object.1.1);
+        .fold(0, |acc, ((_, _, price), number)| acc + price * number);
     for (category, total) in external_sales {
-        per_object
-            .entry((report::Kind::External, String::new()))
-            .or_insert((0, 1))
-            .0 += total;
+        *per_object
+            .entry((report::Kind::External, category.clone(), total))
+            .or_insert(0) += 1;
         *per_alcohol_category.entry(category).or_insert(0) += total;
     }
 
-    let receipts = if append_receipts {
-        fetch_receipts(ctx, activity_id).await?
-    } else {
-        Vec::new()
-    };
     let activity_name = activity.title.resolve_intl(lang, "<title>").to_owned();
     let data = report::Data {
         language,
@@ -289,7 +231,7 @@ pub(crate) async fn generate_activity_report(
         fees_external: external_sale_fees,
         per_object: per_object
             .into_iter()
-            .map(|((kind, name), (price, number))| report::Object {
+            .map(|((kind, name, price), number)| report::Object {
                 name,
                 kind,
                 price,
@@ -300,14 +242,12 @@ pub(crate) async fn generate_activity_report(
             .into_iter()
             .map(|(name, amount)| report::AlcoholCategory { name, amount })
             .collect(),
-        receipt_count: receipts.len(),
-        exported_at: append_receipts.then(|| {
+        exported_at: bookkeeping_export.then(|| {
             time::OffsetDateTime::now_utc()
                 .date()
                 .format(&time::format_description::well_known::Iso8601::DATE)
                 .unwrap_or_default()
         }),
-        receipts,
     };
     let pdf = report::compile(ctx.report_typst(), &data)?;
     Ok(GeneratedReport {

@@ -34,7 +34,7 @@
         [], ware.name.slice(4),
       )
     ] else { ware.name },
-    [#str((ware.tax - 1) * 100)%],
+    [#str(calc.round((ware.tax - 1) * 100, digits: 2))%],
     format_currency(ware.amount / ware.tax / 100),
     format_currency(ware.amount / 100),
   )

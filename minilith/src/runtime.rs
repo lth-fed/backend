@@ -233,8 +233,7 @@ async fn check_next_accounting_report(ctx: &ContextWrapper) -> MinilithResult<bo
                 &format!("Försäljningsrapport – {}", generated.activity_name),
                 format!(
                     "<p>Här kommer den automatiska försäljningsrapporten för \
-                    <strong>{safe_name}</strong>. Kvittokopior ligger sist i \
-                    den bifogade PDF-filen.</p>"
+                    <strong>{safe_name}</strong> i den bifogade PDF-filen.</p>"
                 ),
                 format!("forsaljningsrapport-{activity_id}.pdf"),
                 generated.pdf,

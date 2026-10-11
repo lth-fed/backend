@@ -277,6 +277,18 @@ async fn sync_ticket_pre_release_notification(
     .fetch_optional(&mut txn.executor())
     .await?;
     if let Some(notification_id) = existing {
+        if released_at < OffsetDateTime::now_utc() + time::Duration::hours(2) {
+            // A changed release must satisfy the same notice period as a new one.
+            // Unrelated edits near an unchanged release keep its existing reminder.
+            sqlx::query!(
+                "delete from notifications where id = $1 and sent = false and send_at != $2",
+                notification_id,
+                send_at,
+            )
+            .execute(&mut txn.executor())
+            .await?;
+            return Ok(());
+        }
         sqlx::query!(
             r#"update notifications set send_at = $2
             where id = $1 and sent = false"#,
@@ -285,7 +297,9 @@ async fn sync_ticket_pre_release_notification(
         )
         .execute(&mut txn.executor())
         .await?;
-    } else if create_if_missing {
+    } else if create_if_missing
+        && released_at >= OffsetDateTime::now_utc() + time::Duration::hours(2)
+    {
         let notification_id = Uuid::new_v4();
         sqlx::query!(
             r#"insert into notifications (id, sender, title, content, send_at)
@@ -385,9 +399,9 @@ pub(crate) async fn change_admin_email_recipients(
             or admin_group.path = target.parent_path
         inner join group_adminships
             on group_adminships.group_id = admin_group.id
-        -- don't alert admins which aren't on the app to avoid spam to them
-        inner join users on users.id = group_adminships.user_id
+        left join users on users.id = group_adminships.user_id
         where target.id = $1
+        and (users.id is not null or group_adminships.user_id = $3)
         and (
             group_adminships.user_id != $2
             or group_adminships.user_id = $3
@@ -1596,6 +1610,9 @@ impl Router {
     /// Creates or replaces a ticket kind, linking existing activity add-ons by ID.
     /// Purchased kinds retain their price, buyer groups and add-on assignments.
     /// Transfer groups are stored as supplied; the admin frontend manages defaults.
+    /// New kinds only auto-create a release notification when the activity's
+    /// next release is at least two hours away.
+    /// Moving that release inside two hours removes its pending automatic reminder.
     #[oai(path = "/ticket-kinds/:id", method = "put")]
     #[allow(
         clippy::too_many_lines,
@@ -2596,6 +2613,7 @@ impl Router {
     }
 
     /// Create an adminship for a user in a group.
+    /// The affected email identity receives the update even before its first login.
     ///
     /// The user performing this action must be a literal super-admin, meaning
     /// they must at least be an administrator of the parent group.

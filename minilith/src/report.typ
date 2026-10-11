@@ -67,7 +67,7 @@
   total, format_currency(total_sales - data.fees - data.fees_external),
 )
 
-== #if sv [Försäljning per objekt] else []
+== #if sv [Försäljning per objekt] else [Sales per item]
 
 #table(
   columns: (auto, auto, auto, auto, auto),
@@ -116,14 +116,3 @@
   table.hline(),
   total, format_currency(data.per_alcohol_category.map(obj => obj.amount).sum(default: 0)),
 )
-
-#for index in range(data.receipt_count) {
-  pagebreak()
-  image(
-    read("transaction-receipt-" + str(index) + ".pdf", encoding: none),
-    format: "pdf",
-    width: 100%,
-    height: 100%,
-    fit: "contain",
-  )
-}

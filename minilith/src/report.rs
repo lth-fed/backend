@@ -68,10 +68,7 @@ pub struct Data {
     pub fees_external: i64,
     pub per_object: Vec<Object>,
     pub per_alcohol_category: Vec<AlcoholCategory>,
-    pub receipt_count: usize,
     pub exported_at: Option<String>,
-    #[serde(skip)]
-    pub receipts: Vec<bytes::Bytes>,
 }
 
 pub(crate) struct OurWonderfulTypstWorldBase {
@@ -119,7 +116,7 @@ impl typst::World for OurWonderfulTypstWorld<'_> {
     fn main(&self) -> FileId {
         FileId::new(RootedPath::new(
             VirtualRoot::Project,
-            VirtualPath::new("receipt.typ").unwrap(),
+            VirtualPath::new("report.typ").unwrap(),
         ))
     }
 
@@ -128,7 +125,7 @@ impl typst::World for OurWonderfulTypstWorld<'_> {
             return Err(FileError::Package(PackageError::Other(None)));
         }
         let data = match id.vpath().get_without_slash() {
-            "receipt.typ" => Source::new(id, TYPST_DOC.to_owned()),
+            "report.typ" => Source::new(id, TYPST_DOC.to_owned()),
             "data.json" | "image" => return Err(FileError::NotSource),
             _ => return Err(FileError::NotFound(id.vpath().get_without_slash().into())),
         };
@@ -142,24 +139,16 @@ impl typst::World for OurWonderfulTypstWorld<'_> {
 
         let path = id.vpath().get_without_slash();
         let data = match path {
-            "receipt.typ" => Bytes::new(TYPST_DOC),
+            "report.typ" => Bytes::new(TYPST_DOC),
             "data.json" => Bytes::new(serde_json::to_string(&self.data).map_err(|error| {
-                alert(AlertLevel::L2, "Failed to serialize data.json for receipt.");
-                error!(?error, "Failed to serialize data.json for receipt.");
+                alert(AlertLevel::L2, "Failed to serialize data.json for report.");
+                error!(?error, "Failed to serialize data.json for report.");
                 FileError::Other(None)
             })?),
             "image" if let Some(data) = &self.data.creator_logo_data => {
                 Bytes::new(bytes::Bytes::clone(data))
             }
-            _ => {
-                let receipt = path
-                    .strip_prefix("transaction-receipt-")
-                    .and_then(|path| path.strip_suffix(".pdf"))
-                    .and_then(|index| index.parse::<usize>().ok())
-                    .and_then(|index| self.data.receipts.get(index))
-                    .ok_or_else(|| FileError::NotFound(path.into()))?;
-                Bytes::new(bytes::Bytes::clone(receipt))
-            }
+            _ => return Err(FileError::NotFound(path.into())),
         };
         Ok(data)
     }
@@ -183,10 +172,7 @@ impl typst::World for OurWonderfulTypstWorld<'_> {
 /// Errors if the typst compilation fails (which should never happen; we control the typst
 /// document). Though could happen if image is shit.
 pub fn compile(world: &OurWonderfulTypstWorldBase, data: &Data) -> MinilithResult<Vec<u8>> {
-    let _span = info_span!("typst receipt compilation").entered();
-
-    let mut fonts = typst_kit::fonts::FontStore::default();
-    fonts.extend(typst_kit::fonts::embedded());
+    let _span = info_span!("typst report compilation").entered();
 
     let world = OurWonderfulTypstWorld {
         inner: world,
@@ -226,21 +212,19 @@ mod tests {
             fees_external: 0,
             per_object: Vec::new(),
             per_alcohol_category: Vec::new(),
-            receipt_count: 0,
             exported_at: None,
-            receipts: Vec::new(),
         }
     }
 
     #[test]
-    fn appends_pdf_receipts() -> minilith_errors::MinilithResult<()> {
+    fn compiles_sales_report() -> minilith_errors::MinilithResult<()> {
         let world = OurWonderfulTypstWorldBase::default();
-        let receipt = compile(&world, &empty_data())?;
-        let mut report = empty_data();
-        report.receipt_count = 1;
-        report.receipts.push(bytes::Bytes::from(receipt));
-
-        compile(&world, &report)?;
+        for language in [Language::Swedish, Language::English] {
+            let mut report = empty_data();
+            report.language = language;
+            let pdf = compile(&world, &report)?;
+            assert!(pdf.starts_with(b"%PDF"));
+        }
         Ok(())
     }
 }
