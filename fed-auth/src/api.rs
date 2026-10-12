@@ -85,25 +85,19 @@ impl MainRouter {
             .wrap_err_internal(format!("medcheck: transport error (for {sub})"))?
             .error_for_status()
             .wrap_err_internal(format!("medcheck: status error (for {sub})"))?;
-        let body = resp
+        let mut body = resp
             .text()
             .await
             .wrap_err_internal("medcheck: transport body error")?;
-        let Some((g1, g2)) = (|| {
+        let Some(g1) = (|| {
             let needle = "<div class=\"guilds\">";
             let idx = body.find(needle)?;
             let guild = body.get((idx + needle.len())..)?;
             let g1 = guild.get(..1)?;
-            let g2 = guild.get(..2)?;
-            Some((g1, g2))
+            Some(g1)
         })() else {
             return Ok(None);
         };
-        match g2 {
-            "do" => return Ok(Some(Guild::Doct)),
-            "in" => return Ok(Some(Guild::Ing)),
-            _ => {}
-        }
         let guild = match g1 {
             "f" => Guild::F,
             "e" => Guild::E,
@@ -114,7 +108,12 @@ impl MainRouter {
             "d" => Guild::D,
             "w" => Guild::W,
             "i" => Guild::I,
-            _ => return Ok(None),
+            // apparently this is ing?? i fucking hate medcheck
+            "n" => return Ok(Some(Guild::Ing)),
+            _ => {
+                body.make_ascii_lowercase();
+                return Ok(body.contains("doct").then_some(Guild::Doct))
+            }
         };
         Ok(Some(guild))
     }
