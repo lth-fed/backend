@@ -391,7 +391,7 @@ pub(crate) async fn change_admin_email_recipients(
         EmailRecipient,
         r#"select distinct
             group_adminships.user_id,
-            users.language,
+            users.language as "language?",
             target.name as "group_name!: DIS"
         from groups target
         inner join groups admin_group
