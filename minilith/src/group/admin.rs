@@ -309,10 +309,10 @@ pub async fn create_adminship_change(
     user_id: &str,
     group_id: Uuid,
 ) -> MinilithResult<(Adminship, bool)> {
-    if !user_id.starts_with("email:") {
+    if !(user_id.starts_with("email:") || user_id.starts_with("api:")) {
         return Err(MinilithEndpointError::bad_frontend_code(
-            "administrators must use an email account",
-            "the user id must start with `email:`",
+            "administrators must use an email account or be an api",
+            "the user id must start with `email:` or `api:`",
         ));
     }
     let row = sqlx::query!(
