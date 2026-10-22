@@ -4,6 +4,9 @@
 
 > Before committing, run `cargo sqlx prepare -- --all-targets`. Without
 > `--all-targets` it doesn't generate the test files. Or run `./sqlx-prepare.sh`
+> This is because in the CI we don't have a database, so sqlx needs to know the
+> type of the queries beforehand, which `cargo sqlx prepare` does by writing
+> files about the queries.
 
 > Outer joins must override the variable to be optional:
 > `select id, stripe_id as "stripe_id?" from transactions txn left outer join stripe_checkouts s on txn.id = s.transaction_id`
@@ -12,34 +15,16 @@
 
 We glue Rust together with Postgres using
 [SQLx](https://github.com/launchbadge/sqlx/blob/main/README.md). It handles
-migrations and does compile-time checks of the queries. To create new
-migrations, you will need
-[`sqlx-cli`](https://github.com/launchbadge/sqlx/blob/main/sqlx-cli/README.md)
-as well as a database.
-
-To spin up a local Postgres instance, run `docker compose up -d`. The connection
-url, `DATABASE_URL`, is specified in `.env` and used by both the backend and the
-cli. It _should_ work out of the box.
+migrations and does compile-time checks of the queries.
 
 The database will be automatically initialized when you start the backend.
-
-For making the database types work in the CI, please run `cargo sqlx prepare`
-whenever you add new queries or migrations.
-
-> This is because in the CI we don't have a database, so sqlx needs to know the
-> type of the queries beforehand, which `cargo sqlx prepare` does by writing
-> files about the queries.
 
 ## Auth
 
 The auth tries to get certs from the local auth (on port `8001`). If this fails,
 it defaults to always returning the user `lund-university:aa0000bb-s` or
-whatever is after `Bearer` in the `authorization` header.
-
-## Grafana & metrics & logs
-
-See the [guide](https://docs.teknologappen.se/grafana/) on how to use Grafana to
-view metrics, errors, logs etc.
+whatever is after `Bearer` in the `authorization` header. Keep this in mind
+with what order you start the services on.
 
 ## Local development
 
@@ -57,14 +42,19 @@ HTTPS API in production.
 
 ## Build and push production images
 
-Run `./build-push.sh 0.0.1-alpha.2`.
+Run `./build-push.sh 1.0.0`.
+
+## Grafana & metrics & logs
+
+See the [guide](https://docs.teknologappen.se/grafana/) on how to use Grafana to
+view metrics, errors, logs etc.
 
 ## Deploy pushed images
 
-The deployment host needs this repository's `compose.yaml`, `compose.prod.yaml`,
-observability configuration, and the three service `.env` files. It does not
-need the Rust source or build tooling. It's however the easiest to just pull
-this repo (or run
+The deployment host needs this repository's `compose.base.yaml`,
+`compose.prod.yaml`, observability configuration, and the three service `.env`
+files. It does not need the Rust source or build tooling. It's however the
+easiest to just pull this repo (or run
 `rsync compose.base.yaml compose.prod.yaml compose.yaml grafana.yml loki-config.yaml otel-collector.yaml prometheus.yml tempo.yaml macapar@extrovert:/srv/teknologappen/backend/staging`
 and then `sudo cp staging/* .` from the directory).
 
