@@ -51,12 +51,16 @@ impl Router {
 
     /// Places the user in the queue for this `ticket_kind`.
     /// - if queue response is queued, get queue status & display wait &
-    ///   (if reservation queue: refresh every 15 seconds, else refresh after the ticket is released)
+    ///   (if reservation queue: refresh GET /queue every 15 seconds, else refresh after the ticket is released)
+    ///   (server tries to send push notification that they got reservation)
     /// - if queue response is reserved, go to buy
-    /// - (runtime releases tickets when it's time)
+    /// - wait until the ticket kind's purchasing_available_start (+5-15 seconds) (+5s in case the
+    ///   backend is slow, +-10 s to not overload server)
+    ///   (runtime releases tickets when it's time)
     ///
-    /// You have to call this once every 15 minutes since it removes the queue spot after 20
-    /// minutes.
+    /// You have to call this once every 15 minutes BEFORE release since it removes the queue spot after 20
+    /// minutes. The frontend gates this to only be able to be in queue within 15 minutes of
+    /// release.
     ///
     /// # Errors
     ///

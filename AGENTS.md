@@ -247,6 +247,9 @@ podman compose up -d                   # local Postgres + observability stack (h
   `fed-auth-verifier/src/callbacks.rs`, `transactions/src/lib.rs` (`ApiAuth`).
 - Domain example: `minilith/src/ticket/` (`mod.rs`, `api.rs`, `purchase.rs`,
   `flow.rs`, `access.rs`).
+- Ticket queue API handlers are thin delegates; queue transitions/status live in
+  `ticket/queue.rs`, release/promotion work in `ticket/release.rs` and
+  `ticket/allocation.rs`, and payment completion in `ticket/purchase.rs`.
 - Tests/fixtures: `minilith/tests/healthcheck.rs`, `minilith/tests/lib.rs`,
   `minilith/src/ticket/tests.rs`, `fed-auth/tests/tokens.rs`.
 - Schema tooling: `minilith/schema/{compile.sh,create-migration.sh,README.md}`.
