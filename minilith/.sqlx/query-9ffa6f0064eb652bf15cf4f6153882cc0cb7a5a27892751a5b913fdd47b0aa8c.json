@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into notification_read_states (user_id, notification_id, read, dismissed)\n            select $1, $2, $3, coalesce($4, false)\n            where exists (\n                select 1 from notification_recipients\n                where user_id = $1 and notification_id = $2\n            )\n            on conflict (user_id, notification_id) do update set\n                read = coalesce($3, notification_read_states.read),\n                dismissed = coalesce($4, notification_read_states.dismissed)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Bool",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9ffa6f0064eb652bf15cf4f6153882cc0cb7a5a27892751a5b913fdd47b0aa8c"
+}

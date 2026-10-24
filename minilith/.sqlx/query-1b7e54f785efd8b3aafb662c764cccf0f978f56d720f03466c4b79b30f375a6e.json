@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into notification_read_watermarks (user_id, read_up_to)\n            values ('eligible', now() - interval '1 year')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "1b7e54f785efd8b3aafb662c764cccf0f978f56d720f03466c4b79b30f375a6e"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into notification_read_states (user_id, notification_id, read, dismissed)\n            values ('eligible', '30000000-0000-0000-0000-000000000001', true, true)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "feed5223b05ebe09b10552379985bf4e3d551d7209528196596fe6b90b0fa09e"
+}

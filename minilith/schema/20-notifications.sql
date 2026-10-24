@@ -51,8 +51,102 @@ create table activity_notification_overrides (
     follow boolean not null
 );
 
--- Keep eligibility separate from notification preferences. Activity eligibility follows ticket
--- visibility, purchasing access, or ownership, while preferences follow the activity hosts.
+-- Per-user read state for the notification history (the inbox). A notification is read when its row
+-- says so, otherwise when it was sent at or before the user's watermark — which "mark all as read"
+-- moves, and which defaults to the account's creation so a new account doesn't start with months of
+-- unread history. `read` is null when the row only records a dismissal.
+create table notification_read_watermarks (
+    user_id text primary key references users (id) on delete cascade,
+    read_up_to timestamptz not null
+);
+create table notification_read_states (
+    user_id text not null references users (id) on delete cascade,
+    notification_id uuid not null references notifications (id) on delete cascade,
+    primary key (user_id, notification_id),
+    read boolean,
+    -- Dismissed notifications leave the inbox but stay in their activity's updates.
+    dismissed boolean not null default false
+);
+
+-- What a notification is about, resolved once for every reader of it.
+create view notification_details as
+select
+    notifications.id,
+    case when group_notifications.group_id is null then 'activity' else 'group' end as kind,
+    case
+        when activity_notifications.activity_id is not null then 'all'
+        when activity_buyers_notifications.activity_id is not null then 'buyers'
+        when purchased_ticket_notifications.activity_id is not null then 'ticket_holders'
+    end as audience,
+    coalesce(
+        activity_notifications.activity_id,
+        activity_buyers_notifications.activity_id,
+        purchased_ticket_notifications.activity_id
+    ) as activity_id,
+    group_notifications.group_id,
+    coalesce(activity_image.url, group_logo.url) as image_url,
+    notifications.sender,
+    notifications.title,
+    notifications.content,
+    notifications.send_at,
+    notifications.sent
+from notifications
+left join activity_notifications on activity_notifications.notification_id = notifications.id
+left join activity_buyers_notifications
+    on activity_buyers_notifications.notification_id = notifications.id
+left join purchased_ticket_notifications
+    on purchased_ticket_notifications.notification_id = notifications.id
+left join group_notifications on group_notifications.notification_id = notifications.id
+left join activities on activities.id = coalesce(
+    activity_notifications.activity_id,
+    activity_buyers_notifications.activity_id,
+    purchased_ticket_notifications.activity_id
+)
+left join images activity_image on activity_image.id = activities.image_id
+left join groups on groups.id = group_notifications.group_id
+left join images group_logo on group_logo.id = groups.logo_id;
+
+-- Whether a user wants notifications from a group: its nearest configured setting, or everything
+-- when nothing is configured. Notification levels are independent of the home feed's visibility
+-- filter; hiding a group's activities doesn't mute it.
+create function wants_group_notifications(target_user text, target_group uuid) returns boolean
+language sql stable as $$
+    select coalesce(
+        (
+            select settings.notification_level = 'all'::notification_level
+            from user_group_settings settings
+            inner join groups settings_group on settings_group.id = settings.group_id
+            inner join groups target on target.id = target_group
+            where settings.user_id = target_user
+                and settings_group.path @> target.path
+            order by nlevel(settings_group.path) desc
+            limit 1
+        ),
+        true
+    )
+$$;
+
+-- Whether a user wants an activity's news: their own choice for the activity (the follow bell),
+-- otherwise what they want from any of its hosts.
+create function follows_activity(target_user text, target_activity uuid) returns boolean
+language sql stable as $$
+    select coalesce(
+        (
+            select follow from activity_notification_overrides
+            where user_id = target_user and activity_id = target_activity
+        ),
+        (
+            select bool_or(wants_group_notifications(target_user, activity_hosts.group_id))
+            from activity_hosts
+            where activity_hosts.activity_id = target_activity
+        ),
+        true
+    )
+$$;
+
+-- Every user each notification may reach (eligibility), and whether it does (`receives`): pushes go
+-- to receivers, and the history lists what was received. Ticket-holder news always reaches ticket
+-- holders — muting an activity you hold a ticket for only mutes its general news.
 create view notification_recipients as
 with eligible_users as (
     -- Everyone who can see the activity.
@@ -61,7 +155,7 @@ with eligible_users as (
         group_memberships.user_id,
         activity_notifications.activity_id,
         null::uuid as group_id,
-        true as use_group_settings
+        false as ticket_holder
     from activity_notifications
     inner join ticket_kinds kind
         on kind.activity_id = activity_notifications.activity_id
@@ -85,7 +179,7 @@ with eligible_users as (
         group_memberships.user_id,
         activity_buyers_notifications.activity_id,
         null::uuid as group_id,
-        true as use_group_settings
+        false as ticket_holder
     from activity_buyers_notifications
     inner join ticket_kinds kind
         on kind.activity_id = activity_buyers_notifications.activity_id
@@ -112,7 +206,7 @@ with eligible_users as (
         purchased_tickets.owner_id,
         purchased_ticket_notifications.activity_id,
         null::uuid as group_id,
-        false as use_group_settings
+        true as ticket_holder
     from purchased_ticket_notifications
     inner join ticket_kinds
         on ticket_kinds.activity_id = purchased_ticket_notifications.activity_id
@@ -127,7 +221,7 @@ with eligible_users as (
         group_memberships.user_id,
         null::uuid as activity_id,
         groups.id as group_id,
-        true as use_group_settings
+        false as ticket_holder
     from group_notifications
     inner join groups on groups.id = group_notifications.group_id
     inner join groups member_group on groups.path @> member_group.path
@@ -135,67 +229,23 @@ with eligible_users as (
         on group_memberships.group_id = member_group.id
     where member_group.limit_membership_visibility = false
         or member_group.id = groups.id
-),
-settings_by_host as (
-    select
-        eligible_users.notification_id,
-        eligible_users.user_id,
-        eligible_users.use_group_settings,
-        activity_override.follow,
-        coalesce(closest_setting.visible, false) as visible,
-        coalesce(
-            closest_setting.notification_level,
-            'none'::notification_level
-        ) as notification_level
-    from eligible_users
-    inner join lateral (
-        select activity_hosts.group_id
-        from activity_hosts
-        where activity_hosts.activity_id = eligible_users.activity_id
-        union all
-        select eligible_users.group_id
-        where eligible_users.activity_id is null
-    ) preference_target on true
-    inner join groups target_group on target_group.id = preference_target.group_id
-    left join lateral (
-        select settings.visible, settings.notification_level
-        from user_group_settings settings
-        inner join groups settings_group on settings_group.id = settings.group_id
-        where settings.user_id = eligible_users.user_id
-            and settings_group.path @> target_group.path
-        order by nlevel(settings_group.path) desc
-        limit 1
-    ) closest_setting on true
-    left join activity_notification_overrides activity_override
-        on activity_override.user_id = eligible_users.user_id
-        and activity_override.activity_id = eligible_users.activity_id
-    where eligible_users.activity_id is null
-        or exists (
-            select 1
-            from activities
-            where activities.id = eligible_users.activity_id
-            and activities.is_hidden = false
-        )
 )
 select
     notification_id,
     user_id,
-    case when bool_or(
-        case
-            when follow is true then true
-            when follow is false then false
-            when use_group_settings = false then true
-            else notification_level = 'all'::notification_level
-        end
-    ) then 'all'::notification_level else 'none'::notification_level end
-        as notification_level,
     bool_or(
         case
-            when follow is true then true
-            when follow is false then false
-            when use_group_settings = false then true
-            else visible
+            when ticket_holder then true
+            when activity_id is not null then follows_activity(user_id, activity_id)
+            else wants_group_notifications(user_id, group_id)
         end
-    ) as visible
-from settings_by_host
+    ) as receives
+from eligible_users
+where activity_id is null
+    or exists (
+        select 1
+        from activities
+        where activities.id = eligible_users.activity_id
+        and activities.is_hidden = false
+    )
 group by notification_id, user_id;

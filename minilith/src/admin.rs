@@ -166,10 +166,21 @@ struct PutNotification {
 
 #[derive(Clone, Copy, Debug, Enum, Eq, PartialEq)]
 #[oai(rename_all = "snake_case")]
-enum ActivityNotificationKind {
+pub(crate) enum ActivityNotificationKind {
     All,
     Buyers,
     TicketHolders,
+}
+impl ActivityNotificationKind {
+    /// Reads `notification_details.audience`.
+    pub(crate) fn from_db(audience: &str) -> Option<Self> {
+        match audience {
+            "all" => Some(Self::All),
+            "buyers" => Some(Self::Buyers),
+            "ticket_holders" => Some(Self::TicketHolders),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Object)]

@@ -8,7 +8,7 @@ use minilith_errors::{
 use tracing::error;
 
 use crate::accounting;
-use crate::push_notifications::{NotificationRow, PushDeviceRow, send_notifications};
+use crate::push_notifications::{NotificationRow, PushDeviceRow, PushKind, send_notifications};
 use crate::{ContextWrapper, DbInternationalizedString as DIS, report, ticket, transactions};
 
 const NOTIFICATION_POLL_INTERVAL: Duration = Duration::from_secs(10);
@@ -111,18 +111,15 @@ async fn check_unpaid_transactions(ctx: &ContextWrapper) -> MinilithResult<()> {
 async fn check_next_notification(ctx: &ContextWrapper) -> MinilithResult<bool> {
     let mut transaction = ctx.db.begin().await?;
 
-    let notification = sqlx::query_as!(
-        NotificationRow,
+    // Locked on `notifications` itself: `for update` can't reach through `notification_details`'s
+    // outer joins, so what the notification is about is read from it per column.
+    let notification = sqlx::query!(
         r#"select
             id,
-            coalesce(
-                (select activity_id from activity_notifications
-                    where notification_id = notifications.id),
-                (select activity_id from activity_buyers_notifications
-                    where notification_id = notifications.id),
-                (select activity_id from purchased_ticket_notifications
-                    where notification_id = notifications.id)
-            ) as "activity_id?",
+            (select kind from notification_details where notification_details.id = notifications.id)
+                as "kind!",
+            (select activity_id from notification_details
+                where notification_details.id = notifications.id) as "activity_id?",
             sender as "sender!: DIS",
             title as "title!: DIS",
             content as "content!: DIS"
@@ -132,6 +129,18 @@ async fn check_next_notification(ctx: &ContextWrapper) -> MinilithResult<bool> {
         order by send_at, id
         for update skip locked"#
     )
+    .map(|row| NotificationRow {
+        id: row.id,
+        kind: if row.kind == "group" {
+            PushKind::Group
+        } else {
+            PushKind::Activity
+        },
+        activity_id: row.activity_id,
+        sender: row.sender,
+        title: row.title,
+        content: row.content,
+    })
     .fetch_optional(&mut transaction.executor())
     .await?;
 
@@ -140,9 +149,8 @@ async fn check_next_notification(ctx: &ContextWrapper) -> MinilithResult<bool> {
         return Ok(false);
     };
 
-    // The view applies membership visibility and the closest notification setting on each allowed
-    // group. Until personalized behavior is defined, both `all` and `personalized` receive every
-    // matching notification.
+    // The view decides who receives what: eligibility, then the activity's follow setting or the
+    // closest group notification level, and ticket-holder news regardless of either.
     let devices = sqlx::query_as!(
         PushDeviceRow,
         r#"select
@@ -156,7 +164,7 @@ async fn check_next_notification(ctx: &ContextWrapper) -> MinilithResult<bool> {
         inner join push_devices using (user_id)
         inner join users on users.id = notification_recipients.user_id
         where notification_recipients.notification_id = $1
-        and notification_level = 'all'::notification_level"#,
+        and notification_recipients.receives"#,
         notification.id,
     )
     .fetch_all(&mut transaction.executor())

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select\n            push_devices.user_id as \"user_id!\",\n            push_devices.device_id as \"device_id!\",\n            push_devices.push_token,\n            push_devices.platform::push_platform\n                as \"platform!: crate::push_notifications::PushPlatform\",\n            users.language\n        from notification_recipients\n        inner join push_devices using (user_id)\n        inner join users on users.id = notification_recipients.user_id\n        where notification_recipients.notification_id = $1\n        and notification_level = 'all'::notification_level",
+  "query": "select\n            push_devices.user_id as \"user_id!\",\n            push_devices.device_id as \"device_id!\",\n            push_devices.push_token,\n            push_devices.platform::push_platform\n                as \"platform!: crate::push_notifications::PushPlatform\",\n            users.language\n        from notification_recipients\n        inner join push_devices using (user_id)\n        inner join users on users.id = notification_recipients.user_id\n        where notification_recipients.notification_id = $1\n        and notification_recipients.receives",
   "describe": {
     "columns": [
       {
@@ -52,5 +52,5 @@
       false
     ]
   },
-  "hash": "358d25f9109d6ee4f55027b638c1c8cb117bbec207635b144546307f66591819"
+  "hash": "f640547c261620fb32aa2dc1959ec9f27609713e8095d10c719b2ca6efe409c3"
 }

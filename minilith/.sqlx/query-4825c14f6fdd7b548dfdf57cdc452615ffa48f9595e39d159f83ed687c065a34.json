@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into notification_read_watermarks (user_id, read_up_to)\n            values ($1, least($2, now()))\n            on conflict (user_id) do update set\n                read_up_to = greatest(notification_read_watermarks.read_up_to, excluded.read_up_to)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4825c14f6fdd7b548dfdf57cdc452615ffa48f9595e39d159f83ed687c065a34"
+}

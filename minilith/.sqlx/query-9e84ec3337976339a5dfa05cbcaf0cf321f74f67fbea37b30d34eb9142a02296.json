@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update notification_read_states state set read = null\n            from notifications\n            where state.user_id = $1\n            and notifications.id = state.notification_id\n            and notifications.send_at <= $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9e84ec3337976339a5dfa05cbcaf0cf321f74f67fbea37b30d34eb9142a02296"
+}

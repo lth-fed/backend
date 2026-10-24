@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::{
     ContextWrapper, InternationalizedString as IS, MinilithResult,
-    push_notifications::{NotificationRow, PushDeviceRow, send_notifications},
+    push_notifications::{NotificationRow, PushDeviceRow, PushKind, send_notifications},
 };
 
 pub(super) enum TicketNotification {
@@ -15,6 +15,7 @@ pub(super) enum TicketNotification {
 pub(super) fn reservation_notification(id: Uuid, activity_id: Uuid) -> NotificationRow {
     NotificationRow {
         id,
+        kind: PushKind::Reservation,
         activity_id: Some(activity_id),
         sender: sqlx::types::Json(IS::empty()),
         title: IS(HashMap::from([
@@ -74,6 +75,7 @@ async fn send_ticket_notification(
         TicketNotification::Reservation => reservation_notification(Uuid::new_v4(), activity.id),
         TicketNotification::Transfer => NotificationRow {
             id: Uuid::new_v4(),
+            kind: PushKind::Transfer,
             activity_id: Some(activity.id),
             sender: activity.title,
             title: IS(HashMap::from([

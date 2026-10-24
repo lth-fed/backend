@@ -306,7 +306,27 @@ impl Router {
 
         Ok(Json(activity))
     }
-    /// The ticket kinds not purchasable due to membership check are not shown.
+    /// The activity's news, newest first: every sent notification about it that the user is
+    /// eligible for, whether or not they chose to receive it — muting an activity silences pushes,
+    /// not its page. Includes read state, like `GET /user/notifications`.
+    ///
+    /// # Errors
+    ///
+    /// - user might not be allowed to access this activity
+    #[oai(path = "/:id/notifications", method = "get")]
+    async fn notifications(
+        &self,
+        user: User,
+        id: Path<Uuid>,
+    ) -> MinilithResult<Json<Vec<crate::user::Notification>>> {
+        self.test_activity_access(user.get_id(), &id.0).await?;
+        let notifications =
+            crate::user::load_notifications(&self.db, user.get_id(), Some(id.0)).await?;
+        Ok(Json(notifications))
+    }
+
+    /// The ticket kinds not purchasable due to membership check are not shown. Visibility-only
+    /// kinds are never shown — not to the hosts' admins either; they can't be bought by anyone.
     ///
     /// # Errors
     ///
@@ -336,10 +356,10 @@ impl Router {
             from ticket_kinds as kind
             inner join activities on activities.id = kind.activity_id
             where kind.activity_id = $1
+            and not kind.for_visibility
             and (
                 (
-                    not kind.for_visibility
-                    and exists (
+                    exists (
                         select 1
                         from group_memberships
                         inner join groups member_group on member_group.id = group_memberships.group_id

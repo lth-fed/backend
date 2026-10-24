@@ -1,0 +1,50 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n            id,\n            (select kind from notification_details where notification_details.id = notifications.id)\n                as \"kind!\",\n            (select activity_id from notification_details\n                where notification_details.id = notifications.id) as \"activity_id?\",\n            sender as \"sender!: DIS\",\n            title as \"title!: DIS\",\n            content as \"content!: DIS\"\n        from notifications\n        where send_at <= now()\n        and sent = false\n        order by send_at, id\n        for update skip locked",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "kind!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "activity_id?",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "sender!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "title!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 5,
+        "name": "content!: DIS",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      null,
+      null,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "a9e4000ea2f4bd457f015fae05d415ae873ae2b068d9f5a29ae0fb61475bca0d"
+}
