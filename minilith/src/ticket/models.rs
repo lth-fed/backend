@@ -131,6 +131,8 @@ pub(super) struct PurchasedTicket {
     pub(super) purchased_addons: Vec<PurchasedAddon>,
     /// False if we have transferred it.
     pub(super) owned_by_me: bool,
+    /// False if it was transferred to us. Only the purchaser can view the receipt.
+    pub(super) purchased_by_me: bool,
 }
 #[derive(Object, Debug)]
 pub struct Kind {

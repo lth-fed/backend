@@ -261,7 +261,8 @@ pub(super) async fn my_tickets(
             activities.location as "location!: Location",
             activities.time_start as "time_start",
             activities.time_end as "time_end",
-            (owner_id = $1) as "owned_by_me!"
+            (owner_id = $1) as "owned_by_me!",
+            (purchaser_id = $1) as "purchased_by_me!"
         from purchased_tickets
         inner join ticket_kinds on ticket_kinds.id = purchased_tickets.ticket_kind_id
         inner join activities on activities.id = ticket_kinds.activity_id
@@ -286,6 +287,7 @@ pub(super) async fn my_tickets(
         time_end: ticket.time_end,
         purchased_addons: addons.remove(&ticket.id).unwrap_or_default(),
         owned_by_me: ticket.owned_by_me,
+        purchased_by_me: ticket.purchased_by_me,
     })
     .fetch_all(&ctx.db)
     .await?;
