@@ -4,9 +4,7 @@ use std::ops::Deref;
 
 use base64::Engine as _;
 use color_eyre::eyre::Context as _;
-use minilith_errors::{
-    MinilithEndpointError, MinilithErrorOptionExt as _, MinilithErrorResultExt as _, MinilithResult,
-};
+use minilith_errors::{MinilithErrorOptionExt as _, MinilithErrorResultExt as _, MinilithResult};
 use poem::http::StatusCode;
 use poem_openapi::OpenApi;
 use poem_openapi::payload::{Binary, Form, Response};
@@ -301,31 +299,50 @@ impl SamlRouter {
             .first()
             .wrap_err_internal("saml2: no sub: attribute_statements.first")?
             .attributes;
-        let extract_value = |name| {
-            let value = attrs
+
+        let sub_attr_name = "urn:oasis:names:tc:SAML:attribute:subject-id";
+        let display_name_attr_name = "urn:oid:2.16.840.1.113730.3.1.241";
+        let email_attr_name = "urn:oid:0.9.2342.19200300.100.1.3";
+
+        let sub = attrs
+            .iter()
+            .find(|attr| attr.name.as_deref() == Some(sub_attr_name))
+            .wrap_err_internal("saml2: no sub: no subject-id")?
+            .values
+            .first()
+            .wrap_err_internal("saml2: no sub: subject-id values first")?
+            .value
+            .as_ref()
+            .wrap_err_internal("saml2: no sub: subject-id value")?
+            .strip_suffix("@lu.se")
+            .wrap_err_internal("saml2: no sub: not lu")?;
+        let name = async {
+            let name = attrs
                 .iter()
-                .find(|attr| attr.name.as_deref() == Some(name))
-                .wrap_err_internal("saml2: no sub: no subject-id")?
+                .find(|attr| attr.name.as_deref() == Some(display_name_attr_name))?
                 .values
-                .first()
-                .wrap_err_internal("saml2: no sub: subject-id values first")?
+                .first()?
                 .value
-                .as_ref()
-                .wrap_err_internal("saml2: no sub: subject-id value")?;
-            let sub = value
-                .strip_suffix("@lu.se")
-                .wrap_err_internal("saml2: no sub: not lu")?;
-
-            Ok::<&str, MinilithEndpointError>(sub)
-        };
-
-        let sub = extract_value("urn:oasis:names:tc:SAML:attribute:subject-id")?;
-        let name = extract_value("urn:oid:2.16.840.1.113730.3.1.241")?;
+                .as_ref()?;
+            Some(name)
+        }
+        .await;
+        let email = async {
+            let email = attrs
+                .iter()
+                .find(|attr| attr.name.as_deref() == Some(email_attr_name))?
+                .values
+                .first()?
+                .value
+                .as_ref()?;
+            Some(email)
+        }
+        .await;
 
         let user = ValidatedUser {
             sub: format!("lund-university:{}", sub.to_owned()),
-            email: None,
-            full_name: Some(name.to_owned()),
+            email: email.map(ToOwned::to_owned),
+            full_name: name.map(ToOwned::to_owned),
             lth_guild: None,
             language: None,
         };
