@@ -22,8 +22,8 @@ use crate::{Context, ContextWrapper};
 pub async fn get_service_provider(
     api_domain: &str,
 ) -> color_eyre::Result<(ServiceProvider, openssl::pkey::PKey<openssl::pkey::Private>)> {
-    // let resp = reqwest::get("https://idpv4.lu.se/idp/shibboleth")
-    let resp = reqwest::get("https://mocksaml.com/api/saml/metadata")
+    let resp = reqwest::get("https://idpv4.lu.se/idp/shibboleth")
+    // let resp = reqwest::get("https://mocksaml.com/api/saml/metadata")
         .await?
         .text()
         .await?;

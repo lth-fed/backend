@@ -794,49 +794,49 @@ impl MainRouter {
     ) -> Result<(String, String), Response<AuthorizeResponse>> {
         Ok(match provider {
             "lu" => {
-                // let req = self
-                //     .service_provider
-                //     // .make_authentication_request("https://idpv4.lu.se/idp/profile/SAML2/Redirect/SSO")
-                //     .make_authentication_request("https://mocksaml.com/api/saml/sso")
-                //     .map_err(|err| {
-                //         error!(?err, "Failed to make LU SSO request");
-                //         oauth2error_redirect(OAuth2ErrorKind::Internal, "lu sso saml2 error", ctx)
-                //     })?;
-                // let redirect = req
-                //     .signed_redirect("", &self.saml_private_key)
-                //     .ok()
-                //     .flatten()
-                //     .ok_or_else(|| {
-                //         error!("Failed to create LU SSO link");
-                //         oauth2error_redirect(OAuth2ErrorKind::Internal, "lu sso saml2 error", ctx)
-                //     })?;
-                // sqlx::query!(
-                //     "insert into saml2_request_id_cache (id) values ($1)",
-                //     req.id
-                // )
-                // .execute(&self.db)
-                // .await
-                // .map_err(|error| {
-                //     drop(MinilithEndpointError::from(error));
-                //     oauth2error_redirect(OAuth2ErrorKind::Internal, "insert to cache failed", ctx)
-                // })?;
-                // debug!("Added ID {} to saml2 request id cache", req.id);
-                // (req.id, redirect.to_string());
+                let req = self
+                    .service_provider
+                    .make_authentication_request("https://idpv4.lu.se/idp/profile/SAML2/Redirect/SSO")
+                    // .make_authentication_request("https://mocksaml.com/api/saml/sso")
+                    .map_err(|err| {
+                        error!(?err, "Failed to make LU SSO request");
+                        oauth2error_redirect(OAuth2ErrorKind::Internal, "lu sso saml2 error", ctx)
+                    })?;
+                let redirect = req
+                    .signed_redirect("", &self.saml_private_key)
+                    .ok()
+                    .flatten()
+                    .ok_or_else(|| {
+                        error!("Failed to create LU SSO link");
+                        oauth2error_redirect(OAuth2ErrorKind::Internal, "lu sso saml2 error", ctx)
+                    })?;
+                sqlx::query!(
+                    "insert into saml2_request_id_cache (id) values ($1)",
+                    req.id
+                )
+                .execute(&self.db)
+                .await
+                .map_err(|error| {
+                    drop(MinilithEndpointError::from(error));
+                    oauth2error_redirect(OAuth2ErrorKind::Internal, "insert to cache failed", ctx)
+                })?;
+                tracing::debug!("Added ID {} to saml2 request id cache", req.id);
+                (req.id, redirect.to_string())
 
                 // TODO: remove fed-lu hack
-                let code = Uuid::new_v4().to_string();
-                let params = serde_urlencoded::to_string([
-                    (
-                        "redirect_uri",
-                        format!("{}/oidc/v1/fed-lu/callback", self.api_domain),
-                    ),
-                    ("state", code.clone()),
-                ])
-                .map_err(|err| {
-                    error!(?err, "Failed to create temporary LU login link");
-                    oauth2error_redirect(OAuth2ErrorKind::Internal, "lu login error", ctx)
-                })?;
-                (code, format!("{}?{params}", self.fed_lu.authorize_url))
+                // let code = Uuid::new_v4().to_string();
+                // let params = serde_urlencoded::to_string([
+                //     (
+                //         "redirect_uri",
+                //         format!("{}/oidc/v1/fed-lu/callback", self.api_domain),
+                //     ),
+                //     ("state", code.clone()),
+                // ])
+                // .map_err(|err| {
+                //     error!(?err, "Failed to create temporary LU login link");
+                //     oauth2error_redirect(OAuth2ErrorKind::Internal, "lu login error", ctx)
+                // })?;
+                // (code, format!("{}?{params}", self.fed_lu.authorize_url))
             }
             "email" => {
                 let code = Uuid::new_v4();
