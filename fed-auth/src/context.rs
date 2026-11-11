@@ -102,13 +102,6 @@ impl CallbackUrl {
 
 pub(crate) type ContextWrapper = Arc<Context>;
 
-// TODO: remove fed-lu hack
-#[derive(Clone)]
-pub(crate) struct FedLuConfig {
-    pub authorize_url: String,
-    pub token_url: String,
-    pub client_secret: Option<String>,
-}
 
 #[derive(Clone)]
 pub(crate) struct Context {
@@ -120,17 +113,9 @@ pub(crate) struct Context {
     pub api_domain: &'static str,
     pub website_domain: &'static str,
 
-    // TODO: remove fed-lu hack
-    pub fed_lu: FedLuConfig,
-
     // keys
     pub private_key: EncodingKey,
     pub jwks: JwkSet,
-    // TODO: remove fed-lu hack
-    #[allow(
-        dead_code,
-        reason = "used again when the temporary LU bridge is removed"
-    )]
     pub saml_private_key: openssl::pkey::PKey<openssl::pkey::Private>,
 
     pub service_provider: ServiceProvider,
@@ -206,15 +191,6 @@ impl Context {
             .tls_danger_accept_invalid_certs(debug.enabled)
             .build()?;
 
-        // TODO: remove fed-lu hack
-        let fed_lu = FedLuConfig {
-            authorize_url: std::env::var("FED_LU_AUTHORIZE_URL")
-                .unwrap_or_else(|_| "https://auth.esek.se/fed-lu/authorize".to_owned()),
-            token_url: std::env::var("FED_LU_TOKEN_URL")
-                .unwrap_or_else(|_| "https://auth.esek.se/fed-lu/token".to_owned()),
-            client_secret: std::env::var("FED_LU_CLIENT_SECRET").ok(),
-        };
-
         let (sp, saml_pk) = saml2::get_service_provider(api_domain).await?;
 
         // so they are grouped with the usual poem errors:
@@ -227,7 +203,6 @@ impl Context {
             debug,
             api_domain,
             website_domain,
-            fed_lu,
             private_key,
             jwks,
             service_provider: sp,

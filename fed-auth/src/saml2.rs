@@ -4,7 +4,9 @@ use std::ops::Deref;
 
 use base64::Engine as _;
 use color_eyre::eyre::Context as _;
-use minilith_errors::{MinilithErrorOptionExt as _, MinilithErrorResultExt as _, MinilithResult};
+use minilith_errors::{
+    MinilithEndpointError, MinilithErrorOptionExt as _, MinilithErrorResultExt as _, MinilithResult,
+};
 use poem::http::StatusCode;
 use poem_openapi::OpenApi;
 use poem_openapi::payload::{Binary, Form, Response};
@@ -23,7 +25,6 @@ pub async fn get_service_provider(
     api_domain: &str,
 ) -> color_eyre::Result<(ServiceProvider, openssl::pkey::PKey<openssl::pkey::Private>)> {
     let resp = reqwest::get("https://idpv4.lu.se/idp/shibboleth")
-    // let resp = reqwest::get("https://mocksaml.com/api/saml/metadata")
         .await?
         .text()
         .await?;
@@ -292,17 +293,39 @@ impl SamlRouter {
             .await?
             .wrap_err_internal("saml2 response to non-existing session")?;
 
-        println!("{ass:#?}");
-        let sub = ass
-            .subject
+        // println!("{ass:#?}");
+        let attrs = &ass
+            .attribute_statements
             .as_ref()
-            .and_then(|sub| sub.name_id.as_ref())
-            .wrap_err_internal("saml2: no sub")?;
+            .wrap_err_internal("saml2: no sub: attribute_statements")?
+            .first()
+            .wrap_err_internal("saml2: no sub: attribute_statements.first")?
+            .attributes;
+        let extract_value = |name| {
+            let value = attrs
+                .iter()
+                .find(|attr| attr.name.as_deref() == Some(name))
+                .wrap_err_internal("saml2: no sub: no subject-id")?
+                .values
+                .first()
+                .wrap_err_internal("saml2: no sub: subject-id values first")?
+                .value
+                .as_ref()
+                .wrap_err_internal("saml2: no sub: subject-id value")?;
+            let sub = value
+                .strip_suffix("@lu.se")
+                .wrap_err_internal("saml2: no sub: not lu")?;
+
+            Ok::<&str, MinilithEndpointError>(sub)
+        };
+
+        let sub = extract_value("urn:oasis:names:tc:SAML:attribute:subject-id")?;
+        let name = extract_value("urn:oid:2.16.840.1.113730.3.1.241")?;
 
         let user = ValidatedUser {
-            sub: format!("lund-university:{}", sub.value.clone()),
+            sub: format!("lund-university:{}", sub.to_owned()),
             email: None,
-            full_name: None,
+            full_name: Some(name.to_owned()),
             lth_guild: None,
             language: None,
         };

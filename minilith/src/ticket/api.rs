@@ -54,7 +54,7 @@ impl Router {
     ///   (if reservation queue: refresh GET /queue every 15 seconds, else refresh after the ticket is released)
     ///   (server tries to send push notification that they got reservation)
     /// - if queue response is reserved, go to buy
-    /// - wait until the ticket kind's purchasing_available_start (+5-15 seconds) (+5s in case the
+    /// - wait until the ticket kind's `purchasing_available_start` (+5-15 seconds) (+5s in case the
     ///   backend is slow, +-10 s to not overload server)
     ///   (runtime releases tickets when it's time)
     ///
