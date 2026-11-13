@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        select\n            purchased_ticket_addons.ticket_id as \"ticket_id!\",\n            ticket_addons.id as \"addon_id!\",\n            ticket_addons.name as \"addon_name: DIS\",\n            ticket_addons.multiple_alternatives,\n            ticket_addons.has_text_field,\n            ticket_addons.required,\n            purchased_ticket_addons.selected_options,\n            purchased_ticket_addons.selected_text\n        from purchased_ticket_addons\n        inner join ticket_addons\n            on ticket_addons.id = purchased_ticket_addons.addon_id\n        where purchased_ticket_addons.ticket_id = any($1)\n        order by\n            ticket_addons.idx\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "ticket_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "addon_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "addon_name: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 3,
+        "name": "multiple_alternatives",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 4,
+        "name": "has_text_field",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 5,
+        "name": "required",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
+        "name": "selected_options",
+        "type_info": "Int4Array"
+      },
+      {
+        "ordinal": 7,
+        "name": "selected_text",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "97e3d70aec88b3064e1bfe3cf243546aef4fc4fa2c6f6909c06ef65d417ca723"
+}
