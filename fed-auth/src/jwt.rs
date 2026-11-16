@@ -17,17 +17,19 @@ pub struct StandardClaims<T: Serialize> {
     pub iat: u64,
     pub nbf: u64,
     pub aud: String,
+    pub iss: String,
     #[serde(flatten)]
     pub inner: T,
 }
 impl<T: Serialize> StandardClaims<T> {
-    pub fn new(aud: impl Into<String>, lifetime: u64, inner: T) -> Self {
+    pub fn new(issuer: &str, aud: impl Into<String>, lifetime: u64, inner: T) -> Self {
         let now = jsonwebtoken::get_current_timestamp();
         Self {
             exp: now + lifetime,
             iat: now,
             nbf: now,
             aud: aud.into(),
+            iss: issuer.to_owned(),
             inner,
         }
     }

@@ -39,6 +39,7 @@ RUN apt-get update \
     && useradd --system --uid 10001 --gid app --no-create-home app
 
 WORKDIR /app
+COPY --chmod=755 service-entrypoint.sh /app/service-entrypoint.sh
 USER 10001:10001
 
 # MINILITH
@@ -46,7 +47,8 @@ FROM runtime AS minilith
 COPY --from=builder /app/backend/target/release/minilith /app/minilith
 COPY --from=builder /app/backend/target/release/seed-dev /app/seed-dev
 EXPOSE 8000
-ENTRYPOINT ["/app/minilith"]
+ENV SERVICE_NAME=minilith
+ENTRYPOINT ["/app/service-entrypoint.sh"]
 
 # FED-AUTH
 FROM runtime AS fed-auth
@@ -60,11 +62,13 @@ USER 10001:10001
 
 COPY --from=builder /app/backend/target/release/fed-auth /app/fed-auth
 EXPOSE 8001
-ENTRYPOINT ["/app/fed-auth"]
+ENV SERVICE_NAME=fed-auth
+ENTRYPOINT ["/app/service-entrypoint.sh"]
 
 # TRANSACTIONS
 FROM runtime AS transactions
 
 COPY --from=builder /app/backend/target/release/transactions /app/transactions
 EXPOSE 8002
-ENTRYPOINT ["/app/transactions"]
+ENV SERVICE_NAME=transactions
+ENTRYPOINT ["/app/service-entrypoint.sh"]

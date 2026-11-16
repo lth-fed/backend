@@ -28,6 +28,7 @@ pub type ContextWrapper = Arc<Context>;
 pub struct Context {
     pub db: PgPool,
     pub debug: DebugConfig,
+    pub deployment: bin_common::DeploymentConfig,
     encryption_key: [u8; 32],
 
     transactions_api: String,
@@ -91,20 +92,17 @@ impl Context {
         let transactions_token = std::env::var("TRANSACTIONS_TOKEN")
             .wrap_err("Error: Missing env variable: 'TRANSACTIONS_TOKEN'.")?;
         let debug = DebugConfig::from_env();
-        let default_transactions_api = if debug.service_urls {
-            "https://transactions:8052"
-        } else if cfg!(debug_assertions) {
-            "https://localhost:8052"
-        } else {
-            "https://transactions.teknologappen.se"
-        };
-        let transactions_api = default_transactions_api.to_owned();
+        let deployment = bin_common::DeploymentConfig::from_env();
+        let transactions_api = std::env::var("TRANSACTIONS_INTERNAL_URL")?;
 
         let client = reqwest::Client::builder()
             .tls_danger_accept_invalid_certs(debug.enabled)
             .build()?;
 
-        let push_clients = if is_test {
+        let push_clients = if is_test
+            || deployment.staging
+            || std::env::var("PUSH_DISABLED").as_deref() == Ok("1")
+        {
             None
         } else {
             match PushClients::from_env().await {
@@ -152,7 +150,7 @@ impl Context {
 
         let s3_access_key = std::env::var("S3_ACCESS_KEY")?;
         let s3_secret_key = std::env::var("S3_SECRET_KEY")?;
-        let (s3_url, s3_console_url) = if debug.service_urls {
+        let (_s3_url, s3_console_url) = if debug.service_urls {
             ("http://fed-s3:9000", "http://fed-s3:9001")
         } else if cfg!(debug_assertions) {
             ("http://localhost:9000", "http://localhost:9001")
@@ -160,11 +158,11 @@ impl Context {
             ("http://fed-s3:9000", "http://fed-s3:9001")
         };
         let s3_image_bucket = s3::Bucket::new(
-            "image",
+            &std::env::var("S3_BUCKET").unwrap_or_else(|_| "image".to_owned()),
             s3::Region::Custom {
                 // region: "tappen-1".to_owned(),
-                region: "us-east-1".to_owned(),
-                endpoint: s3_url.to_owned(),
+                region: std::env::var("S3_REGION").unwrap_or_else(|_| "eu-west-1".to_owned()),
+                endpoint: std::env::var("S3_ENDPOINT")?,
             },
             s3::creds::Credentials::new(
                 Some(&s3_access_key),
@@ -175,8 +173,7 @@ impl Context {
             )?,
         )?
         .with_path_style();
-        let s3_image_public_url = std::env::var("S3_PUBLIC_URL")
-            .unwrap_or_else(|_| s3_image_bucket.url())
+        let s3_image_public_url = std::env::var("S3_PUBLIC_URL")?
             .trim_end_matches('/')
             .to_owned();
 
@@ -217,6 +214,7 @@ impl Context {
         let context = Self {
             db,
             debug,
+            deployment,
             encryption_key,
             transactions_api,
             transactions_client: client,

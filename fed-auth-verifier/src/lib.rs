@@ -51,33 +51,23 @@ pub fn eddsa_to_jwk(key: &VerifyingKey) -> Jwk {
 pub trait AuthContextProvider: Clone {
     /// This MUST be an url which returns a set of Json Web Keys.
     /// This MUST use HTTPS in production.
-    fn url(service_urls: bool) -> String;
+    /// # Errors
+    /// Returns an error when the required JWKS URL is missing.
+    fn url(service_urls: bool) -> color_eyre::Result<String>;
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct AuthUrl;
 impl AuthContextProvider for AuthUrl {
-    fn url(service_urls: bool) -> String {
-        if service_urls {
-            "https://fed-auth:8051/oidc/v1/certs".to_owned()
-        } else if cfg!(debug_assertions) {
-            "https://localhost:8051/oidc/v1/certs".to_owned()
-        } else {
-            "https://api.auth.teknologappen.se/oidc/v1/certs".to_owned()
-        }
+    fn url(_service_urls: bool) -> color_eyre::Result<String> {
+        Ok(std::env::var("AUTH_JWKS_URL")?)
     }
 }
 #[derive(Clone, Copy, Debug)]
 pub struct TransactionsUrl;
 impl AuthContextProvider for TransactionsUrl {
-    fn url(service_urls: bool) -> String {
-        if service_urls {
-            "https://transactions:8052/v0/jwks".to_owned()
-        } else if cfg!(debug_assertions) {
-            "https://localhost:8052/v0/jwks".to_owned()
-        } else {
-            "https://transactions.teknologappen.se/v0/jwks".to_owned()
-        }
+    fn url(_service_urls: bool) -> color_eyre::Result<String> {
+        Ok(std::env::var("TRANSACTIONS_JWKS_URL")?)
     }
 }
 
@@ -103,6 +93,7 @@ pub struct JwkContext<Url: Clone> {
     jwks: JwkSet,
     validation: Validation,
     debug: bool,
+    staging: bool,
     #[cfg(debug_assertions)]
     testing: bool,
     phantom: PhantomData<Url>,
@@ -120,12 +111,19 @@ impl<Url: AuthContextProvider + 'static> JwkContext<Url> {
         debug: bool,
         service_urls: bool,
     ) -> color_eyre::Result<Self> {
+        let url = Url::url(service_urls)?;
+        let staging = std::env::var("APP_ENV").as_deref() == Ok("staging");
+        let issuer = if std::any::TypeId::of::<Url>() == std::any::TypeId::of::<AuthUrl>() {
+            Some(std::env::var("AUTH_PUBLIC_URL")?)
+        } else {
+            None
+        };
         let client = reqwest::Client::builder()
             .tls_danger_accept_invalid_certs(debug)
             .build()?;
         let retries = if debug { 1 } else { 10 };
         let resp = match retry(
-            || client.get(Url::url(service_urls)).send(),
+            || client.get(&url).send(),
             retries,
             std::time::Duration::from_secs(1),
         )
@@ -148,7 +146,13 @@ impl<Url: AuthContextProvider + 'static> JwkContext<Url> {
                     if std::any::TypeId::of::<Url>() == std::any::TypeId::of::<TransactionsUrl>() {
                         warn!("All transaction callbacks will be allowed.");
                     }
-                    return Ok(Self::from_jwks(audience, JwkSet { keys: vec![] }, debug));
+                    return Ok(Self::from_jwks(
+                        audience,
+                        JwkSet { keys: vec![] },
+                        debug,
+                        staging,
+                        issuer.as_deref(),
+                    ));
                 }
                 return Err(err.into());
             }
@@ -156,18 +160,33 @@ impl<Url: AuthContextProvider + 'static> JwkContext<Url> {
         if resp.status() != poem::http::StatusCode::OK {
             return Err(color_eyre::eyre::Error::msg(format!(
                 "failed getting verifying key on url: {} with error {}",
-                Url::url(service_urls),
+                url,
                 resp.status()
             )));
         }
         let bytes = resp.bytes().await?;
         let jwks: JwkSet = serde_json::from_slice(&bytes)?;
-        Ok(Self::from_jwks(audience, jwks, debug))
+        Ok(Self::from_jwks(
+            audience,
+            jwks,
+            debug,
+            staging,
+            issuer.as_deref(),
+        ))
     }
     /// If audience is empty, it's not checked. Audience is your `client_id`.
-    pub fn from_jwks(audience: impl Into<String>, jwks: JwkSet, debug: bool) -> Self {
+    pub fn from_jwks(
+        audience: impl Into<String>,
+        jwks: JwkSet,
+        debug: bool,
+        staging: bool,
+        issuer: Option<&str>,
+    ) -> Self {
         let mut validation = Validation::new(Algorithm::EdDSA);
         validation.validate_nbf = true;
+        if let Some(issuer) = issuer {
+            validation.set_issuer(&[issuer]);
+        }
         let aud = audience.into();
         if aud.is_empty() {
             validation.validate_aud = false;
@@ -179,6 +198,7 @@ impl<Url: AuthContextProvider + 'static> JwkContext<Url> {
             #[cfg(debug_assertions)]
             testing: debug && jwks.keys.is_empty(),
             debug,
+            staging,
             jwks,
             validation,
             phantom: PhantomData,
@@ -280,7 +300,7 @@ impl User {
         }
 
         let data = decode_jwt::<Claims>(&token.token, context)?;
-        if !context.debug && data.claims.sub.starts_with("test:") {
+        if !context.debug && !context.staging && data.claims.sub.starts_with("test:") {
             use minilith_errors::MinilithEndpointError;
 
             return Err(MinilithEndpointError::unauthorized(

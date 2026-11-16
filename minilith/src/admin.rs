@@ -11,7 +11,6 @@ use fed_auth_verifier::User;
 use minilith_errors::{MinilithEndpointError, MinilithErrorResultExt as _, escape_email_html};
 use poem_openapi::payload::{Binary, Json, Response};
 use poem_openapi::{Enum, Object, OpenApi, param::Path};
-use s3::post_policy::PostPolicyExpiration;
 use sqlx::PgExecutor;
 use sqlx::postgres::types::PgMoney;
 use sqlx::types::Uuid;
@@ -81,6 +80,8 @@ pub struct ReportRequest {
 
 #[derive(Object)]
 struct ObjectUploadAllowanceRequest {
+    /// Required for signed PUT uploads; bytes of the final resized image.
+    size_bytes: Option<u32>,
     /// Must not contain the `.`. I.e. `jpg`, `JPEG`, `png` is ok.
     extension: String,
 }
@@ -88,6 +89,8 @@ struct ObjectUploadAllowanceRequest {
 /// <https://www.npmjs.com/package/@aws-sdk/s3-presigned-post>.
 #[derive(Object)]
 struct ObjectUploadAllowanceResponse {
+    /// POST uses multipart fields; PUT sends the file directly with the returned fields as headers.
+    method: String,
     url: String,
     fields: HashMap<String, String>,
     dynamic_fields: HashMap<String, String>,
@@ -437,6 +440,9 @@ async fn send_adminship_emails(
     affected_user_id: &str,
     change: AdminshipEmailChange,
 ) -> MinilithResult<()> {
+    if context.deployment.staging {
+        return Ok(());
+    }
     let Some(email_client) = context.email_client() else {
         return Ok(());
     };
@@ -2131,43 +2137,42 @@ impl Router {
         // 1 MB
         let max_size_bytes = 1024u32 * 1024;
         let key = format!("{uuid}.{}", body.extension);
-        let policy = s3::post_policy::PostPolicy::new(PostPolicyExpiration::ExpiresIn(60 * 5))
-            .condition(
-                s3::PostPolicyField::Key,
-                s3::PostPolicyValue::Exact(key.as_str().into()),
-            )
-            .wrap_err_internal("s3: bad key condition")?
-            .condition(
-                s3::PostPolicyField::ContentLengthRange,
-                s3::PostPolicyValue::Range(0, max_size_bytes),
-            )
-            .wrap_err_internal("s3: bad content length condition")?
-            .condition(
-                s3::PostPolicyField::ContentType,
-                s3::PostPolicyValue::StartsWith("image/".into()),
-            )
-            .wrap_err_internal("s3: bad content type condition")?
-            .sign(self.image_bucket().clone().into())
+        let size = body
+            .size_bytes
+            .filter(|size| *size > 0 && *size <= max_size_bytes)
+            .wrap_err_bad_frontend("size_bytes must be between 1 and 1048576 for PUT uploads")?;
+        let content_type = match body.extension.as_str() {
+            "jpg" | "jpeg" => "image/jpeg",
+            "png" => "image/png",
+            "webp" => "image/webp",
+            "avif" => "image/avif",
+            "svg" => "image/svg+xml",
+            _ => {
+                return Err(MinilithEndpointError::bad_frontend_code(
+                    "invalid extension",
+                    "",
+                ));
+            }
+        };
+        let mut headers = poem::http::HeaderMap::new();
+        headers.insert(
+            "content-type",
+            poem::http::HeaderValue::from_static(content_type),
+        );
+        headers.insert("content-length", size.into());
+        let url = self
+            .image_bucket()
+            .presign_put(&key, 300, Some(headers), None)
             .await
-            .wrap_err_internal("s3: failed to sign")?;
-
-        let mut dynamic_fields = policy.dynamic_fields;
-        // `content-length-range` is a POST-policy condition, not a form field:
-        // https://docs.aws.amazon.com/AmazonS3/latest/developerguide/sigv4-HTTPPOSTConstructPolicy.html
-        // rust-s3 0.37.2 nevertheless includes Range conditions in `dynamic_fields`:
-        // https://github.com/durch/rust-s3/blob/v0.37.2/src/post_policy.rs#L135-L148
-        dynamic_fields.remove("content-length-range");
-
+            .wrap_err_internal("s3: failed to sign PUT")?;
         sqlx::query!("insert into image_uploads (key) values ($1)", key)
             .execute(&self.db)
             .await?;
-
         Ok(Json(ObjectUploadAllowanceResponse {
-            // The signed policy covers the form fields. The browser sends them
-            // through the public proxy rather than the internal S3 hostname.
-            url: self.image_public_url().to_owned(),
-            fields: policy.fields,
-            dynamic_fields,
+            method: "PUT".to_owned(),
+            url,
+            fields: HashMap::from([("content-type".to_owned(), content_type.to_owned())]),
+            dynamic_fields: HashMap::new(),
             key,
             max_size_bytes,
         }))

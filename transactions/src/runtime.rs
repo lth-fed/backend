@@ -114,6 +114,9 @@ async fn fetch_transaction_info(ctx: &Context, txn: TxnData) -> MinilithResult<C
 ///
 /// DB errors.
 pub async fn initial_checks(ctx: &Arc<Context>) -> MinilithResult<()> {
+    if ctx.deployment.staging {
+        return Ok(());
+    }
     let unpaid_transactions = sqlx::query_as!(
         TxnData,
         "select id, provider as \"provider: Provider\", client_id, stripe_id

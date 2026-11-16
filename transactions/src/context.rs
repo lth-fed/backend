@@ -18,7 +18,7 @@ use stripe_misc::webhook_endpoint::CreateWebhookEndpointEnabledEvents;
 use tracing::error;
 use uuid::Uuid;
 
-use crate::api::{DOMAIN, STRIPE_WEBHOOK_PATH};
+use crate::api::STRIPE_WEBHOOK_PATH;
 
 use crate::receipt::OurWonderfulTypstWorldBase;
 use crate::{Provider, swish};
@@ -90,6 +90,7 @@ impl ClientStore<stripe::Client> {
         &self,
         db: &PgPool,
         client_id: &str,
+        public_url: &str,
     ) -> MinilithResult<impl Deref<Target = stripe::Client>> {
         if let Some(client) = self.0.get(client_id) {
             return Ok(client);
@@ -111,7 +112,7 @@ impl ClientStore<stripe::Client> {
             .build()
             .wrap_err_internal("l1: stripe: ClientBuilder failed")?;
 
-        let webhook_url = format!("{DOMAIN}/v0{STRIPE_WEBHOOK_PATH}");
+        let webhook_url = format!("{public_url}/v0{STRIPE_WEBHOOK_PATH}");
         let webhooks = stripe_misc::webhook_endpoint::ListWebhookEndpoint::new()
             .limit(100_i64)
             .send(&client)
@@ -162,6 +163,8 @@ impl ClientStore<stripe::Client> {
 pub struct Context {
     pub db: PgPool,
     pub debug: DebugConfig,
+    pub public_url: String,
+    pub deployment: bin_common::DeploymentConfig,
 
     pub swish_clients: ClientStore<SwishClient>,
     pub stripe_clients: ClientStore<stripe::Client>,
@@ -196,6 +199,7 @@ impl Context {
     pub async fn new(test_db: Option<PgPool>) -> color_eyre::Result<Self> {
         let _: Result<PathBuf, dotenvy::Error> = dotenvy::dotenv();
         let debug = DebugConfig::from_env();
+        let deployment = bin_common::DeploymentConfig::from_env();
 
         drop(rustls::crypto::ring::default_provider().install_default());
 
@@ -227,6 +231,8 @@ impl Context {
         let context = Self {
             db,
             debug,
+            deployment,
+            public_url: std::env::var("TRANSACTIONS_PUBLIC_URL")?,
 
             swish_clients: ClientStore::default(),
             stripe_clients: ClientStore::default(),
@@ -244,13 +250,27 @@ impl Context {
         &self,
         client_id: &str,
     ) -> MinilithResult<impl Deref<Target = SwishClient>> {
+        if self.deployment.staging {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "live payment providers disabled in staging",
+                "",
+            ));
+        }
         self.swish_clients.get(&self.db, client_id).await
     }
     pub(crate) async fn get_stripe_client(
         &self,
         client_id: &str,
     ) -> MinilithResult<impl Deref<Target = stripe::Client>> {
-        self.stripe_clients.get(&self.db, client_id).await
+        if self.deployment.staging {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "live payment providers disabled in staging",
+                "",
+            ));
+        }
+        self.stripe_clients
+            .get(&self.db, client_id, &self.public_url)
+            .await
     }
 
     async fn cancel_swish_transaction(

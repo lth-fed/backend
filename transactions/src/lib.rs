@@ -107,7 +107,9 @@ pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl En
     }
 
     let api_service = OpenApiService::new(
-        api::Route { context },
+        api::Route {
+            context: Arc::clone(&context),
+        },
         env!("CARGO_PKG_NAME"),
         env!("CARGO_PKG_VERSION"),
     )
@@ -117,6 +119,10 @@ pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl En
     let spec = api_service.spec_endpoint();
 
     let cors = Cors::new()
+        .allow_origins(context.deployment.cors_origins(&[
+            "https://app.teknologappen.se",
+            "https://admin.teknologappen.se",
+        ]))
         .allow_method(Method::GET)
         .allow_method(Method::POST)
         .allow_header("content-type")

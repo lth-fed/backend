@@ -37,7 +37,7 @@ const TEKNOLOGAPPEN_ALLOWED_DOMAINS: &[&str] = &[
     "tappen://oauth_callback",
 ];
 /// `(client_id, allowed_domains[])[]`.
-const ALLOWED_DOMAINS: &[(&str, &[&str])] = &[
+pub(crate) const ALLOWED_DOMAINS: &[(&str, &[&str])] = &[
     ("teknologappen", TEKNOLOGAPPEN_ALLOWED_DOMAINS),
     ("esek", &["https://auth.esek.se"]),
     ("fsek", &["https://fsektionen.se"]),
@@ -78,25 +78,19 @@ fn is_debug_domain(context: &Context, domain: &Uri) -> bool {
             && service_domains
                 .iter()
                 .any(|allowed| eq_uri_domain(domain, allowed)))
-        || eq_uri_domain(domain, context.api_domain)
-        || eq_uri_domain(domain, context.website_domain)
+        || eq_uri_domain(domain, &context.api_domain)
+        || eq_uri_domain(domain, &context.website_domain)
 }
 fn is_allowed_domain(context: &Context, client_id: &str, domain: &Uri) -> bool {
     if is_debug_domain(context, domain) {
         return true;
     }
-    ALLOWED_DOMAINS.iter().any(|(cid, allowed)| {
-        *cid == client_id && allowed.iter().any(|allowed| eq_uri_domain(domain, allowed))
-    })
+    context.configured_origin(client_id, domain)
 }
 fn is_teknologappen_domain(context: &Context, domain: &Uri) -> bool {
-    if is_debug_domain(context, domain) {
-        return true;
-    }
-    TEKNOLOGAPPEN_ALLOWED_DOMAINS
-        .iter()
-        .any(|allowed| eq_uri_domain(domain, allowed))
+    is_debug_domain(context, domain) || context.configured_origin("teknologappen", domain)
 }
+
 pub const ACCESS_TOKEN_VALID_FOR: u64 = 15 * 60;
 pub const CALLBACK_TOKEN_VALID_FOR: u64 = 60;
 
@@ -163,7 +157,6 @@ type OAuth2Result<T> = Result<T, OAuth2ApiResponse>;
 
 #[derive(Serialize)]
 struct IdTokenClaims {
-    iss: String,
     sub: String,
     auth_time: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -437,6 +430,7 @@ impl MainRouter {
         conn.commit().await.map_err(OAuth2ApiResponse::db)?;
 
         let claims = jwt::StandardClaims::new(
+            &self.api_domain,
             &row.client_id,
             ACCESS_TOKEN_VALID_FOR,
             jwt::AccesTokenClaims {
@@ -448,10 +442,10 @@ impl MainRouter {
 
         #[allow(clippy::cast_sign_loss, reason = "we are taking the abs before!")]
         let id_token = jwt::StandardClaims::new(
+            &self.api_domain,
             row.client_id,
             ACCESS_TOKEN_VALID_FOR,
             IdTokenClaims {
-                iss: self.api_domain.to_owned(),
                 sub: user_id,
                 auth_time: (row.auth_time - OffsetDateTime::UNIX_EPOCH)
                     .whole_seconds()
@@ -534,10 +528,10 @@ impl MainRouter {
 
         #[allow(clippy::cast_sign_loss, reason = "we are taking the abs before!")]
         let id_token = jwt::StandardClaims::new(
+            &self.api_domain,
             &session.session.client_id,
             ACCESS_TOKEN_VALID_FOR,
             IdTokenClaims {
-                iss: self.api_domain.to_owned(),
                 sub: session.user.sub.clone(),
                 auth_time: (row.auth_time - OffsetDateTime::UNIX_EPOCH)
                     .whole_seconds()
@@ -547,6 +541,7 @@ impl MainRouter {
         );
 
         let claims = jwt::StandardClaims::new(
+            &self.api_domain,
             session.session.client_id,
             ACCESS_TOKEN_VALID_FOR,
             jwt::AccesTokenClaims {
@@ -813,7 +808,7 @@ impl MainRouter {
                 let redirect = format!("{}/providers/email/?code={code}", self.website_domain);
                 (code.to_string(), redirect)
             }
-            "test" if self.debug.enabled => {
+            "test" if self.debug.enabled || self.deployment.staging => {
                 let code = Uuid::new_v4();
                 let redirect = format!("{}/providers/test/?code={code}", self.website_domain);
                 (code.to_string(), redirect)
@@ -860,7 +855,7 @@ impl MainRouter {
         let ctx = OAuth2ErrorCtx(ru, self, "/oidc/v1/confirm-datasharing");
         if headers
             .get("origin")
-            .is_some_and(|origin| origin != self.website_domain)
+            .is_some_and(|origin| origin != self.website_domain.as_str())
         {
             return oauth2error_redirect(
                 OAuth2ErrorKind::InvalidRequest,

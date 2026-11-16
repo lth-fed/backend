@@ -370,3 +370,32 @@ UrkDO/9W4mZORClN3knxEFSTlYi8YOboxdlynpFfhcs82wFChs+Ydp1eEsVHAqtu
 T+uzn0sroycBiBfVB949LExnzGDFUkhG0i2c2InarQYLTsIyHCIDEA==
 -----END RSA PRIVATE KEY-----
 ";
+
+/// Deployment settings are captured once during service context creation.
+#[derive(Clone, Debug, Default)]
+pub struct DeploymentConfig {
+    pub staging: bool,
+    pub cors_origins: Option<Vec<String>>,
+}
+impl DeploymentConfig {
+    #[must_use]
+    pub fn from_env() -> Self {
+        Self {
+            staging: std::env::var("APP_ENV").as_deref() == Ok("staging"),
+            cors_origins: std::env::var("CORS_ALLOWED_ORIGINS").ok().map(|value| {
+                value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|origin| !origin.is_empty())
+                    .map(str::to_owned)
+                    .collect()
+            }),
+        }
+    }
+    #[must_use]
+    pub fn cors_origins(&self, defaults: &[&str]) -> Vec<String> {
+        self.cors_origins
+            .clone()
+            .unwrap_or_else(|| defaults.iter().map(|origin| (*origin).to_owned()).collect())
+    }
+}

@@ -149,7 +149,7 @@ pub async fn get_endpoint(
     let ui = api_service.swagger_ui();
     let spec = api_service.spec_endpoint();
 
-    let cors = minilith_cors(context.debug);
+    let cors = minilith_cors(context.debug, &context.deployment);
 
     Ok(Route::new()
         .nest(
@@ -166,7 +166,10 @@ pub async fn get_endpoint(
         .with(cors))
 }
 
-fn minilith_cors(debug: bin_common::DebugConfig) -> Cors {
+fn minilith_cors(
+    debug: bin_common::DebugConfig,
+    deployment: &bin_common::DeploymentConfig,
+) -> Cors {
     let mut allowed_origins = vec![
         "https://app.teknologappen.se",
         "https://admin.teknologappen.se",
@@ -178,7 +181,7 @@ fn minilith_cors(debug: bin_common::DebugConfig) -> Cors {
         allowed_origins.extend(["http://frontend:5173", "http://admin-frontend:5175"]);
     }
     Cors::new()
-        .allow_origins(allowed_origins)
+        .allow_origins(deployment.cors_origins(&allowed_origins))
         .allow_method(Method::GET)
         .allow_method(Method::POST)
         .allow_method(Method::PUT)

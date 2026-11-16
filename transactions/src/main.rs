@@ -5,6 +5,11 @@ use transactions::get_endpoint;
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
     color_eyre::install()?;
+    if std::env::var("MIGRATE_ONLY").as_deref() == Ok("1") {
+        let database = std::env::var("DATABASE_URL")?;
+        bin_common::setup_db(&database, Some(sqlx::migrate!("./migrations")), 1).await?;
+        return Ok(());
+    }
     Server::new(listeners(8002))
         .run_with_graceful_shutdown(
             get_endpoint(None).await.inspect_err(|error| {

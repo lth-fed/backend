@@ -112,7 +112,7 @@ impl MainRouter {
             "n" => return Ok(Some(Guild::Ing)),
             _ => {
                 body.make_ascii_lowercase();
-                return Ok(body.contains("doct").then_some(Guild::Doct))
+                return Ok(body.contains("doct").then_some(Guild::Doct));
             }
         };
         Ok(Some(guild))
@@ -128,7 +128,7 @@ impl MainRouter {
     ) -> MinilithResult<PlainText<String>> {
         if headers
             .get("origin")
-            .is_some_and(|origin| origin != self.website_domain)
+            .is_some_and(|origin| origin != self.website_domain.as_str())
         {
             return Err(MinilithEndpointError::bad_frontend_code(
                 "origin has to be from our domain",
@@ -205,7 +205,7 @@ impl MainRouter {
     ) -> MinilithResult<()> {
         if headers
             .get("origin")
-            .is_some_and(|origin| origin != self.website_domain)
+            .is_some_and(|origin| origin != self.website_domain.as_str())
         {
             return Err(MinilithEndpointError::bad_frontend_code(
                 "origin has to be from our domain",
@@ -268,7 +268,7 @@ impl MainRouter {
     ) -> MinilithResult<PlainText<String>> {
         if headers
             .get("origin")
-            .is_some_and(|origin| origin != self.website_domain)
+            .is_some_and(|origin| origin != self.website_domain.as_str())
         {
             return Err(MinilithEndpointError::bad_frontend_code(
                 "origin has to be from our domain",
@@ -314,7 +314,7 @@ impl MainRouter {
     ) -> MinilithResult<PlainText<String>> {
         if headers
             .get("origin")
-            .is_some_and(|origin| origin != self.website_domain)
+            .is_some_and(|origin| origin != self.website_domain.as_str())
         {
             return Err(MinilithEndpointError::bad_frontend_code(
                 "origin has to be from our domain",
@@ -324,6 +324,12 @@ impl MainRouter {
         let Some(session) = self.get_session(&body.code).await? else {
             return Err(MinilithEndpointError::unauthorized("code not valid", ""));
         };
+        if !self.debug.enabled && !self.deployment.staging {
+            return Err(MinilithEndpointError::unauthorized(
+                "test login disabled",
+                "",
+            ));
+        }
         let sub = format!("test:{}", body.stil_id);
         let user = ValidatedUser {
             sub,
@@ -356,6 +362,7 @@ impl MainRouter {
         if let Some(cb_url) = body.server_callback {
             let token = jwt::encode(
                 &jwt::StandardClaims::new(
+                    &self.api_domain,
                     &row.client_id,
                     CALLBACK_TOKEN_VALID_FOR,
                     &ValidatedUser {
@@ -391,6 +398,7 @@ impl MainRouter {
         }
 
         let claims = jwt::StandardClaims::new(
+            &self.api_domain,
             row.client_id,
             ACCESS_TOKEN_VALID_FOR,
             jwt::AccesTokenClaims { sub: row.user_id },

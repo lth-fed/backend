@@ -110,8 +110,10 @@ pub(crate) struct Context {
     pub reqwest_client: reqwest::Client,
     pub email_client: Option<EmailClient>,
     pub debug: DebugConfig,
-    pub api_domain: &'static str,
-    pub website_domain: &'static str,
+    pub deployment: bin_common::DeploymentConfig,
+    pub api_domain: String,
+    pub allowed_origins: std::collections::HashMap<String, std::collections::HashSet<String>>,
+    pub website_domain: String,
 
     // keys
     pub private_key: EncodingKey,
@@ -124,6 +126,15 @@ pub(crate) struct Context {
     pub error_counter: opentelemetry::metrics::Counter<u64>,
 }
 impl Context {
+    pub fn configured_origin(&self, client: &str, uri: &poem::http::Uri) -> bool {
+        let (Some(scheme), Some(authority)) = (uri.scheme_str(), uri.authority()) else {
+            return false;
+        };
+        self.allowed_origins
+            .get(client)
+            .is_some_and(|origins| origins.contains(&format!("{scheme}://{authority}")))
+    }
+
     fn get_jwt_keys() -> color_eyre::Result<(EncodingKey, JwkSet)> {
         let key = std::env::var("PRIVATE_KEY").wrap_err("`PRIVATE_KEY` not detected")?;
         let key = base64::prelude::BASE64_STANDARD
@@ -143,18 +154,9 @@ impl Context {
     pub async fn new(test_db: Option<PgPool>) -> color_eyre::Result<Self> {
         let _: Result<PathBuf, dotenvy::Error> = dotenvy::dotenv();
         let debug = DebugConfig::from_env();
-        let api_domain = if debug.service_urls {
-            "http://localhost:8001"
-        } else if cfg!(debug_assertions) {
-            "https://localhost:8051"
-        } else {
-            "https://api.auth.teknologappen.se"
-        };
-        let website_domain = if debug.enabled {
-            "http://localhost:5174"
-        } else {
-            "https://auth.teknologappen.se"
-        };
+        let deployment = bin_common::DeploymentConfig::from_env();
+        let api_domain = std::env::var("AUTH_PUBLIC_URL")?;
+        let website_domain = std::env::var("AUTH_WEBSITE_URL")?;
 
         let email_client = if test_db.is_some() {
             None
@@ -191,17 +193,49 @@ impl Context {
             .tls_danger_accept_invalid_certs(debug.enabled)
             .build()?;
 
-        let (sp, saml_pk) = saml2::get_service_provider(api_domain).await?;
+        let (sp, saml_pk) = saml2::get_service_provider(&api_domain).await?;
 
         // so they are grouped with the usual poem errors:
         // https://docs.rs/poem/latest/src/poem/middleware/opentelemetry_metrics.rs.html
         let meter = opentelemetry::global::meter("poem");
+        let origin_config = std::env::var("OIDC_ALLOWED_ORIGINS").unwrap_or_else(|_| {
+            crate::oidc::ALLOWED_DOMAINS
+                .iter()
+                .map(|(client, origins)| format!("{client}={}", origins.join(",")))
+                .collect::<Vec<_>>()
+                .join(";")
+        });
+        let mut allowed_origins =
+            std::collections::HashMap::<String, std::collections::HashSet<String>>::new();
+        for entry in origin_config
+            .split(';')
+            .filter(|entry| !entry.trim().is_empty())
+        {
+            let (client, origins) = entry
+                .split_once('=')
+                .ok_or_else(|| color_eyre::eyre::eyre!("Invalid OIDC_ALLOWED_ORIGINS entry"))?;
+            for origin in origins.split(',') {
+                let uri: poem::http::Uri = origin.trim().parse()?;
+                let scheme = uri
+                    .scheme_str()
+                    .ok_or_else(|| color_eyre::eyre::eyre!("OIDC origin needs a scheme"))?;
+                let authority = uri
+                    .authority()
+                    .ok_or_else(|| color_eyre::eyre::eyre!("OIDC origin needs an authority"))?;
+                allowed_origins
+                    .entry(client.trim().to_owned())
+                    .or_default()
+                    .insert(format!("{scheme}://{authority}"));
+            }
+        }
         let context = Context {
             db,
             reqwest_client: client,
             email_client,
             debug,
+            deployment,
             api_domain,
+            allowed_origins,
             website_domain,
             private_key,
             jwks,
@@ -375,6 +409,7 @@ impl Context {
             if let Some(cb_url) = &session.callback {
                 let token = jwt::encode(
                     &jwt::StandardClaims::new(
+                        &self.api_domain,
                         &session.client_id,
                         CALLBACK_TOKEN_VALID_FOR,
                         &session.user,

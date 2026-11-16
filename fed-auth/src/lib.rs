@@ -41,9 +41,14 @@ pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl po
         runtime::spawn(&context).await;
     }
 
-    let auth_ctx =
-        JwkContext::<AuthUrl>::from_jwks("", context.jwks.clone(), context.debug.enabled);
-    let server_url = context.api_domain;
+    let auth_ctx = JwkContext::<AuthUrl>::from_jwks(
+        "",
+        context.jwks.clone(),
+        context.debug.enabled,
+        context.deployment.staging,
+        Some(&context.api_domain),
+    );
+    let server_url = &context.api_domain;
     let api_service = OpenApiService::new(
         api::MainRouter {
             context: Arc::clone(&context),
@@ -88,7 +93,22 @@ pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl po
     // this url is just for the Swagger UI
     .server(format!("{server_url}/.well-known/"));
 
+    let mut origins = vec![
+        context.website_domain.as_str(),
+        "https://app.teknologappen.se",
+        "https://admin.teknologappen.se",
+        "https://auth.esek.se",
+        "https://fsektionen.se",
+        "https://auth.dsek.se",
+        "https://dsek.se",
+        "capacitor://localhost",
+        "https://localhost",
+    ];
+    if context.debug.enabled {
+        origins.extend(["http://localhost:5173", "http://localhost:5175"]);
+    }
     let cors = Cors::new()
+        .allow_origins(context.deployment.cors_origins(&origins))
         .allow_method(Method::GET)
         .allow_method(Method::POST)
         .allow_header("content-type")
@@ -168,6 +188,6 @@ pub(crate) struct WellKnownRouter {
 impl WellKnownRouter {
     #[oai(path = "/openid-configuration", method = "get")]
     async fn oidc(&self) -> Json<WellKnownOidc> {
-        Json(WellKnownOidc::new(self.context.api_domain))
+        Json(WellKnownOidc::new(&self.context.api_domain))
     }
 }

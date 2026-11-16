@@ -29,7 +29,6 @@ use uuid::Uuid;
 use crate::context::CancelTransactionData;
 use crate::{ApiAuth, CallbackEvent, Context, Provider, callback, receipt, swish};
 
-pub const DOMAIN: &str = "https://transactions.teknologappen.se";
 pub const STRIPE_WEBHOOK_PATH: &str = "/stripe-callback";
 pub const SWISH_WEBHOOK_PATH: &str = "/swish-callback";
 
@@ -310,7 +309,7 @@ impl Route {
         body: Json<CreatePaymentRequest>,
     ) -> MinilithResult<()> {
         let amount = body.total_amount();
-        if amount != 0 {
+        if amount != 0 && !self.deployment.staging {
             return Err(MinilithEndpointError::bad_user_input(
                 "amount",
                 "",
@@ -365,6 +364,12 @@ impl Route {
         auth: ApiAuth,
         body: Json<CreatePaymentRequest>,
     ) -> MinilithResult<Json<CreatePaymentResponseSwish>> {
+        if self.deployment.staging {
+            self.free_payment(auth, body).await?;
+            return Ok(Json(CreatePaymentResponseSwish {
+                payment_request_token: "staging-paid".to_owned(),
+            }));
+        }
         let total_amount = body.total_amount();
         if total_amount < 100 {
             return Err(MinilithEndpointError::bad_user_input(
@@ -392,7 +397,7 @@ impl Route {
                 payee_alias: client.number.clone(),
                 amount,
                 currency: "SEK".to_owned(),
-                callback_url: format!("{DOMAIN}/v0{SWISH_WEBHOOK_PATH}"),
+                callback_url: format!("{}/v0{SWISH_WEBHOOK_PATH}", self.public_url),
                 message,
                 callback_identifier: swish::uuid_to_string(cb_ident),
             };
@@ -525,6 +530,11 @@ impl Route {
         auth: ApiAuth,
         body: Json<CreatePaymentRequest>,
     ) -> MinilithResult<Json<CreatePaymentResponseStripe>> {
+        if self.deployment.staging {
+            let redirect_url = body.stripe_success_url.clone().unwrap_or_default();
+            self.free_payment(auth, body).await?;
+            return Ok(Json(CreatePaymentResponseStripe { redirect_url }));
+        }
         let stripe_success_url = body
             .stripe_success_url
             .as_ref()
