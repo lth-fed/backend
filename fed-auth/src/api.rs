@@ -112,7 +112,7 @@ impl MainRouter {
             "n" => return Ok(Some(Guild::Ing)),
             _ => {
                 body.make_ascii_lowercase();
-                return Ok(body.contains("doct").then_some(Guild::Doct))
+                return Ok(body.contains("doct").then_some(Guild::Doct));
             }
         };
         Ok(Some(guild))
