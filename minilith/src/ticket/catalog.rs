@@ -267,7 +267,7 @@ pub(super) async fn my_tickets(
                 owner_id = $1
                 and not exists (
                     select 1 from purchased_ticket_validations validation
-                    where validation.id = purchased_tickets.id
+                    where validation.purchased_ticket_id = purchased_tickets.id
                 )
                 and exists (
                     select 1 from ticket_kind_transfer_groups transfer

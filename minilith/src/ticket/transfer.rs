@@ -64,7 +64,9 @@ pub(super) async fn transfer(
         return Ok(());
     }
     if sqlx::query_scalar!(
-        "select exists (select 1 from purchased_ticket_validations where id = $1) as \"exists!\"",
+        "select exists (
+            select 1 from purchased_ticket_validations where purchased_ticket_id = $1
+        ) as \"exists!\"",
         body.purchased_ticket_id
     )
     .fetch_one(&mut txn.executor())
