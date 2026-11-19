@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily backup of Teknologappen data
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+RandomizedDelaySec=15m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

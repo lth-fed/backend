@@ -1,0 +1,8 @@
+[Unit]
+Description=Back up Postgres and S3 data
+After=teknologappen.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/teknologappen/backup.env
+ExecStart=/srv/teknologappen/backend/deploy/server/backup.sh

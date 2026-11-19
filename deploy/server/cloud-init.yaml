@@ -1,0 +1,46 @@
+#cloud-config
+# Paste as Hetzner "Cloud config" user data.
+# Replace every @@PLACEHOLDER@@ before use.
+# No secrets here: Hetzner stores user data.
+
+hostname: teknologappen
+timezone: Europe/Stockholm
+
+users:
+  - name: admin
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    lock_passwd: true
+    ssh_authorized_keys:
+      - "@@ADMIN_SSH_KEY@@"
+  - name: deploy
+    shell: /bin/bash
+    lock_passwd: true
+    ssh_authorized_keys:
+      - "@@DEPLOY_SSH_KEY@@"
+
+disable_root: true
+ssh_pwauth: false
+
+package_update: true
+package_upgrade: true
+packages:
+  - podman
+  - git
+  - restic
+  - unattended-upgrades
+  - apt-listchanges
+  - curl
+
+write_files:
+  - path: /etc/ssh/sshd_config.d/10-teknologappen.conf
+    content: |
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+
+runcmd:
+  - systemctl restart ssh
+  - git clone --branch "@@REPO_REF@@" "@@REPO_URL@@" /srv/teknologappen/backend
+  - /srv/teknologappen/backend/deploy/server/setup.sh

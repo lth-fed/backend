@@ -1,0 +1,22 @@
+[Unit]
+Description=Postgres
+
+[Container]
+ContainerName=fed-postgres
+Image=docker.io/library/postgres:18
+Network=teknologappen.network
+EnvironmentFile=/etc/teknologappen/postgres.env
+Environment=POSTGRES_DB=fed
+Volume=/fed/postgres:/var/lib/postgresql
+HealthCmd=pg_isready
+HealthInterval=5s
+HealthRetries=12
+# Dependents start once Postgres is healthy.
+Notify=healthy
+
+[Service]
+Restart=always
+TimeoutStartSec=300
+
+[Install]
+WantedBy=teknologappen.target

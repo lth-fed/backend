@@ -1,0 +1,7 @@
+http:
+  middlewares:
+    # Used by memos in compose.prod.yaml.
+    https-redirect:
+      redirectScheme:
+        scheme: https
+        permanent: true

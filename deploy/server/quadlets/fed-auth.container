@@ -1,0 +1,29 @@
+[Unit]
+Description=fed-auth
+Requires=fed-postgres.service
+After=fed-postgres.service fed-collector.service
+
+[Container]
+ContainerName=fed-auth
+# deploy.sh tags pulled images as :current.
+Image=localhost/fed-auth:current
+Pull=never
+Network=teknologappen.network
+Network=traefik.network
+EnvironmentFile=/etc/teknologappen/fed-auth.env
+Environment=OTEL_EXPORTER_OTLP_ENDPOINT=http://fed-collector:4317
+Label=traefik.enable=true
+Label=traefik.docker.network=traefik
+Label=traefik.http.routers.fed-auth.rule=Host(`api.auth.teknologappen.se`)
+Label=traefik.http.routers.fed-auth.entrypoints=websecure
+Label=traefik.http.routers.fed-auth.tls=true
+Label=traefik.http.routers.fed-auth.tls.certresolver=letsencrypt
+Label=traefik.http.routers.fed-auth.service=fed-auth
+Label=traefik.http.services.fed-auth.loadbalancer.server.port=8051
+Label=traefik.http.services.fed-auth.loadbalancer.server.scheme=https
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=teknologappen.target

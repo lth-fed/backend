@@ -1,0 +1,7 @@
+[Unit]
+Description=Teknologappen backend
+# Two instances allow rolling restarts.
+Wants=minilith@1.service minilith@2.service
+
+[Install]
+WantedBy=multi-user.target

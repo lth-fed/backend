@@ -1,0 +1,29 @@
+[Unit]
+Description=transactions
+Requires=fed-postgres.service
+After=fed-postgres.service fed-collector.service
+
+[Container]
+ContainerName=transactions
+# deploy.sh tags pulled images as :current.
+Image=localhost/transactions:current
+Pull=never
+Network=teknologappen.network
+Network=traefik.network
+EnvironmentFile=/etc/teknologappen/transactions.env
+Environment=OTEL_EXPORTER_OTLP_ENDPOINT=http://fed-collector:4317
+Label=traefik.enable=true
+Label=traefik.docker.network=traefik
+Label=traefik.http.routers.transactions.rule=Host(`transactions.teknologappen.se`)
+Label=traefik.http.routers.transactions.entrypoints=websecure
+Label=traefik.http.routers.transactions.tls=true
+Label=traefik.http.routers.transactions.tls.certresolver=letsencrypt
+Label=traefik.http.routers.transactions.service=transactions
+Label=traefik.http.services.transactions.loadbalancer.server.port=8052
+Label=traefik.http.services.transactions.loadbalancer.server.scheme=https
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=teknologappen.target

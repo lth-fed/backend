@@ -1,0 +1,30 @@
+[Unit]
+Description=minilith instance %i
+Requires=fed-postgres.service
+After=fed-postgres.service fed-collector.service
+
+[Container]
+ContainerName=minilith-%i
+NetworkAlias=minilith
+# deploy.sh tags pulled images as :current.
+Image=localhost/minilith:current
+Pull=never
+Network=teknologappen.network
+Network=traefik.network
+EnvironmentFile=/etc/teknologappen/minilith.env
+Environment=OTEL_EXPORTER_OTLP_ENDPOINT=http://fed-collector:4317
+Label=traefik.enable=true
+Label=traefik.docker.network=traefik
+Label=traefik.http.routers.minilith.rule=Host(`api.teknologappen.se`)
+Label=traefik.http.routers.minilith.entrypoints=websecure
+Label=traefik.http.routers.minilith.tls=true
+Label=traefik.http.routers.minilith.tls.certresolver=letsencrypt
+Label=traefik.http.routers.minilith.service=minilith
+Label=traefik.http.services.minilith.loadbalancer.server.port=8050
+Label=traefik.http.services.minilith.loadbalancer.server.scheme=https
+Environment=S3_PUBLIC_URL=https://s3.teknologappen.se/image
+Volume=/etc/teknologappen/secrets/firebase-service-account.json:/run/secrets/firebase-service-account.json:ro
+Volume=/etc/teknologappen/secrets/AuthKey.p8:/run/secrets/AuthKey.p8:ro
+
+[Service]
+Restart=always
