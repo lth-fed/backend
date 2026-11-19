@@ -3,30 +3,31 @@ volumes:
   tempo-data:
   grafana-storage:
   loki-storage:
+  rustfs-storage:
 
 services:
   fed-postgres:
-    image: "postgres:18"
+    image: "docker.io/library/postgres:18"
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: fed
 
   fed-collector:
-    image: "otel/opentelemetry-collector:0.154.0"
+    image: "docker.io/otel/opentelemetry-collector:0.154.0"
     command: "--config=/etc/otel-collector.yaml"
     volumes:
       - ./otel-collector.yaml:/etc/otel-collector.yaml:ro
 
   fed-loki-init:
-    image: "busybox:1.37.0"
+    image: "docker.io/library/busybox:1.37.0"
     user: "0:0"
     command: ["chown", "-R", "10001:10001", "/var/loki"]
     volumes:
       - loki-storage:/var/loki
 
   fed-loki:
-    image: "grafana/loki:3.7.0"
+    image: "docker.io/grafana/loki:3.7.0"
     user: "10001:10001"
     command: "-config.file=/etc/loki/config.yaml -target=all"
     volumes:
@@ -38,7 +39,7 @@ services:
       fed-loki-init:
         condition: service_completed_successfully
   fed-grafana:
-    image: grafana/grafana-enterprise:13.0.3
+    image: docker.io/grafana/grafana-enterprise:13.0.3
     container_name: fed-grafana
     restart: unless-stopped
     environment:
@@ -52,7 +53,7 @@ services:
       - fed-tempo
       - fed-loki
   fed-prometheus:
-    image: prom/prometheus:v3.13.0
+    image: docker.io/prom/prometheus:v3.13.0
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
@@ -63,7 +64,7 @@ services:
     depends_on:
       - fed-collector
   fed-tempo:
-    image: "grafana/tempo:3.0.2"
+    image: "docker.io/grafana/tempo:3.0.2"
     command: "-target=all -config.file=/etc/tempo.yaml"
     volumes:
       - ./tempo.yaml:/etc/tempo.yaml
@@ -72,7 +73,7 @@ services:
       - fed-collector
 
   fed-s3:
-    image: rustfs/rustfs:latest
+    image: docker.io/rustfs/rustfs:latest
     # default password: rustfsadmin
     volumes:
       - rustfs-storage:/data

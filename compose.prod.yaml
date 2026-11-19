@@ -20,6 +20,7 @@ include:
   - compose.base.yaml
 
 networks:
+  default:
   traefik:
     external: true
     name: ${TRAEFIK_NETWORK:-traefik}
@@ -212,7 +213,7 @@ services:
       traefik.http.services.fed-s3-console.loadbalancer.server.port: "9001"
 
   memos:
-    image: neosmemo/memos:stable
+    image: docker.io/neosmemo/memos:stable
     container_name: memos
     restart: unless-stopped
     # ports:

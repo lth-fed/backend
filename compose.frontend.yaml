@@ -2,28 +2,28 @@ name: fed-frontend
 
 services:
   fed-frontend:
-    image: esekmacapar/fed-frontend:latest
+    image: docker.io/esekmacapar/fed-frontend:latest
     platform: linux/amd64
     restart: unless-stopped
     ports:
       - '5173:80'
 
   fed-auth-frontend:
-    image: esekmacapar/fed-auth-frontend:latest
+    image: docker.io/esekmacapar/fed-auth-frontend:latest
     platform: linux/amd64
     restart: unless-stopped
     ports:
       - '5174:80'
 
   fed-public:
-    image: esekmacapar/fed-public:latest
+    image: docker.io/esekmacapar/fed-public:latest
     platform: linux/amd64
     restart: unless-stopped
     ports:
       - '5176:80'
 
   fed-admin-frontend:
-    image: esekmacapar/fed-admin-frontend:latest
+    image: docker.io/esekmacapar/fed-admin-frontend:latest
     platform: linux/amd64
     restart: unless-stopped
     ports:
