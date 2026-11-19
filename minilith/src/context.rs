@@ -15,7 +15,7 @@ use sqlx::migrate;
 use tracing::{error, warn};
 use uuid::Uuid;
 
-use crate::push_notifications::{PushClients, PushPlatform, PushSendResult};
+use crate::push_notifications::{NotificationRow, PushClients, PushPlatform, PushSendResult};
 use crate::{PgPool, report};
 
 #[allow(
@@ -371,8 +371,7 @@ impl Context {
         &self,
         platform: PushPlatform,
         push_token: &str,
-        notification_id: Uuid,
-        activity_id: Option<Uuid>,
+        notification: &NotificationRow,
         title: &str,
         content: &str,
     ) -> MinilithResult<PushSendResult> {
@@ -383,14 +382,7 @@ impl Context {
             )
         })?;
         sender
-            .send(
-                platform,
-                push_token,
-                notification_id,
-                activity_id,
-                title,
-                content,
-            )
+            .send(platform, push_token, notification, title, content)
             .await
     }
 

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from notification_read_states\n            where user_id = $1 and read is null and not dismissed",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "69af7a3a2871952d159a873ce26c4a9f469e147b6ae9fee5712c8ee564450d18"
+}

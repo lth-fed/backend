@@ -1,0 +1,89 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n            details.id as \"id!\",\n            details.kind as \"kind!\",\n            details.audience,\n            details.activity_id,\n            details.group_id,\n            details.image_url,\n            details.sender as \"sender!: DIS\",\n            details.title as \"title!: DIS\",\n            details.content as \"content!: DIS\",\n            details.send_at as \"send_at!\",\n            coalesce(\n                state.read,\n                details.send_at <= coalesce(watermark.read_up_to, users.creation)\n            ) as \"read!\",\n            coalesce(state.dismissed, false) as \"dismissed!\"\n        from notification_recipients recipient\n        inner join notification_details details on details.id = recipient.notification_id\n        inner join users on users.id = recipient.user_id\n        left join notification_read_watermarks watermark on watermark.user_id = recipient.user_id\n        left join notification_read_states state\n            on state.user_id = recipient.user_id and state.notification_id = details.id\n        where recipient.user_id = $1\n        and details.sent\n        and (\n            ($2::uuid is null\n                and recipient.receives\n                and details.send_at >= now() - '6 months'::interval)\n            or details.activity_id = $2\n        )\n        order by details.send_at desc, details.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "kind!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "audience",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "activity_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "group_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 5,
+        "name": "image_url",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "sender!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 7,
+        "name": "title!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 8,
+        "name": "content!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 9,
+        "name": "send_at!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 10,
+        "name": "read!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 11,
+        "name": "dismissed!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      null,
+      null
+    ]
+  },
+  "hash": "bc943b6e04b2ecfad5fa64cba3e5267bf632fe6a277bc7becdd5f0bad91994f0"
+}

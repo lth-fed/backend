@@ -17,7 +17,7 @@ use super::{
 };
 use crate::{
     ContextWrapper, InternationalizedString as IS, MinilithEndpointError, MinilithResult,
-    push_notifications::{NotificationRow, PushDeviceRow, send_notifications},
+    push_notifications::{NotificationRow, PushDeviceRow, PushKind, send_notifications},
 };
 
 async fn release_next_ticket(ctx: &ContextWrapper) -> MinilithResult<ControlFlow<()>> {
@@ -63,6 +63,7 @@ async fn send_release_notifications(
     let removed1 = send_notifications(ctx, &notification, reservation_devices).await;
     let notification = NotificationRow {
         id,
+        kind: PushKind::ReservationQueue,
         activity_id: Some(activity_id),
         // people know where it's from since they just used the app
         sender: sqlx::types::Json(IS::empty()),

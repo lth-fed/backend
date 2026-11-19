@@ -55,8 +55,36 @@ pub(crate) struct PushDeviceRow {
     pub platform: PushPlatform,
     pub language: Vec<u8>,
 }
+/// What a push is about — sent as `kind` in the payload so apps can route a tap without guessing
+/// from which ids are present. Apps must treat an unknown kind as "open the inbox".
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PushKind {
+    /// News about an activity; in the history.
+    Activity,
+    /// An announcement from a group; in the history.
+    Group,
+    /// A reservation landed. Transactional: push only.
+    Reservation,
+    /// A place in the reservation queue. Transactional: push only.
+    ReservationQueue,
+    /// A ticket was transferred to the user. Transactional: push only.
+    Transfer,
+}
+impl PushKind {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Activity => "activity",
+            Self::Group => "group",
+            Self::Reservation => "reservation",
+            Self::ReservationQueue => "reservation_queue",
+            Self::Transfer => "transfer",
+        }
+    }
+}
+
 pub(crate) struct NotificationRow {
     pub id: Uuid,
+    pub kind: PushKind,
     pub activity_id: Option<Uuid>,
     pub sender: DIS,
     pub title: DIS,
@@ -202,14 +230,22 @@ impl PushClients {
         &self,
         platform: PushPlatform,
         push_token: &str,
-        notification_id: Uuid,
-        activity_id: Option<Uuid>,
+        notification: &NotificationRow,
         title: &str,
         content: &str,
     ) -> MinilithResult<PushSendResult> {
+        // The same keys on both platforms: `kind` and `notification_id` always, `activity_id` when
+        // there is one. The id lets an app mark the notification read when its push is tapped.
+        let mut data = HashMap::from([
+            ("kind".to_owned(), notification.kind.as_str().to_owned()),
+            ("notification_id".to_owned(), notification.id.to_string()),
+        ]);
+        if let Some(activity_id) = notification.activity_id {
+            data.insert("activity_id".to_owned(), activity_id.to_string());
+        }
         match platform {
             PushPlatform::Ios => {
-                let apns_id = notification_id.to_string();
+                let apns_id = notification.id.to_string();
                 let mut payload = DefaultNotificationBuilder::new()
                     .set_title(title)
                     .set_body(content)
@@ -223,10 +259,10 @@ impl PushClients {
                             ..NotificationOptions::default()
                         },
                     );
-                if let Some(activity_id) = activity_id {
+                for (key, value) in &data {
                     payload
-                        .add_custom_data("activity_id", &activity_id.to_string())
-                        .wrap_err_internal("failed to add activity id to APNs payload")?;
+                        .add_custom_data(key, value)
+                        .wrap_err_internal("failed to add custom data to APNs payload")?;
                 }
                 match self.apns.send(payload).await {
                     Ok(_) => {}
@@ -252,12 +288,7 @@ impl PushClients {
 
                 let mut message = FcmMessage::new();
                 message.set_notification(Some(notification));
-                if let Some(activity_id) = activity_id {
-                    message.set_data(Some(HashMap::from([(
-                        "activity_id".to_owned(),
-                        activity_id.to_string(),
-                    )])));
-                }
+                message.set_data(Some(data));
                 message.set_target(Target::Token(push_token.to_owned()));
 
                 if let Err(err) = self.fcm.send_notification(message).await {
@@ -341,8 +372,7 @@ pub(crate) async fn send_notifications(
             .send_notification(
                 device.platform,
                 &device.push_token,
-                notification.id,
-                notification.activity_id,
+                notification,
                 &title,
                 content,
             )
