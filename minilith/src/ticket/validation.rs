@@ -6,6 +6,7 @@ use poem_openapi::Object;
 use sqlx::types::time::OffsetDateTime;
 use uuid::Uuid;
 
+use super::apple_pass::verify_barcode_signature;
 use super::models::{Addon, AddonOption, PurchasedAddon};
 use crate::{
     ContextWrapper, DbInternationalizedString as DIS, InternationalizedString as IS, MinilithResult,
@@ -21,12 +22,18 @@ pub(super) struct ValidateActivity {
     image_url: String,
 }
 
-/// The frontend has to encode / decode the QR with both these datapoints, maybe through
-/// `<id>.<time>` or JSON.
+/// What a scanned QR code says. Exactly one of `created_at` and `pass_signature` is needed:
+///
+/// - The app's own code, `{"tid", "t"}`, changes every second, so a screenshot goes stale. Send
+///   `t` as `created_at`.
+/// - A wallet pass's code, `{"tid", "sig"}` (`/tickets/{id}/apple-pass`), can't change, so it is
+///   signed for the ticket's current owner instead and stops validating once the ticket is
+///   transferred. Send `sig` as `pass_signature`.
 #[derive(Object)]
 pub(super) struct ValidateRequest {
     purchased_ticket_id: Uuid,
-    created_at: OffsetDateTime,
+    created_at: Option<OffsetDateTime>,
+    pass_signature: Option<String>,
 }
 #[derive(Object)]
 pub(super) struct Validation {
@@ -97,9 +104,13 @@ pub(super) async fn validate(
     // TODO(frontend-hack: 25/08/2026): some people are insane and don't have accurate time on their phone, so we have to
     // increase leeway before we implement server side time adjustment
     let leeway = 5 * time::Duration::MINUTE;
-    if body.created_at < now.saturating_sub(leeway) || body.created_at > now.saturating_add(leeway)
-    {
-        return Ok(ValidateResponse::not_valid());
+    match (body.created_at, &body.pass_signature) {
+        // Checked below, once the owner is known.
+        (_, Some(_)) => {}
+        (Some(created_at), None)
+            if created_at >= now.saturating_sub(leeway)
+                && created_at <= now.saturating_add(leeway) => {}
+        _ => return Ok(ValidateResponse::not_valid()),
     }
     let Some(row) = sqlx::query!(
         "select owner_id, purchaser_id, owner.name as oname, purchaser.name as pname,
@@ -119,6 +130,12 @@ pub(super) async fn validate(
     else {
         return Ok(ValidateResponse::not_valid());
     };
+    if let Some(signature) = &body.pass_signature
+        && !verify_barcode_signature(ctx, body.purchased_ticket_id, &row.owner_id, signature)?
+    {
+        // A pass made for an earlier owner, or a forged one.
+        return Ok(ValidateResponse::not_valid());
+    }
     let previous_verifications = sqlx::query!(
         "select timestamp from purchased_ticket_validations where purchased_ticket_id = $1",
         body.purchased_ticket_id
