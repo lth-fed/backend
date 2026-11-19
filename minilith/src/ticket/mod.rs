@@ -20,6 +20,7 @@ use crate::{ContextWrapper, MinilithEndpointError, MinilithResult};
 mod access;
 mod allocation;
 mod api;
+mod apple_pass;
 mod catalog;
 mod flow;
 mod models;

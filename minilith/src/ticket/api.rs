@@ -9,7 +9,7 @@ use uuid::Uuid;
 use super::transfer::TransferRequest;
 use super::validation::{ValidateActivity, ValidateRequest, ValidateResponse};
 use super::{
-    Router, catalog,
+    Router, apple_pass, catalog,
     models::{
         BuyTicketRequest, BuyTicketResponse, Kind, PurchaseStatus, PurchasedTicket, QueueRequest,
         QueueResponse,
@@ -36,6 +36,20 @@ impl Router {
         Path(id): Path<Uuid>,
     ) -> MinilithResult<Response<Binary<poem::Body>>> {
         catalog::receipt(self, auth, id).await
+    }
+
+    /// An Apple Wallet pass (`application/vnd.apple.pkpass`) for a ticket the caller holds.
+    /// Its barcode is `{"tid": <ticket id>, "sig": <signature>}`, which `/tickets/validate`
+    /// accepts as `pass_signature` until the ticket changes owner.
+    ///
+    /// 404 when this server isn't configured to issue passes.
+    #[oai(path = "/:id/apple-pass", method = "get")]
+    async fn apple_pass(
+        &self,
+        auth: User,
+        Path(id): Path<Uuid>,
+    ) -> MinilithResult<Response<Binary<Vec<u8>>>> {
+        apple_pass::apple_pass(self, auth, id).await
     }
 
     #[oai(path = "/ticket-kind/:id", method = "get")]

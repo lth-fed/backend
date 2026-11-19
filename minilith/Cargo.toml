@@ -13,10 +13,12 @@ bytes.workspace = true
 # the only purpose is to anonymise it.
 chacha20 = "0.10.0"
 color-eyre.workspace = true
+crc32fast = "1.5.0"
 dotenvy.workspace = true
 fcm-service = "0.2.3"
 fed-auth-verifier.path = "../fed-auth-verifier"
 minilith-errors = { version = "0.1.0", path = "../minilith-errors", features = ["sqlx"] }
+openssl = "0.10.79"
 opentelemetry.workspace = true
 opentelemetry-appender-tracing.workspace = true
 opentelemetry-otlp.workspace = true
