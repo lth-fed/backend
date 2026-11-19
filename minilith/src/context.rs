@@ -15,6 +15,7 @@ use sqlx::migrate;
 use tracing::{error, warn};
 use uuid::Uuid;
 
+use crate::apple_wallet::ApplePassSigner;
 use crate::push_notifications::{PushClients, PushPlatform, PushSendResult};
 use crate::{PgPool, report};
 
@@ -39,6 +40,7 @@ pub struct Context {
     auth_admin_token: Uuid,
 
     push_clients: Option<PushClients>,
+    apple_passes: Option<ApplePassSigner>,
 
     email_client: Option<EmailClient>,
     accountant: Option<String>,
@@ -167,6 +169,20 @@ impl Context {
             }
         };
 
+        // Like push: a server without the certificate runs, it just offers no passes. A broken
+        // configuration is logged rather than fatal for the same reason.
+        let apple_passes = if is_test {
+            None
+        } else {
+            ApplePassSigner::from_env().unwrap_or_else(|error| {
+                if !debug.enabled {
+                    alert(AlertLevel::L2, "Apple Wallet pass setup failed. See logs");
+                }
+                error!(?error, "Apple Wallet passes disabled because setup failed");
+                None
+            })
+        };
+
         let s3_access_key = std::env::var("S3_ACCESS_KEY")?;
         let s3_secret_key = std::env::var("S3_SECRET_KEY")?;
         let (s3_url, s3_console_url) = if debug.service_urls {
@@ -243,6 +259,7 @@ impl Context {
             auth_admin_token,
 
             push_clients,
+            apple_passes,
 
             email_client,
             accountant,
@@ -252,6 +269,26 @@ impl Context {
             s3_image_public_url,
         };
         Ok(context)
+    }
+
+    /// The pass signer, when this server is configured to issue Apple Wallet passes.
+    #[must_use]
+    pub fn apple_passes(&self) -> Option<&ApplePassSigner> {
+        self.apple_passes.as_ref()
+    }
+
+    /// The signature in a wallet pass's barcode for `ticket_id` held by `owner_id`; see
+    /// [`crate::apple_wallet::barcode_signature`].
+    ///
+    /// # Errors
+    ///
+    /// OpenSSL failing to compute an HMAC.
+    pub fn pass_barcode_signature(
+        &self,
+        ticket_id: Uuid,
+        owner_id: &str,
+    ) -> color_eyre::Result<String> {
+        crate::apple_wallet::barcode_signature(&self.encryption_key, ticket_id, owner_id)
     }
 
     /// Pads and encrypts any data using chacha20.

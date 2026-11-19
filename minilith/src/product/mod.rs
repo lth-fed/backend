@@ -24,6 +24,7 @@ use crate::{ContextWrapper, MinilithEndpointError, MinilithResult};
 mod access;
 mod allocation;
 pub mod app;
+mod apple_pass;
 mod catalog;
 mod flow;
 mod legacy;
