@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select exists (select 1 from purchased_ticket_validations where id = $1) as \"exists!\"",
+  "query": "select exists (\n            select 1 from purchased_ticket_validations where purchased_ticket_id = $1\n        ) as \"exists!\"",
   "describe": {
     "columns": [
       {
@@ -18,5 +18,5 @@
       null
     ]
   },
-  "hash": "b4bfd42dda5a312c8891593fe8ff9f19a3474b99dc8da1e57cc83ad6d8a4d704"
+  "hash": "bf6ac348e1c83fbe435eb7b3ea411cf5147340c4b5c2734e68e3452c3973c01a"
 }

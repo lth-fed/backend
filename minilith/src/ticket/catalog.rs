@@ -262,7 +262,20 @@ pub(super) async fn my_tickets(
             activities.time_start as "time_start",
             activities.time_end as "time_end",
             (owner_id = $1) as "owned_by_me!",
-            (purchaser_id = $1) as "purchased_by_me!"
+            (purchaser_id = $1) as "purchased_by_me!",
+            (
+                owner_id = $1
+                and not exists (
+                    select 1 from purchased_ticket_validations validation
+                    where validation.purchased_ticket_id = purchased_tickets.id
+                )
+                and exists (
+                    select 1 from ticket_kind_transfer_groups transfer
+                    where transfer.ticket_kind_id = purchased_tickets.ticket_kind_id
+                )
+            ) as "transferable!",
+            ticket_kinds.allow_transfer_ticket_start,
+            ticket_kinds.allow_transfer_ticket_stop
         from purchased_tickets
         inner join ticket_kinds on ticket_kinds.id = purchased_tickets.ticket_kind_id
         inner join activities on activities.id = ticket_kinds.activity_id
@@ -288,6 +301,9 @@ pub(super) async fn my_tickets(
         purchased_addons: addons.remove(&ticket.id).unwrap_or_default(),
         owned_by_me: ticket.owned_by_me,
         purchased_by_me: ticket.purchased_by_me,
+        transferable: ticket.transferable,
+        allow_transfer_ticket_start: ticket.allow_transfer_ticket_start,
+        allow_transfer_ticket_stop: ticket.allow_transfer_ticket_stop,
     })
     .fetch_all(&ctx.db)
     .await?;

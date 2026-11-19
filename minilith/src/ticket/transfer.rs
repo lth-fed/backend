@@ -64,7 +64,9 @@ pub(super) async fn transfer(
         return Ok(());
     }
     if sqlx::query_scalar!(
-        "select exists (select 1 from purchased_ticket_validations where id = $1) as \"exists!\"",
+        "select exists (
+            select 1 from purchased_ticket_validations where purchased_ticket_id = $1
+        ) as \"exists!\"",
         body.purchased_ticket_id
     )
     .fetch_one(&mut txn.executor())
@@ -75,6 +77,30 @@ pub(super) async fn transfer(
             "",
             "ticket has been used",
             "ticket_id",
+        ));
+    }
+
+    // `reserve_user_purchase_flow` below enforces this too, but as a 403 meant for buggy clients.
+    // A recipient who already holds a ticket for the activity is a user mistake, so say so here
+    // the way the other recipient problems are said. The check below still guards the race.
+    if sqlx::query_scalar!(
+        "select exists (
+            select 1 from ticket_kinds kind
+            inner join ticket_kinds all_kinds on all_kinds.activity_id = kind.activity_id
+            inner join purchased_tickets pt on pt.ticket_kind_id = all_kinds.id
+            where kind.id = $2 and pt.owner_id = $1
+        ) as \"exists!\"",
+        to_user,
+        ticket_kind
+    )
+    .fetch_one(&mut txn.executor())
+    .await?
+    {
+        return Err(MinilithEndpointError::bad_user_input(
+            "transfer",
+            "",
+            "recipient already has a ticket for this activity",
+            "to_user",
         ));
     }
 

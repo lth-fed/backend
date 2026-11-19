@@ -133,6 +133,14 @@ pub(super) struct PurchasedTicket {
     pub(super) owned_by_me: bool,
     /// False if it was transferred to us. Only the purchaser can view the receipt.
     pub(super) purchased_by_me: bool,
+    /// Whether `/tickets/transfer` can accept this ticket at some point: we hold it, it hasn't
+    /// been used, and its kind has at least one transfer group. Doesn't consider the transfer
+    /// window; compare `allow_transfer_ticket_start`/`allow_transfer_ticket_stop` for that.
+    pub(super) transferable: bool,
+    /// Copied from the ticket's kind.
+    pub(super) allow_transfer_ticket_start: OffsetDateTime,
+    /// Copied from the ticket's kind.
+    pub(super) allow_transfer_ticket_stop: OffsetDateTime,
 }
 #[derive(Object, Debug)]
 pub struct Kind {
