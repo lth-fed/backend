@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "select\n            purchased_tickets.id as \"id\",\n            purchased_tickets.ticket_kind_id as \"ticket_kind_id\",\n            ticket_kinds.activity_id as \"activity_id\",\n            ticket_kinds.name as \"ticket_kind_name!: DIS\",\n            activities.title as \"activity_title!: DIS\",\n            creator.id as creator_id,\n            creator.path as creator_path,\n            creator.name as \"creator_name!: DIS\",\n            activities.location as \"location!: Location\",\n            activities.time_start as \"time_start\",\n            activities.time_end as \"time_end\",\n            (owner_id = $1) as \"owned_by_me!\",\n            (purchaser_id = $1) as \"purchased_by_me!\"\n        from purchased_tickets\n        inner join ticket_kinds on ticket_kinds.id = purchased_tickets.ticket_kind_id\n        inner join activities on activities.id = ticket_kinds.activity_id\n        inner join groups creator on creator.id = activities.creator_id\n        where purchased_tickets.owner_id = $1 or purchased_tickets.purchaser_id = $1\n        ",
+  "query": "select\n            purchased_tickets.id as \"id\",\n            purchased_tickets.ticket_kind_id as \"ticket_kind_id\",\n            ticket_kinds.activity_id as \"activity_id\",\n            ticket_kinds.name as \"ticket_kind_name!: DIS\",\n            activities.title as \"activity_title!: DIS\",\n            creator.id as creator_id,\n            creator.path as creator_path,\n            creator.name as \"creator_name!: DIS\",\n            activities.location as \"location!: Location\",\n            activities.time_start as \"time_start\",\n            activities.time_end as \"time_end\",\n            (owner_id = $1) as \"owned_by_me!\",\n            (purchaser_id = $1) as \"purchased_by_me!\",\n            (\n                owner_id = $1\n                and not exists (\n                    select 1 from purchased_ticket_validations validation\n                    where validation.id = purchased_tickets.id\n                )\n                and exists (\n                    select 1 from ticket_kind_transfer_groups transfer\n                    where transfer.ticket_kind_id = purchased_tickets.ticket_kind_id\n                )\n            ) as \"transferable!\",\n            ticket_kinds.allow_transfer_ticket_start,\n            ticket_kinds.allow_transfer_ticket_stop\n        from purchased_tickets\n        inner join ticket_kinds on ticket_kinds.id = purchased_tickets.ticket_kind_id\n        inner join activities on activities.id = ticket_kinds.activity_id\n        inner join groups creator on creator.id = activities.creator_id\n        where purchased_tickets.owner_id = $1 or purchased_tickets.purchaser_id = $1\n        ",
   "describe": {
     "columns": [
       {
@@ -96,6 +96,21 @@
         "ordinal": 12,
         "name": "purchased_by_me!",
         "type_info": "Bool"
+      },
+      {
+        "ordinal": 13,
+        "name": "transferable!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 14,
+        "name": "allow_transfer_ticket_start",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 15,
+        "name": "allow_transfer_ticket_stop",
+        "type_info": "Timestamptz"
       }
     ],
     "parameters": {
@@ -116,8 +131,11 @@
       false,
       false,
       null,
-      null
+      null,
+      null,
+      false,
+      false
     ]
   },
-  "hash": "cc981aaca67087da8e067a4318871578fa3a544032232bf0d02889fe5dffdb87"
+  "hash": "434cac3c21614292e293f515a8bf237e8b12f3a53da6eef0aa28a7a90f49d7c5"
 }
