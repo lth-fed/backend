@@ -45,4 +45,5 @@ if [[ -f "$config/postgres.env" ]]; then
     systemctl enable teknologappen.target
 else
     echo "Add secrets to $config, then run deploy.sh."
+    echo "Write env values without quotes."
 fi

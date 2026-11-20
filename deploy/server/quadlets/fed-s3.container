@@ -7,7 +7,8 @@ Image=docker.io/rustfs/rustfs:latest
 Network=teknologappen.network
 Network=traefik.network
 EnvironmentFile=/etc/teknologappen/s3.env
-Volume=/fed/s3:/data
+# :U gives the rustfs user ownership.
+Volume=/fed/s3:/data:U
 Label=traefik.enable=true
 Label=traefik.docker.network=traefik
 Label=traefik.http.routers.fed-s3.rule=Host(`s3.teknologappen.se`)

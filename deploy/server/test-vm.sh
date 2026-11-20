@@ -15,6 +15,7 @@ image=debian-13-genericcloud-amd64.qcow2
 ssh_port=2222
 https_port=8443
 http_port="${HTTP_PORT:-18765}"
+vm_memory="${VM_MEMORY:-2048}"
 
 mkdir -p "$work"
 
@@ -80,8 +81,8 @@ boot_vm() {
         "$work/user-data" "$work/meta-data"
     rm -f "$work/disk.qcow2"
     qemu-img create -q -f qcow2 -F qcow2 -b "$work/$image" "$work/disk.qcow2" 40G
-    # 2 vCPU and 4GB, like a CX23.
-    qemu-system-x86_64 -enable-kvm -cpu host -smp 2 -m 4096 \
+    # 2 vCPU like a CX23; less RAM.
+    qemu-system-x86_64 -enable-kvm -cpu host -smp 2 -m "$vm_memory" \
         -drive "file=$work/disk.qcow2,if=virtio" -cdrom "$work/seed.iso" \
         -nic "user,model=virtio-net-pci,hostfwd=tcp:127.0.0.1:$ssh_port-:22,hostfwd=tcp:127.0.0.1:$https_port-:443" \
         -display none -serial "file:$work/serial.log" \
@@ -109,7 +110,9 @@ for service in minilith fed-auth transactions; do
     db="$service"
     [[ "$service" == minilith ]] && db=fed
     [[ "$service" == fed-auth ]] && db=auth
-    grep -v '^DATABASE_URL=' "$service/.env.example" > "$config/$service.env"
+    # Podman keeps quotes as part of values.
+    grep -v '^DATABASE_URL=' "$service/.env.example" \
+        | sed -E 's/^([A-Z0-9_]+)="(.*)"$/\1=\2/' > "$config/$service.env"
     echo "DATABASE_URL=postgres://postgres:vm-test@fed-postgres:5432/$db" >> "$config/$service.env"
     echo DEBUG=1 >> "$config/$service.env"
 done
@@ -221,6 +224,10 @@ check_routes "after reboot"
 
 check "rolling deploy without errors" rolling_deploy_no_errors
 echo "  rolling deploy: $(grep -c '^ok' "$work/rolling.log") ok, $(grep -c '^error' "$work/rolling.log") errors"
+
+echo
+echo "Memory use in the VM (${vm_memory}MB):"
+ssh_vm "free -m | head -2; sudo podman stats --no-stream --format '{{.Name}} {{.MemUsage}}'" || true
 
 echo
 echo "$failures failure(s). VM still running:"

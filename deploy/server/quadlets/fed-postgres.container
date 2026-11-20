@@ -8,7 +8,8 @@ Network=teknologappen.network
 EnvironmentFile=/etc/teknologappen/postgres.env
 Environment=POSTGRES_DB=fed
 Volume=/fed/postgres:/var/lib/postgresql
-HealthCmd=pg_isready
+# Readiness only; the role avoids log noise.
+HealthCmd=pg_isready -U postgres
 HealthInterval=5s
 HealthRetries=12
 # Dependents start once Postgres is healthy.
