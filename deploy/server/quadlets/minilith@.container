@@ -22,6 +22,11 @@ Label=traefik.http.routers.minilith.tls.certresolver=letsencrypt
 Label=traefik.http.routers.minilith.service=minilith
 Label=traefik.http.services.minilith.loadbalancer.server.port=8050
 Label=traefik.http.services.minilith.loadbalancer.server.scheme=https
+# Rolling restarts: skip and retry stopping instances.
+Label=traefik.http.services.minilith.loadbalancer.healthcheck.path=/v0/healthcheck
+Label=traefik.http.services.minilith.loadbalancer.healthcheck.interval=2s
+Label=traefik.http.routers.minilith.middlewares=minilith-retry
+Label=traefik.http.middlewares.minilith-retry.retry.attempts=3
 Environment=S3_PUBLIC_URL=https://s3.teknologappen.se/image
 Volume=/etc/teknologappen/secrets/firebase-service-account.json:/run/secrets/firebase-service-account.json:ro
 Volume=/etc/teknologappen/secrets/AuthKey.p8:/run/secrets/AuthKey.p8:ro

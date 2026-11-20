@@ -118,7 +118,7 @@ for service in minilith fed-auth transactions; do
 done
 touch "$config/secrets/firebase-service-account.json" "$config/secrets/AuthKey.p8"
 printf 'POSTGRES_USER=postgres\nPOSTGRES_PASSWORD=vm-test\n' > "$config/postgres.env"
-printf 'GF_SECURITY_ADMIN_USER=admin\nGF_SECURITY_ADMIN_PASSWORD=vm-test\n' > "$config/grafana.env"
+printf 'OTEL_REMOTE_ENDPOINT=http://127.0.0.1:4318\nOTEL_REMOTE_AUTHORIZATION=Bearer vm-test\n' > "$config/collector.env"
 printf 'RUSTFS_ACCESS_KEY=rustfsadmin\nRUSTFS_SECRET_KEY=rustfsadmin\n' > "$config/s3.env"
 echo REGISTRY=docker.io/esekmacapar > "$config/deploy.env"
 cat > "$config/backup.env" << 'CONF'
@@ -213,6 +213,7 @@ deploy=/srv/teknologappen/backend/deploy/server/deploy.sh
 echo "Deploying (pulls images, takes minutes)"
 check "first deploy" ssh_vm sudo "$deploy" latest
 check_routes "first boot"
+check "collector running" ssh_vm systemctl is-active fed-collector.service
 check "two minilith instances" ssh_vm "sudo podman ps --format '{{.Names}}' | grep -c '^minilith-' | grep -qx 2"
 
 check "backup ran" ssh_vm sudo systemctl start teknologappen-backup.service

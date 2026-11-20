@@ -5,8 +5,9 @@ Description=OpenTelemetry collector
 ContainerName=fed-collector
 Image=docker.io/otel/opentelemetry-collector:0.154.0
 Network=teknologappen.network
+EnvironmentFile=/etc/teknologappen/collector.env
 Exec=--config=/etc/otel-collector.yaml
-Volume=/srv/teknologappen/backend/otel-collector.yaml:/etc/otel-collector.yaml:ro
+Volume=/srv/teknologappen/backend/deploy/server/otel-collector.yaml:/etc/otel-collector.yaml:ro
 
 [Service]
 Restart=always

@@ -1,0 +1,30 @@
+# Forwards all telemetry to the remote stack.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  batch: {}
+
+exporters:
+  otlphttp:
+    endpoint: ${env:OTEL_REMOTE_ENDPOINT}
+    headers:
+      Authorization: ${env:OTEL_REMOTE_AUTHORIZATION}
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp]
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp]
