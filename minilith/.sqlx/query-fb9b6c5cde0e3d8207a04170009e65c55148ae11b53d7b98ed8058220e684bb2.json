@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from news_push_notifications notification_link\n            using push_notifications, news\n            where news.id = notification_link.news_id\n            and news.target_group_id = $1\n            and notification_link.id = $2\n            and push_notifications.id = notification_link.notification_id\n            and push_notifications.sent = false\n            returning notification_link.notification_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "notification_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "fb9b6c5cde0e3d8207a04170009e65c55148ae11b53d7b98ed8058220e684bb2"
+}

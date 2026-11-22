@@ -33,17 +33,7 @@ async fn free(db: PgPool) -> color_eyre::Result<()> {
 
     let app = lib::get_test_client(db).await?;
 
-    let id = app
-        .post("/v0/init")
-        .header("authorization", "bearer hehe-super-secure")
-        .send()
-        .await
-        .json()
-        .await
-        .value()
-        .string()
-        .parse::<Uuid>()
-        .unwrap();
+    let id = Uuid::new_v4();
 
     let body = Body {
         id,

@@ -1,0 +1,59 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select distinct product_addon_options.id, product_addon_id, product_addon_options.idx,\n        product_addon_options.name as \"name: DIS\", price,\n        -- wait wtf this Vec<i64> syntax actually works??\n        (select coalesce(array_agg(bk.price order by bk.id), '{}'::money[])\n            from product_addon_option_bookkeepings bk where bk.option_id = product_addon_options.id) as \"bkp!: Vec<i64>\",\n        (select coalesce(array_agg(tag.name->>'en' order by bk.id), '{}'::text[])\n            from product_addon_option_bookkeepings bk\n            inner join product_tags tag on tag.id = bk.category\n            where bk.option_id = product_addon_options.id) as \"bkc!: Vec<String>\"\n        from product_addon_options\n        inner join product_addons on (product_addons.id = product_addon_options.product_addon_id)\n        left join product_addon_links links on links.addon_id = product_addons.id\n        where product_addons.set_id = $1 and ($2::uuid is null or links.product_id = $2)\n        order by product_addon_options.idx",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "product_addon_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "idx",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "name: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "price",
+        "type_info": "Money"
+      },
+      {
+        "ordinal": 5,
+        "name": "bkp!: Vec<i64>",
+        "type_info": "MoneyArray"
+      },
+      {
+        "ordinal": 6,
+        "name": "bkc!: Vec<String>",
+        "type_info": "TextArray"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "0ac0a409efa35c776f53b36841ab8df84e25d88651cc4da74b635a5185f88e63"
+}

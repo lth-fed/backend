@@ -1,0 +1,63 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n            id,\n            kind as \"kind!: crate::push_notifications::NotificationKind\",\n            coalesce(\n                (select activity_id from activity_push_notifications\n                    where notification_id = push_notifications.id),\n                (select activity_id from purchased_ticket_push_notifications\n                    where notification_id = push_notifications.id),\n                (select activity_id from purchased_ticket_push_notifications\n                    where notification_id = push_notifications.id)\n            ) as \"activity_id?\",\n            sender as \"sender!: DIS\",\n            title as \"title!: DIS\",\n            content as \"content!: DIS\"\n        from push_notifications\n        where send_at <= now()\n        and sent = false\n        order by send_at, id\n        for update skip locked",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "kind!: crate::push_notifications::NotificationKind",
+        "type_info": {
+          "Custom": {
+            "name": "notification_kind",
+            "kind": {
+              "Enum": [
+                "activity",
+                "news",
+                "ticket_release",
+                "transfer",
+                "reservation"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "activity_id?",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "sender!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "title!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 5,
+        "name": "content!: DIS",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "8efe6bb420776a6050ec0a221e29965a060177d07fb70c1ef90dd87c4a2e6c2a"
+}

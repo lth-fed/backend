@@ -160,24 +160,46 @@ async fn seed_group_namespace(
     ];
     for (path, name, sv_desc, en_desc) in groups {
         let path = namespace.path(path);
+        // root + guilds (second level) get a payout account
+        let depth = path.matches('.').count() + 1;
         let name = format!("{}{name}", namespace.name_prefix);
         let name = serde_json::json!({ "en": name, "sv": name });
         let description = serde_json::json!({ "en": en_desc, "sv": sv_desc });
         let path = path.parse::<PgLTree>().wrap_err("parse path")?;
-        sqlx::query!(
-            "insert into groups (path, limit_membership_visibility, name, description, logo_id, deleted)
-             values ($1, false, $2, $3, $4, false)
+        let group_id = sqlx::query_scalar!(
+            "insert into groups (path, name, description, logo_id, deleted)
+             values ($1, $2, $3, $4, false)
              on conflict (path) do update set
                 name = excluded.name,
-                description = excluded.description",
+                description = excluded.description
+             returning id",
             path,
             name,
             description,
             LOGO_IMG,
         )
-        .execute(&ctx.db)
+        .fetch_one(&ctx.db)
         .await
         .wrap_err_with(|| format!("seed group {path}"))?;
+
+        // Payout account for the root + guilds (second level). Activities and
+        // their products reference a sales target, so one must exist before the
+        // admin API (or this seed) can create anything.
+        if depth <= 2 {
+            let sales_target_id = Uuid::from_u128(
+                group_id.as_u128() ^ 0x53_41_4c_45_53_5f_54_41_52_47_45_54_5f_5f_5f_5f,
+            );
+            sqlx::query!(
+                "insert into sales_targets (id, group_id, email, iban)
+                 values ($1, $2, 'informationschef@esek.se', 'SE48 8000 0831 3907 4120 7096')
+                 on conflict (id) do nothing",
+                sales_target_id,
+                group_id,
+            )
+            .execute(&ctx.db)
+            .await
+            .wrap_err_with(|| format!("seed sales target {path}"))?;
+        }
     }
     Ok(())
 }
@@ -244,24 +266,6 @@ async fn seed_users(ctx: &ContextWrapper) -> color_eyre::Result<()> {
         .await
         .wrap_err_with(|| format!("seed membership {id} -> {guild_path}"))?;
 
-        // Visibility is opt-in when no setting exists. Give fixture users a setting on their
-        // namespace root so its inheritance includes every seeded activity below that root.
-        let root_path = guild_path
-            .split('.')
-            .next()
-            .expect("fixture guild paths have a root");
-        let root_id = group_id(ctx, root_path).await?;
-        sqlx::query!(
-            "insert into user_group_settings (user_id, group_id, visible, notification_level)
-             values ($1, $2, true, 'none'::notification_level)
-             on conflict (user_id, group_id) do update set visible = excluded.visible",
-            id,
-            root_id,
-        )
-        .execute(&ctx.db)
-        .await
-        .wrap_err_with(|| format!("seed visibility {id} -> {root_path}"))?;
-
         if *is_admin {
             sqlx::query!(
                 "insert into group_adminships (user_id, group_id) values ($1, $2)
@@ -313,6 +317,48 @@ struct TicketKindSeed<'a> {
 /// are static.
 fn dt(rfc3339: &str) -> OffsetDateTime {
     OffsetDateTime::parse(rfc3339, &Rfc3339).expect("valid rfc3339 datetime")
+}
+
+/// Sales target (payout account) + its guild, used by both the activity and
+/// its products. Fixture groups have no dedicated target, so fall back to
+/// whichever target the migration created.
+async fn sales_target(ctx: &ContextWrapper, group_id: Uuid) -> color_eyre::Result<(Uuid, Uuid)> {
+    let row = sqlx::query!(
+        // payout goes through the closest ancestor guild's target
+        "select target.id, target.group_id
+         from sales_targets target
+         inner join groups payout_group on payout_group.id = target.group_id
+         inner join groups creator on creator.id = $1
+         order by (payout_group.path @> creator.path) desc, nlevel(payout_group.path) desc, target.id
+         limit 1",
+        group_id
+    )
+    .fetch_one(&ctx.db)
+    .await
+    .wrap_err("lookup sales target")?;
+    Ok((row.id, row.group_id))
+}
+
+/// Products need a bookkeeping tag owned by their group; create the default
+/// "Ticket" tag once per guild and return it.
+async fn bookkeeping_tag(ctx: &ContextWrapper, group_id: Uuid) -> color_eyre::Result<Uuid> {
+    sqlx::query!(
+        "insert into product_tags (id, group_id, hidden, name)
+         select uuidv4(), $1, false, '{\"en\": \"Ticket\"}'::jsonb
+         where not exists (select 1 from product_tags tag where tag.group_id = $1)",
+        group_id,
+    )
+    .execute(&ctx.db)
+    .await
+    .wrap_err("seed bookkeeping tag")?;
+    let id = sqlx::query_scalar!(
+        "select id from product_tags where group_id = $1 order by id limit 1",
+        group_id
+    )
+    .fetch_one(&ctx.db)
+    .await
+    .wrap_err("lookup bookkeeping tag")?;
+    Ok(id)
 }
 
 async fn seed_activities(ctx: &ContextWrapper, namespace: SeedNamespace) -> color_eyre::Result<()> {
@@ -484,7 +530,40 @@ async fn seed_activities(ctx: &ContextWrapper, namespace: SeedNamespace) -> colo
         let title = serde_json::json!({ "en": a.title_en, "sv": a.title_sv });
         let description = serde_json::json!({ "en": a.description_en, "sv": a.description_sv });
         let location_name = serde_json::json!({ "en": a.location_en, "sv": a.location_sv });
+        let (sales_target_id, sales_group_id) = sales_target(ctx, creator_id).await?;
+        let tag_id = bookkeeping_tag(ctx, sales_group_id).await?;
 
+        // `activities.base_ticket` is NOT NULL: it's the product that decides who
+        // may see the activity. The admin API creates an `activity_visibility`
+        // product for every new activity, so mirror that here. The id is derived
+        // from the activity id to keep re-runs idempotent.
+        let base_ticket_id = Uuid::from_u128(
+            activity_id.as_u128() ^ 0x42_41_53_45_54_49_43_4b_45_54_5f_5f_5f_5f_5f_5f,
+        );
+        sqlx::query!(
+            "insert into products
+                (id, group_id, kind, name, description, sales_price, sales_organization,
+                 sales_stock, stock_real, stock_unit, stock_price, bookkeeping_tag, max_uses,
+                 sales_start, sales_stop, resale_start, resale_stop)
+             values ($1, $2, 'activity_visibility', $3, $4, 0, $5, 0, 0, 'st', 0, $6, 1,
+                     $7, $8, $8, $8)
+             on conflict (id) do update set
+                name = excluded.name,
+                description = excluded.description,
+                sales_start = excluded.sales_start,
+                sales_stop = excluded.sales_stop",
+            base_ticket_id,
+            sales_group_id,
+            title,
+            description,
+            sales_target_id,
+            tag_id,
+            a.time_start,
+            a.time_end,
+        )
+        .execute(&ctx.db)
+        .await
+        .wrap_err_with(|| format!("seed base ticket {base_ticket_id}"))?;
         // The `location` composite type doesn't have a clean sqlx
         // mapping for inserts via the macro, so we build it inline with
         // ROW(name, directions, coordinate, url)::location. Upsert
@@ -494,13 +573,14 @@ async fn seed_activities(ctx: &ContextWrapper, namespace: SeedNamespace) -> colo
         sqlx::query!(
             "with upserted_activity as (
              insert into activities
-                (id, responsible_name, responsible_contact, creator_id, title, description, location,
-                 time_start, time_end, image_id, is_hidden, max_tickets)
-             values ($1, $2, $3, $4, $5, $6, row($7::jsonb, null, null, null)::location, $8, $9, $10, false, $11)
+                (id, responsible_name, responsible_contact, sales_target_id, title, description, location,
+                 time_start, time_end, image_id, is_hidden, max_tickets_per_user, base_ticket)
+             values ($1, $2, $3, $4,
+                 $5, $6, row($7::jsonb, null, null, null)::location, $8, $9, $10, false, $11, $12)
              on conflict (id) do update set
                 responsible_name = excluded.responsible_name,
                 responsible_contact = excluded.responsible_contact,
-                creator_id = excluded.creator_id,
+                sales_target_id = excluded.sales_target_id,
                 title = excluded.title,
                 description = excluded.description,
                 location = excluded.location,
@@ -508,16 +588,16 @@ async fn seed_activities(ctx: &ContextWrapper, namespace: SeedNamespace) -> colo
                 time_end = excluded.time_end,
                 image_id = excluded.image_id,
                 is_hidden = excluded.is_hidden,
-                max_tickets = excluded.max_tickets
-             returning id, creator_id
+                max_tickets_per_user = excluded.max_tickets_per_user
+             returning id
              )
              insert into activity_hosts (activity_id, group_id)
-             select id, creator_id from upserted_activity
+             select id, $13 from upserted_activity
              on conflict do nothing",
             activity_id,
             a.responsible_name,
             a.responsible_contact,
-            creator_id,
+            sales_target_id,
             title,
             description,
             location_name,
@@ -525,10 +605,22 @@ async fn seed_activities(ctx: &ContextWrapper, namespace: SeedNamespace) -> colo
             a.time_end,
             image_id,
             a.max_tickets,
+            base_ticket_id,
+            creator_id,
         )
         .execute(&ctx.db)
         .await
         .wrap_err_with(|| format!("seed activity {activity_id}"))?;
+
+        sqlx::query!(
+            "insert into product_activity_assignments (activity_id, product_id)
+             values ($1, $2) on conflict do nothing",
+            activity_id,
+            base_ticket_id,
+        )
+        .execute(&ctx.db)
+        .await
+        .wrap_err("seed base ticket assignment")?;
 
         for path in a.host_paths {
             let host_path = namespace.path(path);
@@ -550,39 +642,49 @@ async fn seed_activities(ctx: &ContextWrapper, namespace: SeedNamespace) -> colo
             // money column type without any text-format detour.
             let price = PgMoney(k.price_ore);
             sqlx::query!(
-                "insert into ticket_kinds
-                    (id, activity_id, name, price,
-                     purchasing_available_start, purchasing_available_stop,
-                     max_tickets, min_tickets, reserved_or_purchased_tickets,
-                     allow_transfer_ticket_start, allow_transfer_ticket_stop,
-                     has_been_purchased, has_been_released)
-                 values ($1, $2, $3, $4,
-                         $5, $6, $7, 0, 0, $5, $6, false, $5 < now() and $6 > now())
+                "insert into products
+                    (id, group_id, kind, name, description, sales_price, sales_organization,
+                     sales_stock, stock_real, stock_unit, stock_price, bookkeeping_tag, max_uses,
+                     sales_start, sales_stop, resale_start, resale_stop,
+                     been_purchased, tickets_been_released)
+                 values ($1, $2, 'ticket', $3, '{}', $4, $5, $8, $8, 'st', 0, $9, 1,
+                     $6, $7, $6, $7, false, ($6 < now() and $7 > now()))
                  on conflict (id) do update set
                     name = excluded.name,
-                    price = excluded.price,
-                    purchasing_available_start = excluded.purchasing_available_start,
-                    purchasing_available_stop = excluded.purchasing_available_stop,
-                    max_tickets = excluded.max_tickets,
-                    allow_transfer_ticket_start = excluded.allow_transfer_ticket_start,
-                    allow_transfer_ticket_stop = excluded.allow_transfer_ticket_stop,
-                    reserved_or_purchased_tickets = excluded.reserved_or_purchased_tickets,
-                    has_been_purchased = false,
-                    has_been_released = excluded.has_been_released",
+                    sales_price = excluded.sales_price,
+                    sales_start = excluded.sales_start,
+                    sales_stop = excluded.sales_stop,
+                    sales_stock = excluded.sales_stock,
+                    resale_start = excluded.resale_start,
+                    resale_stop = excluded.resale_stop,
+                    been_purchased = false,
+                    tickets_been_released = excluded.tickets_been_released",
                 ticket_kind_id,
-                activity_id,
+                sales_group_id,
                 Json(&name) as _,
                 price,
+                sales_target_id,
                 k.purchasing_start,
                 k.purchasing_stop,
                 k.max_tickets,
+                tag_id,
             )
             .execute(&ctx.db)
             .await
             .wrap_err_with(|| format!("seed ticket kind {ticket_kind_id}"))?;
 
             sqlx::query!(
-                "insert into ticket_kind_transfer_groups (ticket_kind_id, group_id)
+                "insert into product_activity_assignments (activity_id, product_id)
+                 values ($1, $2) on conflict do nothing",
+                activity_id,
+                ticket_kind_id,
+            )
+            .execute(&ctx.db)
+            .await
+            .wrap_err("seed ticket kind assignment")?;
+
+            sqlx::query!(
+                "insert into product_transfer_groups (product_id, group_id)
                  values ($1, $2) on conflict do nothing",
                 ticket_kind_id,
                 root_id,
@@ -592,7 +694,7 @@ async fn seed_activities(ctx: &ContextWrapper, namespace: SeedNamespace) -> colo
             .wrap_err("seed ticket transfer group")?;
 
             sqlx::query!(
-                "insert into ticket_kind_allowed_groups (ticket_kind_id, group_id)
+                "insert into product_allowed_groups (product_id, group_id)
                  values ($1, $2) on conflict do nothing",
                 ticket_kind_id,
                 root_id,

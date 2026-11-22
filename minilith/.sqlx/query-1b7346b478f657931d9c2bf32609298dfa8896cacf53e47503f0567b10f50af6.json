@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into product_activity_assignments (activity_id, product_id)\n            select activity_id, $1 from unnest($2::uuid[]) activity_id",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1b7346b478f657931d9c2bf32609298dfa8896cacf53e47503f0567b10f50af6"
+}

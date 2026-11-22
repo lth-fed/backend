@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select target.id from sales_targets target\n            inner join groups owner on owner.id = target.group_id\n            inner join groups news_group on news_group.id = $1\n            where news_group.path @> owner.path\n            order by target.group_id\n            limit 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "b5fc5c879f2ee670e23baa045283f35d08b7cee05f852602c699108e7c248ee7"
+}

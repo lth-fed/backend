@@ -1,0 +1,82 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n            name as \"name!: DIS\", sales_price as \"price!\",\n            sales_start,\n            sales_stop,\n            coalesce(sales_stock, 0) as \"available!\",\n            (select count(*)::int from purchases where product_id = products.id) as \"purchased_count!\",\n            (select assignment.activity_id from product_activity_assignments assignment\n                where assignment.product_id = products.id\n                order by assignment.activity_id limit 1) as \"activity_id?\",\n            resale_start, resale_stop,\n            been_purchased,\n            tickets_been_released\n        from products where id = $1 and kind = 'ticket'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 1,
+        "name": "price!",
+        "type_info": "Money"
+      },
+      {
+        "ordinal": 2,
+        "name": "sales_start",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 3,
+        "name": "sales_stop",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "available!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "purchased_count!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "activity_id?",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 7,
+        "name": "resale_start",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 8,
+        "name": "resale_stop",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 9,
+        "name": "been_purchased",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 10,
+        "name": "tickets_been_released",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      null,
+      null,
+      null,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "6f52e39ad1abef732cfcba4cc908b2094edc7bf01ea690a4bacffd7e5bcbfbcf"
+}

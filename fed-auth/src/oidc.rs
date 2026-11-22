@@ -681,7 +681,11 @@ impl MainRouter {
         }
 
         // default value ensures we're redirected to provider selection if no value is specified
-        let mut providers = body.providers.as_deref().unwrap_or("lu mail").split(' ');
+        let mut providers = body
+            .providers
+            .as_deref()
+            .unwrap_or("lu mail password")
+            .split(' ');
         let first_provider = providers.next().unwrap_or("non-existant-provider");
         // if there is more than 1
         if providers.next().is_some() {
@@ -782,7 +786,9 @@ impl MainRouter {
             "lu" => {
                 let req = self
                     .service_provider
-                    .make_authentication_request("https://idpv4.lu.se/idp/profile/SAML2/Redirect/SSO")
+                    .make_authentication_request(
+                        "https://idpv4.lu.se/idp/profile/SAML2/Redirect/SSO",
+                    )
                     .map_err(|err| {
                         error!(?err, "Failed to make LU SSO request");
                         oauth2error_redirect(OAuth2ErrorKind::Internal, "lu sso saml2 error", ctx)
@@ -811,6 +817,11 @@ impl MainRouter {
             "email" => {
                 let code = Uuid::new_v4();
                 let redirect = format!("{}/providers/email/?code={code}", self.website_domain);
+                (code.to_string(), redirect)
+            }
+            "password" => {
+                let code = Uuid::new_v4();
+                let redirect = format!("{}/providers/password/?code={code}", self.website_domain);
                 (code.to_string(), redirect)
             }
             "test" if self.debug.enabled => {

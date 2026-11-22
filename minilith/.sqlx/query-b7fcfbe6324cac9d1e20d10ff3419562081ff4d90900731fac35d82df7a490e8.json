@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select coalesce(notification.sent, false) as \"sent!\"\n            from news\n            left join news_push_notifications link on link.news_id = news.id\n            left join push_notifications notification on notification.id = link.notification_id\n            where news.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "sent!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "b7fcfbe6324cac9d1e20d10ff3419562081ff4d90900731fac35d82df7a490e8"
+}

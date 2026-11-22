@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from physical_payment_terminals where id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "edffe2a808e9212c1c726654ef3b4946db24f19ef2397b82fff1f7d5a48a4e74"
+}

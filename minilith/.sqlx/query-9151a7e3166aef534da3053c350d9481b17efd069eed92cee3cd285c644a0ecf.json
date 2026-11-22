@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select group_id from product_transfer_groups\n        where product_id = $1 order by group_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "group_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "9151a7e3166aef534da3053c350d9481b17efd069eed92cee3cd285c644a0ecf"
+}

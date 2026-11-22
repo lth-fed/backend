@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from product_addons where id = $1 and not exists (\n                    select 1 from purchased_product_addons where addon_id = $1\n                )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "ee7f3311acfb0347d6edfec30cfc7cf31835faeff8f49f77781accf5bc741206"
+}

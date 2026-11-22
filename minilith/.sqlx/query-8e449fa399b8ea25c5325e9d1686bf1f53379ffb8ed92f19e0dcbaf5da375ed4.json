@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into product_reservations\n            (user_id, product_id, product_price, transaction_id, timeout)\n        select t.user_id, $2, kind.sales_price, null, (t.from_now + now())\n        from unnest($1::text[], $3::interval[]) as t(user_id, from_now)\n        inner join products kind on kind.id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "Uuid",
+        "IntervalArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8e449fa399b8ea25c5325e9d1686bf1f53379ffb8ed92f19e0dcbaf5da375ed4"
+}

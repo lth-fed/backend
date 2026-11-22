@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from news_push_opt_out_tags where user_id = $1 and tag_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7df9dd1527961275de1ad90c87bda26efecb42e6ba277d092e036399f464429a"
+}

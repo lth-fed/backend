@@ -1,0 +1,36 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into products (\n                id, group_id, kind, name, description, sales_price, sales_organization,\n                sales_stock, stock_real, stock_unit, stock_price, bookkeeping_tag, max_uses,\n                sales_start, sales_stop, resale_start, resale_stop,\n                store_general_sales, store_online_self_serve, store_internal_id,\n                store_alcohol_by_volume, tickets_guaranteed, tickets_require_other\n            ) values (\n                $1, $2, $3::text::product_kind, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,\n                $14, $15, $16, $17, $18, $19, $20, $21, $22, $23\n            )\n            on conflict (id) do update set\n                group_id = excluded.group_id,\n                kind = excluded.kind,\n                name = excluded.name,\n                description = excluded.description,\n                sales_price = excluded.sales_price,\n                sales_organization = excluded.sales_organization,\n                sales_stock = excluded.sales_stock,\n                stock_real = excluded.stock_real,\n                stock_unit = excluded.stock_unit,\n                stock_price = excluded.stock_price,\n                bookkeeping_tag = excluded.bookkeeping_tag,\n                max_uses = excluded.max_uses,\n                sales_start = excluded.sales_start,\n                sales_stop = excluded.sales_stop,\n                resale_start = excluded.resale_start,\n                resale_stop = excluded.resale_stop,\n                store_general_sales = excluded.store_general_sales,\n                store_online_self_serve = excluded.store_online_self_serve,\n                store_internal_id = excluded.store_internal_id,\n                store_alcohol_by_volume = excluded.store_alcohol_by_volume,\n                tickets_guaranteed = excluded.tickets_guaranteed,\n                tickets_require_other = excluded.tickets_require_other",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Jsonb",
+        "Jsonb",
+        "Money",
+        "Uuid",
+        "Int4",
+        "Int4",
+        "Text",
+        "Numeric",
+        "Uuid",
+        "Int4",
+        "Timestamptz",
+        "Timestamptz",
+        "Timestamptz",
+        "Timestamptz",
+        "Bool",
+        "Bool",
+        "Text",
+        "Int4",
+        "Bool",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "49192a48f8becedbd892adc70d4cf6faf6d849d84be4e1bd8f00619090b8aea8"
+}

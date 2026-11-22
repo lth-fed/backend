@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select product_id, timeout\n                    from product_reservations\n                    where user_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "product_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "timeout",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "aaff10f394e58f261c2dbafa0240adada66e504c5f90ec5425e9e825c04b0696"
+}

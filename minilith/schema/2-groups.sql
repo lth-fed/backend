@@ -18,20 +18,25 @@ create table groups (
     ) stored,
     foreign key (parent_path) references groups(path),
 
-    limit_membership_visibility boolean not null,
     --
     name jsonb not null,
     description jsonb not null,
     logo_id uuid not null references images(id),
-    -- only acts as a barrier "upwards" when admin, i.e. if I'm part of E-guild
-    -- board & this is set for E-guild, I still see members in subgroups, but
-    -- their admins don't see E-guild's members.
+    -- only to be set for 
+    -- - "area" groups, i.e. Lund (`lund`), where everybody can join the group
+    --   (since parent is null, that means in this context everybody)
+    -- - child groups where we want to allow members in parent group to join children without asking
+    parent_members_can_join bool not null default false,
+    -- opt-in for stock movements / stock UI
+    stock_tracking bool not null default false,
+    -- only acts as a barrier "upwards" when admin, i.e. if I'm admin of E-guild
+    -- & this is set for E-guild, I still see members in subgroups, but their
+    -- admins don't see E-guild's members.
     propogate_member_visibility_access bool not null default false,
     deleted boolean not null default false
 );
 
--- GiST index for ltree ancestor/descendant operators (@>, <@). The b-tree
--- created by the unique constraint on `path` does not accelerate these.
+-- GiST index for ltree ancestor/descendant operators (@>, <@).
 create index groups_path_gist on groups using gist (path);
 
 -- members from which other groups can ask to join this group?
@@ -52,6 +57,10 @@ create table group_memberships (
     -- The identity may be invited before its user row is created on first login.
     user_id text not null,
     group_id uuid not null references groups(id),
+    -- if this is a time-limited membership:
+    until timestamptz,
+    -- limits this member's visibility for other parts of the tree
+    specific boolean not null default false,
     primary key (user_id, group_id)
 );
 
@@ -59,6 +68,8 @@ create table group_adminships (
     -- Admin email identities may be invited before their first login.
     user_id text not null,
     group_id uuid not null references groups(id),
+    -- if this is a time-limited membership:
+    until timestamptz,
     primary key (user_id, group_id),
     constraint group_adminships_email_account check (user_id like 'email:%' or user_id like 'api:%'),
     -- ensure there exists a group membership with the same user_id and group_id
@@ -66,19 +77,16 @@ create table group_adminships (
         references group_memberships (user_id, group_id)
 );
 
-create type notification_level as enum ('none', 'all');
-create table user_group_settings (
-    user_id text not null references users(id),
-    group_id uuid not null references groups(id),
-    --
-    visible boolean not null,
-    notification_level notification_level not null,
-    primary key (group_id, user_id)
-);
-
 -- grants the admins of `access_group_id` view of the activities where we are creators or co-hosts
 create table allow_admins_from_group_view_activities (
     host_group_id uuid not null references groups(id) on delete cascade,
     access_group_id uuid not null references groups(id) on delete cascade,
     primary key (host_group_id, access_group_id)
+);
+
+create table sales_targets (
+    id uuid primary key,
+    group_id uuid not null references groups(id),
+    email text not null,
+    iban text not null
 );

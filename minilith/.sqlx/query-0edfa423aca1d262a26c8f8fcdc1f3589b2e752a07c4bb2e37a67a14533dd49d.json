@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update physical_payment_terminals set name = coalesce($2, name), group_id = coalesce($3, group_id) where id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0edfa423aca1d262a26c8f8fcdc1f3589b2e752a07c4bb2e37a67a14533dd49d"
+}

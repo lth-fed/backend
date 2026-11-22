@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into notification_events\n                (notification_id, user_id, kind, target_id)\n            values ($1, $2, $3::text::notification_event_kind, $4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f718d723517bb3b9b66d2415454132de1d98098285d3372afdc17970e68acfb7"
+}

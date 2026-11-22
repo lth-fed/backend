@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select exists (\n                select 1\n                from purchases\n                where purchases.owner_id = $1\n                and purchases.activity_id = $2\n            ) as \"exists!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "88dae9a1e3fc48bb6d898fb3161ea13c2e3a03e18fe872f83d566bf624b268dc"
+}

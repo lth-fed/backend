@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from product_reservation_placement_tails tails\n        using products kind\n        where kind.id = tails.product_id\n            and kind.sales_stop < now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "db74105040ce5f70dc56c3d73727623c819a4b563b5985f195f22c0a34ec4936"
+}

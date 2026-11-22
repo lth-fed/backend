@@ -139,9 +139,8 @@ impl<Url: AuthContextProvider + 'static> JwkContext<Url> {
 
                     if std::any::TypeId::of::<Url>() == std::any::TypeId::of::<AuthUrl>() {
                         warn!(
-                            "Defaulting authentication, user will always be \
-                            `lund-university:aa0000bb-s` or the value after `Bearer` \
-                            in the authorization header \
+                            "Defaulting authentication: the value after `Bearer` in the \
+                            authorization header is used verbatim as the user id \
                             (you still have to provide authorization header)"
                         );
                     }
@@ -267,16 +266,12 @@ impl User {
         }
         #[cfg(debug_assertions)]
         if context.testing {
-            let id = if token.token.contains(':') {
-                &token.token
-            } else {
-                "lund-university:aa0000bb-s"
-            };
+            // the bearer token is used verbatim as the user id; nothing is verified
             span.set_attribute(opentelemetry::KeyValue::new(
                 opentelemetry_semantic_conventions::attribute::USER_ID,
-                id.to_owned(),
+                token.token.clone(),
             ));
-            return Ok(id.to_owned());
+            return Ok(token.token);
         }
 
         let data = decode_jwt::<Claims>(&token.token, context)?;

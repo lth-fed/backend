@@ -42,7 +42,6 @@ pub struct ValidatedUser {
     pub email: Option<String>,
     pub full_name: Option<String>,
     pub language: Option<String>,
-    pub lth_guild: Option<String>,
     // ALSO UPDATE `fed_auth_verifier`
 }
 #[derive(sqlx::Type)]
@@ -101,7 +100,6 @@ impl CallbackUrl {
 }
 
 pub(crate) type ContextWrapper = Arc<Context>;
-
 
 #[derive(Clone)]
 pub(crate) struct Context {
@@ -279,7 +277,6 @@ impl Context {
                 sub: row.sub,
                 email: row.email,
                 full_name: row.full_name,
-                lth_guild: row.lth_guild,
                 language: row.language,
             },
         })
@@ -315,7 +312,6 @@ impl Context {
                 sub: row.sub,
                 email: row.email,
                 full_name: row.full_name,
-                lth_guild: row.lth_guild,
                 language: row.language,
             },
         })
@@ -333,17 +329,17 @@ impl Context {
     ) -> Result<(), sqlx::Error> {
         sqlx::query!(
             "insert into session_validated_users
-            (session_id, sub, email, full_name, lth_guild) values ($1, $2, $3, $4, $5)
+            (session_id, sub, email, full_name, language) values ($1, $2, $3, $4, $5)
             on conflict (session_id) do update set
                 sub = excluded.sub,
                 email = excluded.email,
                 full_name = excluded.full_name,
-                lth_guild = excluded.lth_guild",
+                language = excluded.language",
             session,
             user.sub,
             user.email,
             user.full_name,
-            user.lth_guild
+            user.language
         )
         .execute(&self.db)
         .await
@@ -396,7 +392,7 @@ impl Context {
                         if !resp.status().is_success() {
                             let status = resp.status();
                             let body = resp.text().await.ok();
-                            warn!(%status, ?body, "auth callback POST failed");
+                            warn!(%status, url=url.as_ref(), ?body, "auth callback POST failed");
                             return Err(());
                         }
                         if resp.status() == reqwest::StatusCode::CREATED

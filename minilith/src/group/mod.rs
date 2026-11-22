@@ -45,10 +45,12 @@ impl Deref for Router {
 }
 
 #[derive(Debug, Object)]
+#[allow(clippy::struct_excessive_bools, reason = "independent group switches")]
 pub struct Group {
     pub id: Uuid,
     pub path: Path,
     pub limit_membership_visibility: bool,
+    pub stock_tracking: bool,
     pub propagate_member_visibility_access: bool,
     pub name: IS,
     pub description: IS,
@@ -58,10 +60,12 @@ pub struct Group {
 }
 #[derive(Debug, Object)]
 #[allow(clippy::module_name_repetitions, reason = "ye")]
+#[allow(clippy::struct_excessive_bools, reason = "independent group switches")]
 pub struct FatGroup {
     pub id: Uuid,
     pub path: Path,
     pub limit_membership_visibility: bool,
+    pub stock_tracking: bool,
     pub propagate_member_visibility_access: bool,
     pub name: IS,
     pub description: IS,
@@ -78,7 +82,7 @@ struct JoinableGroup {
     requested: bool,
 }
 
-#[OpenApi(prefix_path = "/groups")]
+#[OpenApi(prefix_path = "/v0/groups")]
 impl Router {
     /// List all groups the user is a direct or transitive member of.
     /// for groups.
@@ -106,7 +110,8 @@ impl Router {
             r#"select distinct
                 pg.id,
                 pg.path,
-                pg.limit_membership_visibility,
+                false as "limit_membership_visibility!",
+                pg.stock_tracking as "stock_tracking!",
                 pg.propogate_member_visibility_access as "propagate_member_visibility_access!",
                 pg.name as "name!: DIS",
                 pg.description as "description!: DIS",
@@ -134,9 +139,10 @@ impl Router {
                 )
                 or exists (
                     select 1
-                    from user_group_settings ugs
-                    where ugs.group_id = g.id
-                    and ugs.user_id = $1
+                    from group_memberships settings
+                    where settings.group_id = g.id
+                    and settings.user_id = $1
+                    and settings.specific
                 )
             )
             order by pg.path"#,
@@ -155,7 +161,8 @@ impl Router {
             r#"select distinct
                 target.id,
                 target.path as "path!: Path",
-                target.limit_membership_visibility,
+                false as "limit_membership_visibility!",
+                target.stock_tracking as "stock_tracking!",
                 target.propogate_member_visibility_access as "propagate_member_visibility_access!",
                 target.name as "name!: DIS",
                 target.description as "description!: DIS",
@@ -180,6 +187,7 @@ impl Router {
                 id: row.id,
                 path: row.path,
                 limit_membership_visibility: row.limit_membership_visibility,
+                stock_tracking: row.stock_tracking,
                 propagate_member_visibility_access: row.propagate_member_visibility_access,
                 name: row.name.0,
                 description: row.description.0,

@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select purchases.id, purchases.product_id as ticket_kind_id,\n            purchases.product_price as \"product_price!\",\n            purchases.paid_price as \"paid_price!\",\n            (select transaction_id from purchase_transactions\n                where purchase_id = purchases.id and transaction_id is not null\n                order by completed_at limit 1) as \"transaction_id!\",\n            purchases.refunded_id\n        from purchases\n        where purchases.activity_id = $1\n        order by purchases.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "ticket_kind_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "product_price!",
+        "type_info": "Money"
+      },
+      {
+        "ordinal": 3,
+        "name": "paid_price!",
+        "type_info": "Money"
+      },
+      {
+        "ordinal": 4,
+        "name": "transaction_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 5,
+        "name": "refunded_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      null,
+      true
+    ]
+  },
+  "hash": "7b930ba85532bfd2371de8763d438934212a953beef2a7db20963b28349ae413"
+}

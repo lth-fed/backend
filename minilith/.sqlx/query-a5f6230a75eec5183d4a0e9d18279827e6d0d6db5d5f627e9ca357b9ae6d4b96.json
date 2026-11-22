@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into vote_rounds\n                (id, meeting_id, title, secret, max_choises, open)\n            values ($1, $2, $3, $4, $5, true)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Jsonb",
+        "Text",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a5f6230a75eec5183d4a0e9d18279827e6d0d6db5d5f627e9ca357b9ae6d4b96"
+}

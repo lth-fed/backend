@@ -14,6 +14,29 @@ pub enum ApiVersion {
     V2,
 }
 
+/// The refund is created with `PUT`, at this url.
+#[must_use]
+pub fn refund_instruction_url(instruction_uuid: Uuid, debug: bool) -> String {
+    let mut buffer = Uuid::encode_buffer();
+    let uuid = instruction_uuid.simple().encode_upper(&mut buffer);
+    if debug {
+        format!("https://mss.cpc.getswish.net/swish-cpcapi/api/v2/refunds/{uuid}")
+    } else {
+        format!("https://cpc.getswish.net/swish-cpcapi/api/v2/refunds/{uuid}")
+    }
+}
+/// Retrieve the status of a refund.
+#[must_use]
+pub fn refund_url(instruction_uuid: Uuid, debug: bool) -> String {
+    let mut buffer = Uuid::encode_buffer();
+    let uuid = instruction_uuid.simple().encode_upper(&mut buffer);
+    if debug {
+        format!("https://mss.cpc.getswish.net/swish-cpcapi/api/v1/refunds/{uuid}")
+    } else {
+        format!("https://cpc.getswish.net/swish-cpcapi/api/v1/refunds/{uuid}")
+    }
+}
+
 #[must_use]
 pub fn payment_request_url(version: ApiVersion, instruction_uuid: Uuid, debug: bool) -> String {
     let mut buffer = Uuid::encode_buffer();
@@ -87,4 +110,38 @@ pub struct PaymentRequestPatch {
     pub op: PaymentRequestPatchOperation,
     pub path: String,
     pub value: String,
+}
+
+/// <https://developer.swish.nu/api/refunds>.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct RefundRequest {
+    /// `payment_reference` of the original payment.
+    pub original_payment_reference: String,
+    pub callback_url: String,
+    /// The Swish number of the merchant making the refund.
+    pub payer_alias: String,
+    /// In SEK, e.g. `100.00`.
+    pub amount: String,
+    /// MUST be `SEK`.
+    pub currency: String,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Refund {
+    pub id: Uuid,
+    pub status: Option<RefundStatus>,
+    /// The refund's payment reference, available when it is done.
+    pub payment_reference: Option<String>,
+}
+
+#[derive(Enum, Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[oai(rename_all = "UPPERCASE")]
+#[serde(rename_all = "UPPERCASE")]
+pub enum RefundStatus {
+    Created,
+    Debited,
+    Paid,
+    Error,
 }

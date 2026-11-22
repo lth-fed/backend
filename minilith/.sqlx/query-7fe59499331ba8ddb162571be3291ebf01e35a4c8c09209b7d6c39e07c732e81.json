@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from product_reservation_addons where reservation_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7fe59499331ba8ddb162571be3291ebf01e35a4c8c09209b7d6c39e07c732e81"
+}

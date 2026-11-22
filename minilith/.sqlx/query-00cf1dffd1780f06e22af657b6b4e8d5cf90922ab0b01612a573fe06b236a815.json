@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from product_addon_option_bookkeepings where option_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "00cf1dffd1780f06e22af657b6b4e8d5cf90922ab0b01612a573fe06b236a815"
+}

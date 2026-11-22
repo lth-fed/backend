@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into product_allowed_groups (product_id, group_id)\n            select $1, group_id from unnest($2::uuid[]) allowed(group_id)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a5a4138d18a8584803c04241fe22650a8f8555745f2630d5ab72451b0b148e5f"
+}

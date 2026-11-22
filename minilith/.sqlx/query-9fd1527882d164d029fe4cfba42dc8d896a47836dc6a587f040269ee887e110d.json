@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into activity_views (id, activity_id, user_id, count)\n        values (uuidv4(), $1, $2, 1)\n        on conflict (user_id) do update set\n            activity_id = excluded.activity_id,\n            count = activity_views.count + 1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9fd1527882d164d029fe4cfba42dc8d896a47836dc6a587f040269ee887e110d"
+}

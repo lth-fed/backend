@@ -31,6 +31,7 @@ pub enum Kind {
     Ticket,
     Option,
     External,
+    Refund,
 }
 #[derive(Serialize, Debug, Clone, Copy, Enum)]
 #[oai(rename_all = "lowercase")]
@@ -59,6 +60,7 @@ pub struct AlcoholCategory {
 pub struct Data {
     pub language: Language,
     pub activity_name: String,
+    pub is_group: bool,
     pub creator_name: String,
     pub creator_logo_format: Option<ImageKind>,
     #[serde(skip)]
@@ -66,7 +68,12 @@ pub struct Data {
     pub creator_logo_data: Option<bytes::Bytes>,
     pub fees: i64,
     pub fees_external: i64,
+    /// Fees charged by the provider for refunding payments (kept apart from `fees`).
+    pub fees_refund: i64,
     pub per_object: Vec<Object>,
+    /// Purchases refunded by an admin, in the same grouping as `per_object` but with the
+    /// refunded amount as the price. Resales are not refunds and never show up here.
+    pub per_refund: Vec<Object>,
     pub per_alcohol_category: Vec<AlcoholCategory>,
     pub exported_at: Option<String>,
 }
@@ -205,12 +212,15 @@ mod tests {
         Data {
             language: Language::Swedish,
             activity_name: "Testaktivitet".to_owned(),
+            is_group: false,
             creator_name: "Testsektionen".to_owned(),
             creator_logo_format: None,
             creator_logo_data: None,
             fees: 0,
             fees_external: 0,
+            fees_refund: 0,
             per_object: Vec::new(),
+            per_refund: Vec::new(),
             per_alcohol_category: Vec::new(),
             exported_at: None,
         }
@@ -222,6 +232,14 @@ mod tests {
         for language in [Language::Swedish, Language::English] {
             let mut report = empty_data();
             report.language = language;
+            // Exercises the refunds section and the conditional summary rows.
+            report.per_refund.push(super::Object {
+                name: "Testbiljett".to_owned(),
+                kind: super::Kind::Refund,
+                price: 10_000,
+                number: 1,
+            });
+            report.fees_refund = 100;
             let pdf = compile(&world, &report)?;
             assert!(pdf.starts_with(b"%PDF"));
         }

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select readonly from vote_meeting_admins\n        where meeting_id = $1 and user_id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "readonly",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "af1013440dc8d403581f1a2ef2b67fb90fb2c7c19dfb1b239643c07954293572"
+}

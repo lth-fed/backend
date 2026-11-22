@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select transaction_id\n            from purchase_transactions\n            where purchase_id = $1\n            and buyer_id = $2\n            and transaction_id is not null\n            order by completed_at\n            limit 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "transaction_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "63297365ac2bb31a4809c66366689d2518f3c6a2228a43775a69e15a933da674"
+}

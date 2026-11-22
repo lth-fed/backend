@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select purchase.product_id, purchase.owner_id,\n            purchase.for_resale as \"for_resale?: PgMoney\",\n            product.name as \"product_name!: DIS\",\n            (now() between product.resale_start and product.resale_stop)\n                as \"within_resale_window!\",\n            purchase.resale_transaction_id,\n            (purchase.refunded_id is not null) as \"refunded!\"\n        from purchases purchase\n        inner join products product on product.id = purchase.product_id\n        where purchase.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "product_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "owner_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "for_resale?: PgMoney",
+        "type_info": "Money"
+      },
+      {
+        "ordinal": 3,
+        "name": "product_name!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "within_resale_window!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 5,
+        "name": "resale_transaction_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 6,
+        "name": "refunded!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      null,
+      true,
+      null
+    ]
+  },
+  "hash": "800a5fafadcd50fa58527af891950fb50597eca3f6e0db9e1b48a46b818eeb93"
+}

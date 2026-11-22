@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into group_memberships (user_id, group_id)\n                select $1 as user_id, id as group_id from groups where path = 'tlth'\n                on conflict (user_id, group_id) do nothing",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8123372dd17ed1d6f4f203e6da82f0bc2bda54b281e45818b4cf3109bd80d606"
+}

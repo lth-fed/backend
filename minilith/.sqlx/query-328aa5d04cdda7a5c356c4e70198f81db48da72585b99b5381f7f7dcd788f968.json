@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from news_assigned_tags where news_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "328aa5d04cdda7a5c356c4e70198f81db48da72585b99b5381f7f7dcd788f968"
+}

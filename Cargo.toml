@@ -24,6 +24,7 @@ poem = { version = "3.1.12", features = ["cookie", "opentelemetry", "rustls"] }
 # we don't pull in `sqlx` here, even though it'd make our lives a bit easier,
 # since it pulls in the mysql & sqlite drivers which makes compile time be slow
 poem-openapi = { version = "5.1.16", features = ["swagger-ui", "uuid", "time"] }
+argon2 = "0.5.3"
 rand = "0.10.1"
 reqwest = { version = "0.13.3", features = ["json", "http2"] }
 serde = { version = "1.0.228", features = ["derive"] }

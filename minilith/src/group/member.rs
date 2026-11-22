@@ -45,7 +45,8 @@ pub async fn user_groups_tree(
         FatGroup,
         r#"
             select distinct
-                g.id, g.path, g.limit_membership_visibility,
+                g.id, g.path, false as "limit_membership_visibility!",
+                g.stock_tracking as "stock_tracking!",
                 g.propogate_member_visibility_access as "propagate_member_visibility_access!",
                 g.name as "name!: DIS",
                 g.description as "description!: DIS",

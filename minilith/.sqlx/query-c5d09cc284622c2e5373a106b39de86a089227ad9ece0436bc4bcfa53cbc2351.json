@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n                purchases.id,\n                purchases.product_id,\n                purchases.activity_id,\n                purchases.owner_id,\n                owner.name as \"owner_name?\",\n                purchases.for_resale as \"price!\",\n                purchases.purchased_at,\n                products.name as \"product_name!: DIS\"\n            from purchases\n            inner join products on products.id = purchases.product_id\n            left join users owner on owner.id = purchases.owner_id\n            where products.group_id = $1\n            and purchases.for_resale is not null\n            order by purchases.purchased_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "product_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "activity_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "owner_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "owner_name?",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 5,
+        "name": "price!",
+        "type_info": "Money"
+      },
+      {
+        "ordinal": 6,
+        "name": "purchased_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "product_name!: DIS",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "c5d09cc284622c2e5373a106b39de86a089227ad9ece0436bc4bcfa53cbc2351"
+}

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update push_notifications set send_at = $2\n            where id = $1 and sent = false",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7b1de4ad6b0a119cca8837560554f459a4d78c3e8b0b37d2a11d3f34bc26a7a1"
+}

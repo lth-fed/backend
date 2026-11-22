@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update stock_transactions set name = $2, activity_id = $3 where id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Jsonb",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "25298c3ecb8112b6318189145a00d9a9154040915741ce887d00895497bfdd1d"
+}

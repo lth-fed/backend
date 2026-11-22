@@ -1,4 +1,6 @@
 create type push_platform as enum ('ios', 'android');
+-- what a push refers to; also sent to clients in the push payload and notification API
+create type notification_kind as enum ('activity', 'news', 'ticket_release', 'transfer', 'reservation');
 
 create table push_devices (
     device_id text primary key,
@@ -9,193 +11,193 @@ create table push_devices (
     unique (platform, push_token)
 );
 
-create table notifications (
+create table news (
     id uuid primary key,
+    target_group_id uuid not null references groups(id),
+    -- not markdown
+    title jsonb not null,
+    -- markdown
+    content jsonb not null,
+    -- used to render questionnaires, which are implemented using product addons.
+    questionnaire_product uuid references products(id),
+    published_at timestamptz not null
+);
+create table news_tags (
+    id uuid primary key,
+    creator_id uuid not null references groups(id),
+    title jsonb not null
+);
+create table news_assigned_tags (
+    news_id uuid not null references news (id),
+    tag_id uuid not null references news_tags (id),
+    primary key (news_id, tag_id)
+);
+create table news_push_opt_out_tags (
+    user_id text not null references users(id),
+    tag_id uuid not null references news_tags(id),
+    primary key (user_id, tag_id)
+);
+
+create table push_notifications (
+    id uuid primary key,
+    kind notification_kind not null,
     sender jsonb not null,
     title jsonb not null,
+    -- not markdown
     content jsonb not null,
     send_at timestamptz not null,
     sent boolean not null default false
 );
--- specific tables for specific kind of notifications, so we can at send time look up which users should get them
-create table activity_notifications (
-    id uuid not null,
-    activity_id uuid not null references activities (id),
-    primary key (id, activity_id),
-    notification_id uuid not null references notifications (id) on delete cascade
+
+-- per-notification read receipts
+create table notification_reads (
+    user_id text not null references users(id) on delete cascade,
+    notification_id uuid not null references push_notifications(id) on delete cascade,
+    read_at timestamptz not null default now(),
+    primary key (user_id, notification_id)
 );
-create table activity_buyers_notifications (
-    -- Uuid::nil() for the automatically created ticket-release notification.
-    id uuid not null,
-    activity_id uuid not null references activities (id),
-    primary key (id, activity_id),
-    notification_id uuid not null references notifications (id) on delete cascade
-);
-create table purchased_ticket_notifications (
-    id uuid not null,
-    activity_id uuid not null references activities (id),
-    primary key (id, activity_id),
-    notification_id uuid not null references notifications (id) on delete cascade
+-- "mark all read" watermark; falls back to users.creation so new accounts don't see
+-- old history as unread
+create table user_notification_state (
+    user_id text primary key references users(id) on delete cascade,
+    last_full_read timestamptz not null default now()
 );
 
-create table group_notifications (
-    id uuid primary key,
-    group_id uuid not null references groups (id),
-    notification_id uuid not null references notifications (id) on delete cascade
-);
-
-create table activity_notification_overrides (
-    user_id text not null references users(id),
+-- update on any change to activity visibility
+create table activity_push_random_selected (
     activity_id uuid not null references activities(id) on delete cascade,
-    primary key(user_id, activity_id),
-    follow boolean not null
+    user_id text not null references users(id) on delete cascade,
+    primary key (activity_id, user_id)
 );
 
--- Keep eligibility separate from notification preferences. Activity eligibility follows ticket
--- visibility, purchasing access, or ownership, while preferences follow the activity hosts.
+-- specific tables for specific kind of notifications, so we can at send time look up which users should get them
+
+-- for ticket releases
+-- ONLY send for base ticket & later additional tickets
+create table ticket_release_push_notifications (
+    id uuid not null,
+    ticket_id uuid not null references products (id),
+    primary key (id, ticket_id),
+    notification_id uuid not null references push_notifications (id) on delete cascade
+);
+-- to those who can see an activity
+create table activity_push_notifications (
+    id uuid not null,
+    activity_id uuid not null references activities (id),
+    primary key (id, activity_id),
+    notification_id uuid not null references push_notifications (id) on delete cascade
+);
+-- restrict a ticket release notification to specific groups
+create table ticket_release_groups (
+    push_id uuid not null,
+    push_ticket_id uuid not null,
+    to_group_id uuid not null references groups(id),
+    primary key (push_id, push_ticket_id, to_group_id),
+    foreign key (push_id, push_ticket_id)
+        references ticket_release_push_notifications (id, ticket_id) on delete cascade
+);
+-- to those who have bought a ticket
+create table purchased_ticket_push_notifications (
+    id uuid not null,
+    activity_id uuid not null references activities (id),
+    primary key (id, activity_id),
+    notification_id uuid not null references push_notifications (id) on delete cascade
+);
+-- To a news, which is published from a group
+create table news_push_notifications (
+    id uuid primary key,
+    news_id uuid not null references news (id),
+    notification_id uuid not null references push_notifications (id) on delete cascade
+);
+
+-- Eligibility only. Per-user preferences (follow / tag opt-out) are applied by the sender.
 create view notification_recipients as
-with eligible_users as (
-    -- Everyone who can see the activity.
-    select
-        activity_notifications.notification_id,
-        group_memberships.user_id,
-        activity_notifications.activity_id,
-        null::uuid as group_id,
-        true as use_group_settings
-    from activity_notifications
-    inner join ticket_kinds kind
-        on kind.activity_id = activity_notifications.activity_id
-    inner join ticket_kind_allowed_groups
-        on ticket_kind_allowed_groups.ticket_kind_id
-            = kind.id
-    inner join groups allowed_group
-        on allowed_group.id = ticket_kind_allowed_groups.group_id
-    inner join groups member_group
-        on allowed_group.path @> member_group.path
-    inner join group_memberships
-        on group_memberships.group_id = member_group.id
-    where member_group.limit_membership_visibility = false
-        or member_group.id = allowed_group.id
-
-    union
-
-    -- Everyone who can buy a non-visibility ticket kind.
-    select
-        activity_buyers_notifications.notification_id,
-        group_memberships.user_id,
-        activity_buyers_notifications.activity_id,
-        null::uuid as group_id,
-        true as use_group_settings
-    from activity_buyers_notifications
-    inner join ticket_kinds kind
-        on kind.activity_id = activity_buyers_notifications.activity_id
-    inner join ticket_kind_allowed_groups
-        on ticket_kind_allowed_groups.ticket_kind_id
-            = kind.id
-    inner join groups allowed_group
-        on allowed_group.id = ticket_kind_allowed_groups.group_id
-    inner join groups member_group
-        on allowed_group.path @> member_group.path
-    inner join group_memberships
-        on group_memberships.group_id = member_group.id
-    where not kind.for_visibility
-        and (
-            member_group.limit_membership_visibility = false
-            or member_group.id = allowed_group.id
-        )
-
-    union
-
-    -- Everyone who owns a ticket to the activity.
-    select
-        purchased_ticket_notifications.notification_id,
-        purchased_tickets.owner_id,
-        purchased_ticket_notifications.activity_id,
-        null::uuid as group_id,
-        false as use_group_settings
-    from purchased_ticket_notifications
-    inner join ticket_kinds
-        on ticket_kinds.activity_id = purchased_ticket_notifications.activity_id
-    inner join purchased_tickets
-        on purchased_tickets.ticket_kind_id = ticket_kinds.id
-
-    union
-
-    -- Direct and descendant members of a group notification target.
-    select
-        group_notifications.notification_id,
-        group_memberships.user_id,
-        null::uuid as activity_id,
-        groups.id as group_id,
-        true as use_group_settings
-    from group_notifications
-    inner join groups on groups.id = group_notifications.group_id
-    inner join groups member_group on groups.path @> member_group.path
-    inner join group_memberships
-        on group_memberships.group_id = member_group.id
-    where member_group.limit_membership_visibility = false
-        or member_group.id = groups.id
-),
-settings_by_host as (
-    select
-        eligible_users.notification_id,
-        eligible_users.user_id,
-        eligible_users.use_group_settings,
-        activity_override.follow,
-        coalesce(closest_setting.visible, false) as visible,
-        coalesce(
-            closest_setting.notification_level,
-            'none'::notification_level
-        ) as notification_level
-    from eligible_users
-    inner join lateral (
-        select activity_hosts.group_id
-        from activity_hosts
-        where activity_hosts.activity_id = eligible_users.activity_id
-        union all
-        select eligible_users.group_id
-        where eligible_users.activity_id is null
-    ) preference_target on true
-    inner join groups target_group on target_group.id = preference_target.group_id
-    left join lateral (
-        select settings.visible, settings.notification_level
-        from user_group_settings settings
-        inner join groups settings_group on settings_group.id = settings.group_id
-        where settings.user_id = eligible_users.user_id
-            and settings_group.path @> target_group.path
-        order by nlevel(settings_group.path) desc
-        limit 1
-    ) closest_setting on true
-    left join activity_notification_overrides activity_override
-        on activity_override.user_id = eligible_users.user_id
-        and activity_override.activity_id = eligible_users.activity_id
-    where eligible_users.activity_id is null
-        or exists (
-            select 1
-            from activities
-            where activities.id = eligible_users.activity_id
-            and activities.is_hidden = false
-        )
-)
+-- ticket release: members of the groups allowed to buy the ticket (and their descendants)
 select
-    notification_id,
-    user_id,
-    case when bool_or(
-        case
-            when follow is true then true
-            when follow is false then false
-            when use_group_settings = false then true
-            else notification_level = 'all'::notification_level
-        end
-    ) then 'all'::notification_level else 'none'::notification_level end
-        as notification_level,
-    bool_or(
-        case
-            when follow is true then true
-            when follow is false then false
-            when use_group_settings = false then true
-            else visible
-        end
-    ) as visible
-from settings_by_host
-group by notification_id, user_id;
+    release_notification.notification_id,
+    group_memberships.user_id
+from ticket_release_push_notifications release_notification
+inner join product_allowed_groups
+    on product_allowed_groups.product_id = release_notification.ticket_id
+inner join groups allowed_group
+    on allowed_group.id = product_allowed_groups.group_id
+inner join groups member_group
+    on allowed_group.path @> member_group.path
+inner join group_memberships
+    on group_memberships.group_id = member_group.id
+where member_group.id = allowed_group.id
+    or not group_memberships.specific
+
+union
+
+-- everyone who owns a product for the activity
+select
+    purchased_notification.notification_id,
+    purchases.owner_id
+from purchased_ticket_push_notifications purchased_notification
+inner join purchases
+    on purchases.activity_id = purchased_notification.activity_id
+
+union
+
+-- the activity's followers
+select
+    activity_notification.notification_id,
+    activity_followers.user_id
+from activity_push_notifications activity_notification
+inner join activity_followers
+    on activity_followers.activity_id = activity_notification.activity_id
+where activity_followers.follow
+
+union
+
+-- people who are guaranteed / invited to buy something for the activity
+select
+    activity_notification.notification_id,
+    product_buyers.user_id
+from activity_push_notifications activity_notification
+inner join product_buyers
+    on product_buyers.activity_id = activity_notification.activity_id
+
+union
+
+-- members of a hosting group (and descendants)
+select
+    activity_notification.notification_id,
+    group_memberships.user_id
+from activity_push_notifications activity_notification
+inner join activity_hosts
+    on activity_hosts.activity_id = activity_notification.activity_id
+inner join groups host_group
+    on host_group.id = activity_hosts.group_id
+inner join groups member_group
+    on host_group.path @> member_group.path
+inner join group_memberships
+    on group_memberships.group_id = member_group.id
+where member_group.id = host_group.id
+    or not group_memberships.specific
+
+union
+
+-- the random sample of everyone else who can see the activity
+select
+    activity_notification.notification_id,
+    activity_push_random_selected.user_id
+from activity_push_notifications activity_notification
+inner join activity_push_random_selected
+    on activity_push_random_selected.activity_id = activity_notification.activity_id
+
+union
+
+-- news: members of the target group (and descendants)
+select
+    news_notification.notification_id,
+    group_memberships.user_id
+from news_push_notifications news_notification
+inner join news on news.id = news_notification.news_id
+inner join groups target_group on target_group.id = news.target_group_id
+inner join groups member_group on target_group.path @> member_group.path
+inner join group_memberships
+    on group_memberships.group_id = member_group.id
+where member_group.id = target_group.id
+    or not group_memberships.specific;

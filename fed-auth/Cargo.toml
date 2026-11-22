@@ -9,6 +9,7 @@ name = "fed-auth"
 path = "src/main.rs"
 
 [dependencies]
+argon2.workspace = true
 base64.workspace = true
 bin-common = { version = "0.1.0", path = "../bin-common" }
 color-eyre.workspace = true

@@ -49,7 +49,7 @@
     #if sv [Orderdatum] else [Date of purchase]: #data.purchase_date \
     #if sv [Betalsätt] else [Payment provider]: #data.provider \
     #if sv [Betalreferens] else [Payment reference]: #data.payment_reference \
-    #if data.refund_reference != none [#if sv [Returreferens] else [Return reference]: #data.refund_reference]
+    #if data.refund_reference != none [#if sv [Returreferens] else [Refund reference]: #data.refund_reference]
 
     #if data.customer_name != none [
       #if sv [Kund] else [Customer]: #data.customer_name

@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update vote_alternatives set voted_for = voted_for + 1\n            where round_id = $1 and id = any($2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f4ed0954fac69da5b10d31bb2517bcefb616c7a6e2464d4ea97553874d5ecc8d"
+}

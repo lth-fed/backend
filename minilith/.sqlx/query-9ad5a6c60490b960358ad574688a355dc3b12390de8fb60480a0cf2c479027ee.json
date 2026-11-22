@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select tickets_been_released, sales_start from products where id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "tickets_been_released",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 1,
+        "name": "sales_start",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "9ad5a6c60490b960358ad574688a355dc3b12390de8fb60480a0cf2c479027ee"
+}

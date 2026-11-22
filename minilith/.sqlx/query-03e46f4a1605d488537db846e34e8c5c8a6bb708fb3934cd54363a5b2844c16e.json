@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select tag.id from product_tags tag\n            inner join groups owner on owner.id = tag.group_id\n            inner join groups news_group on news_group.id = $1\n            where news_group.path @> owner.path\n            order by tag.group_id\n            limit 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "03e46f4a1605d488537db846e34e8c5c8a6bb708fb3934cd54363a5b2844c16e"
+}

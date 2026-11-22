@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from product_addon_links where product_id = $1 and addon_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e847a607c872181f4bac627f2ee9b75a3c1d2c6c70249c24d06d875ad9521476"
+}

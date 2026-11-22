@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select opt.id, opt.idx, opt.name as \"name!: DIS\", opt.price,\n            (select coalesce(array_agg(bk.price order by bk.id), '{}'::money[])\n                from product_addon_option_bookkeepings bk where bk.option_id = opt.id) as \"bp!: Vec<i64>\",\n            (select coalesce(array_agg(tag.name->>'en' order by bk.id), '{}'::text[])\n                from product_addon_option_bookkeepings bk\n                inner join product_tags tag on tag.id = bk.category\n                where bk.option_id = opt.id) as \"bc!: Vec<String>\",\n            add.id as add_id\n            from products kind\n            inner join product_addon_links links on links.product_id = kind.id\n            inner join product_addons add on add.id = links.addon_id\n            inner join product_addon_options opt on opt.product_addon_id = add.id\n            where kind.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "idx",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "name!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 3,
+        "name": "price",
+        "type_info": "Money"
+      },
+      {
+        "ordinal": 4,
+        "name": "bp!: Vec<i64>",
+        "type_info": "MoneyArray"
+      },
+      {
+        "ordinal": 5,
+        "name": "bc!: Vec<String>",
+        "type_info": "TextArray"
+      },
+      {
+        "ordinal": 6,
+        "name": "add_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      null,
+      null,
+      false
+    ]
+  },
+  "hash": "2313fd7ac93dc415f7db6a14fd6b2d815adf2aa4c750a128cfec331db620afb4"
+}

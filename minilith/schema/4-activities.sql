@@ -9,12 +9,14 @@ create type location as (
     url text
 );
 
--- for an activity without tickets, the frontend should create a free ticket with max_tickets = 0, to specify who can view the activity
+-- for an activity without tickets, the admin frontend should create a free ticket
+-- with stock = 0, to specify who can view the activity
 create table activities (
     id uuid primary key default uuidv4(),
     responsible_name text not null,
     responsible_contact text not null,
-    creator_id uuid not null references groups(id),
+    -- can be changed by admins afterwards
+    sales_target_id uuid not null references sales_targets(id),
     --
     title jsonb not null,
     description jsonb not null,
@@ -25,12 +27,41 @@ create table activities (
     -- only for normal users, admins can always see them
     is_hidden boolean not null default true,
     is_hidden_for_other_admins boolean not null default false,
-    max_tickets integer not null default 2147483647 check (max_tickets >= 0),
+    --
+    -- should be references products(id),, but that'd make a cyclic dependency
+    -- (+ it's on 12-... which is after this file!)
+    --
+    -- This can be set so that the randomized tickets fall back to this in case
+    -- they sell out for individual tickets.
+    -- Must always exist due to visibility concerns.
+    base_ticket uuid not null,
+    max_tickets_per_user integer not null check (max_tickets_per_user >= 1),
+
+    -- for sales of stock items either:
+    -- - to users in app at this activity 
+    -- - OR to customers on location
+    stock_group uuid references groups(id),
+
     -- Set only after the automatic sales report email has been accepted by SMTP.
     bookkept boolean not null default false
 );
+create table activity_tags (
+    id uuid primary key,
+    creator_id uuid not null references groups(id),
+    title jsonb not null
+);
+create table activity_assigned_tags (
+    activity_id uuid not null references activities(id),
+    tag_id uuid not null references activity_tags(id),
+    primary key (activity_id, tag_id)
+);
+create table activity_opt_out_tags (
+    user_id text not null references users(id),
+    tag_id uuid not null references activity_tags(id),
+    primary key (user_id, tag_id)
+);
 
--- co-hosts of event. MUST include activities.creator_id
+-- co-hosts of event.
 create table activity_hosts (
     activity_id uuid not null references activities(id) on delete cascade,
     group_id uuid not null references groups(id),
@@ -47,4 +78,11 @@ create table activity_verifiers (
     activity_id uuid not null references activities(id) on delete cascade,
     user_id text not null references users(id),
     primary key (activity_id, user_id)
+);
+
+create table activity_followers (
+    user_id text not null references users(id),
+    activity_id uuid not null references activities(id) on delete cascade,
+    primary key(user_id, activity_id),
+    follow boolean not null
 );

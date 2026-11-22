@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n                purchases.id,\n                purchases.product_id,\n                purchases.purchaser_id,\n                purchases.owner_id,\n                owner.name as \"owner_name?\",\n                (purchases.refunded_id is not null) as \"refunded!\",\n                (select transaction_id from purchase_transactions\n                    where purchase_id = purchases.id and transaction_id is not null\n                    order by completed_at limit 1) as \"transaction_id?\",\n                (select array(select group_id from group_memberships\n                 where user_id = owner_id)) as owner_memberships\n            from purchases\n            left join users owner on owner.id = owner_id\n            where purchases.product_id = $1\n            order by purchases.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "product_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "purchaser_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "owner_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "owner_name?",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 5,
+        "name": "refunded!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
+        "name": "transaction_id?",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 7,
+        "name": "owner_memberships",
+        "type_info": "UuidArray"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "fb28e4ee8209f0cddd460a4e6b5a402f5ab91b0a58042b3bb67f55d4ca45c792"
+}

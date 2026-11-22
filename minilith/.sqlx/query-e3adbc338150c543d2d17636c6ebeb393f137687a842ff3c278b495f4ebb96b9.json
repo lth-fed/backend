@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "with next as (\n            select id from products\n            where sales_start > now() - '5 minutes'::interval\n            and sales_start <= now() + '40 seconds'::interval\n            and tickets_been_released = false\n            and kind = 'ticket'\n            order by id\n            limit 1\n            for update skip locked\n        )\n        update products kind\n        set tickets_been_released = true\n        from next\n        where kind.id = next.id\n        returning kind.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e3adbc338150c543d2d17636c6ebeb393f137687a842ff3c278b495f4ebb96b9"
+}

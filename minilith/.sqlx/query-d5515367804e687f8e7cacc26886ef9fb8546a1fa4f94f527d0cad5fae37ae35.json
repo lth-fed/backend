@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into news_push_notifications\n                (id, news_id, notification_id)\n            values ($1, $1, $2)\n            on conflict (id) do update set\n                notification_id = excluded.notification_id\n            where news_push_notifications.news_id = excluded.news_id",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d5515367804e687f8e7cacc26886ef9fb8546a1fa4f94f527d0cad5fae37ae35"
+}

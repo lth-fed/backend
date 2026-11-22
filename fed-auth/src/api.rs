@@ -1,6 +1,8 @@
 use std::ops::Deref;
 
-use fed_auth_verifier::callbacks::Guild;
+use argon2::Argon2;
+use argon2::password_hash::rand_core::OsRng;
+use argon2::password_hash::{PasswordHash, PasswordHasher as _, PasswordVerifier as _, SaltString};
 use minilith_errors::{
     MinilithEndpointError, MinilithErrorOptionExt as _, MinilithErrorResultExt as _, MinilithResult,
 };
@@ -36,12 +38,11 @@ struct TestLoginRequest {
     code: String,
 }
 
+/// Completes a login where the provider did not supply a name (email, test). `LU` always does.
 #[derive(Object, Clone)]
 pub(crate) struct InfoCompletion {
     code: String,
     name: String,
-    /// MUST be provided if the sub starts with `lund-university:`.
-    personal_number: Option<String>,
 }
 
 #[derive(Object)]
@@ -60,6 +61,64 @@ struct ApiKeyResponse {
     access_token: String,
     expires_in: u64,
 }
+#[derive(Object)]
+struct PasswordAssignRequest {
+    password: String,
+}
+#[derive(Object)]
+struct PasswordLoginRequest {
+    /// The user's id as minilith knows it (`email:...` or `lund-university:...`).
+    user_id: String,
+    password: String,
+    /// Session code from the OIDC authorize request.
+    code: String,
+    language: Option<String>,
+}
+#[derive(Object)]
+struct AdminApiKeyRequest {
+    user_id: String,
+    email: String,
+}
+#[derive(Object)]
+struct AdminApiKeyResponse {
+    key: Uuid,
+}
+
+fn bearer_token(headers: &poem::http::HeaderMap) -> Option<&str> {
+    headers
+        .get("authorization")?
+        .to_str()
+        .ok()?
+        .strip_prefix("Bearer ")
+}
+
+/// The `client_id` (JWT audience) of an access token which the [`User`] extractor already
+/// validated.
+fn token_client_id(
+    jwks: &jsonwebtoken::jwk::JwkSet,
+    headers: &poem::http::HeaderMap,
+) -> MinilithResult<String> {
+    #[derive(serde::Deserialize)]
+    struct Audience {
+        aud: String,
+    }
+
+    let token = bearer_token(headers)
+        .ok_or_else(|| MinilithEndpointError::unauthorized("missing access token", ""))?;
+    let header = jsonwebtoken::decode_header(token)
+        .wrap_err_unauthorized("access token has no valid header")?;
+    let jwk = jwks
+        .find(header.kid.as_deref().unwrap_or_default())
+        .ok_or(())
+        .wrap_err_unauthorized("access token has an unknown key ID")?;
+    let key = jsonwebtoken::DecodingKey::from_jwk(jwk)
+        .wrap_err_internal("internal error, jwk invalid")?;
+    let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::EdDSA);
+    validation.validate_aud = false;
+    jsonwebtoken::decode::<Audience>(token, &key, &validation)
+        .wrap_err_unauthorized("invalid access token")
+        .map(|data| data.claims.aud)
+}
 
 #[derive(Clone)]
 pub(crate) struct MainRouter {
@@ -73,53 +132,11 @@ impl Deref for MainRouter {
 }
 #[OpenApi]
 impl MainRouter {
-    async fn get_guild(&self, pn: &str, sub: &str) -> MinilithResult<Option<Guild>> {
-        let resp = self
-            .reqwest_client
-            .post("https://medcheck.tlth.se")
-            .timeout(std::time::Duration::from_secs(5))
-            .header("content-type", "application/x-www-form-urlencoded")
-            .body(format!("id={pn}"))
-            .send()
-            .await
-            .wrap_err_internal(format!("medcheck: transport error (for {sub})"))?
-            .error_for_status()
-            .wrap_err_internal(format!("medcheck: status error (for {sub})"))?;
-        let mut body = resp
-            .text()
-            .await
-            .wrap_err_internal("medcheck: transport body error")?;
-        let Some(g1) = (|| {
-            let needle = "<div class=\"guilds\">";
-            let idx = body.find(needle)?;
-            let guild = body.get((idx + needle.len())..)?;
-            let g1 = guild.get(..1)?;
-            Some(g1)
-        })() else {
-            return Ok(None);
-        };
-        let guild = match g1 {
-            "f" => Guild::F,
-            "e" => Guild::E,
-            "m" => Guild::M,
-            "v" => Guild::V,
-            "a" => Guild::A,
-            "k" => Guild::K,
-            "d" => Guild::D,
-            "w" => Guild::W,
-            "i" => Guild::I,
-            // apparently this is ing?? i fucking hate medcheck
-            "n" => return Ok(Some(Guild::Ing)),
-            _ => {
-                body.make_ascii_lowercase();
-                return Ok(body.contains("doct").then_some(Guild::Doct))
-            }
-        };
-        Ok(Some(guild))
-    }
+    /// Stores the display name for the session, then continues the login.
+    ///
     /// # Errors
     ///
-    /// - `personal_number`: `xxxxxxxxxx` where x: /[0-9]/
+    /// `name`: must contain a first and surname and be at least 5 characters long.
     #[oai(path = "/personal-information", method = "post")]
     async fn info_completion(
         &self,
@@ -143,7 +160,7 @@ impl MainRouter {
         .await?
         .wrap_err_not_found()?;
 
-        // if email (admin) login, don't enforce name!
+        // email logins are handled by the board and might not have a real name
         if !sub.starts_with("email:")
             && (body
                 .name
@@ -158,28 +175,10 @@ impl MainRouter {
                 "name",
             ));
         }
-        let guild = if let Some(pn) = &body.personal_number {
-            if pn.len() != 10 || !pn.chars().all(|char| "0123456789".contains(char)) {
-                return Err(MinilithEndpointError::bad_user_input(
-                    "personal_number invalid",
-                    "",
-                    "personal number has to be in the format of 10 numbers without any characters between",
-                    "personal_number",
-                ));
-            }
-
-            self.get_guild(pn, &sub).await.ok().flatten()
-        } else {
-            None
-        };
 
         sqlx::query!(
-            "update session_validated_users set
-                full_name = $1,
-                lth_guild = $2
-            where session_id = $3",
+            "update session_validated_users set full_name = $1 where session_id = $2",
             body.name,
-            guild.as_ref().map(Guild::to_str),
             body.code
         )
         .execute(&self.db)
@@ -291,7 +290,6 @@ impl MainRouter {
             sub: format!("email:{}", login_data.email),
             full_name: None,
             email: Some(login_data.email),
-            lth_guild: None,
             language: body.language,
         };
         self.validate_session(&login_data.code, &user).await?;
@@ -329,7 +327,6 @@ impl MainRouter {
             sub,
             full_name: None,
             email: None,
-            lth_guild: None,
             language: None,
         };
         self.validate_session(&body.code, &user).await?;
@@ -363,7 +360,6 @@ impl MainRouter {
                         email: None,
                         full_name: Some(body.default_name.unwrap_or_else(|| "API user".to_owned())),
                         language: Some(body.default_language.unwrap_or_else(|| "en".to_owned())),
-                        lth_guild: None,
                     },
                 ),
                 &self.private_key,
@@ -401,5 +397,139 @@ impl MainRouter {
             access_token,
             expires_in: ACCESS_TOKEN_VALID_FOR,
         }))
+    }
+    /// Stores an argon2id password for the bearer's user, scoped to one client.
+    ///
+    /// # Errors
+    ///
+    /// AUTH, DB.
+    #[oai(path = "/password/assign", method = "post")]
+    async fn assign_password(
+        &self,
+        user: fed_auth_verifier::User,
+        headers: &poem::http::HeaderMap,
+        Json(body): Json<PasswordAssignRequest>,
+    ) -> MinilithResult<()> {
+        if !(8..=128).contains(&body.password.len()) {
+            return Err(MinilithEndpointError::bad_user_input(
+                "password invalid",
+                "",
+                "password has to be between 8 and 128 characters long",
+                "password",
+            ));
+        }
+        let client_id = token_client_id(&self.jwks, headers)?;
+        let salt = SaltString::generate(&mut OsRng);
+        let hash = Argon2::default()
+            .hash_password(body.password.as_bytes(), &salt)
+            .map_err(|err| MinilithEndpointError::internal_error("password hashing failed", err))?;
+        let hash = hash.to_string();
+        sqlx::query!(
+            "insert into password_associations
+                (user_id, client_id, password_salt, password_hash)
+            values ($1, $2, $3, $4)
+            on conflict (user_id, client_id) do update set
+                password_salt = excluded.password_salt,
+                password_hash = excluded.password_hash",
+            user.get_id(),
+            client_id,
+            salt.as_str().as_bytes(),
+            hash.as_bytes(),
+        )
+        .execute(&self.db)
+        .await?;
+        Ok(())
+    }
+
+    /// Logs in with a password for an existing OIDC session.
+    ///
+    /// # Errors
+    ///
+    /// AUTH, DB.
+    #[oai(path = "/providers/password/login", method = "post")]
+    async fn password_login(
+        &self,
+        Json(body): Json<PasswordLoginRequest>,
+        headers: &poem::http::HeaderMap,
+    ) -> MinilithResult<PlainText<String>> {
+        if headers
+            .get("origin")
+            .is_some_and(|origin| origin != self.website_domain)
+        {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "origin has to be from our domain",
+                "",
+            ));
+        }
+        let row = sqlx::query!(
+            "select password_salt, password_hash
+            from password_associations
+            where user_id = $1
+            and client_id = (select client_id from sessions where id = $2)",
+            body.user_id,
+            body.code,
+        )
+        .fetch_optional(&self.db)
+        .await?
+        .ok_or_else(|| MinilithEndpointError::unauthorized("invalid credentials", ""))?;
+        let stored_hash = std::str::from_utf8(&row.password_hash)
+            .ok()
+            .and_then(|hash| PasswordHash::new(hash).ok())
+            .ok_or_else(|| {
+                MinilithEndpointError::internal_error("stored password hash is corrupt", "")
+            })?;
+        Argon2::default()
+            .verify_password(body.password.as_bytes(), &stored_hash)
+            .map_err(|_| MinilithEndpointError::unauthorized("invalid credentials", ""))?;
+
+        let Some(session) = self.get_session(&body.code).await? else {
+            return Err(MinilithEndpointError::unauthorized("code not valid", ""));
+        };
+        let user = ValidatedUser {
+            sub: body.user_id,
+            email: None,
+            full_name: None,
+            language: body.language,
+        };
+        self.validate_session(&body.code, &user).await?;
+        Ok(PlainText(
+            self.provider_callback_next_url(&body.code, &ValidatedAuthSession { session, user })
+                .await
+                .wrap_err_internal("noalert provider")?,
+        ))
+    }
+
+    /// Creates an API key for an existing user. Requires `Authorization: Bearer <admin token>`;
+    /// the key belongs to the admin token's `client_id`.
+    ///
+    /// # Errors
+    ///
+    /// AUTH, DB.
+    #[oai(path = "/admin/api-keys", method = "post")]
+    async fn create_api_key(
+        &self,
+        headers: &poem::http::HeaderMap,
+        Json(body): Json<AdminApiKeyRequest>,
+    ) -> MinilithResult<Json<AdminApiKeyResponse>> {
+        let token = bearer_token(headers)
+            .ok_or_else(|| MinilithEndpointError::unauthorized("missing admin token", ""))?;
+        let key = token
+            .parse::<Uuid>()
+            .map_err(|_| MinilithEndpointError::unauthorized("invalid admin token", ""))?;
+        let token_client =
+            sqlx::query_scalar!("select client_id from admin_tokens where key = $1", key)
+                .fetch_optional(&self.db)
+                .await?
+                .ok_or_else(|| MinilithEndpointError::unauthorized("invalid admin token", ""))?;
+        let api_key = sqlx::query_scalar!(
+            "insert into api_keys (key, user_id, email, client_id)
+            values (uuidv4(), $1, $2, $3) returning key",
+            body.user_id,
+            body.email,
+            token_client,
+        )
+        .fetch_one(&self.db)
+        .await?;
+        Ok(Json(AdminApiKeyResponse { key: api_key }))
     }
 }

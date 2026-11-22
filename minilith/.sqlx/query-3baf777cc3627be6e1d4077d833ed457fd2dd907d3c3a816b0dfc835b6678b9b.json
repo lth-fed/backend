@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select link.notification_id, notification.sent\n            from news_push_notifications link\n            inner join push_notifications notification on notification.id = link.notification_id\n            where link.news_id = $1\n            for update of notification",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "notification_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "sent",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "3baf777cc3627be6e1d4077d833ed457fd2dd907d3c3a816b0dfc835b6678b9b"
+}

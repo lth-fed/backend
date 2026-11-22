@@ -1,0 +1,149 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n                product.id,\n                product.group_id,\n                owner.path::text as \"group_path!\",\n                owner.name as \"group_name!: DIS\",\n                product.kind as \"kind!: ProductKind\",\n                product.name as \"name!: DIS\",\n                product.description as \"description!: DIS\",\n                image.url as \"image_url?\",\n                product.sales_price as \"price!\",\n                product.max_uses,\n                product.sales_stock,\n                product.sales_start,\n                product.sales_stop,\n                product.resale_start,\n                product.resale_stop,\n                product.tickets_been_released,\n                product.store_general_sales,\n                product.store_online_self_serve,\n                coalesce(\n                    (select array_agg(assignment.activity_id)\n                        from product_activity_assignments assignment\n                        where assignment.product_id = product.id),\n                    '{}'::uuid[]\n                ) as \"activity_ids!: Vec<Uuid>\",\n                exists (\n                    select 1 from purchases owned\n                    where owned.product_id = product.id\n                    and owned.owner_id = $2\n                    and owned.refunded_id is null\n                ) as \"purchased_by_me!\"\n            from products product\n            inner join groups owner on owner.id = product.group_id\n            left join images image on image.id = product.image_id\n            where product.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "group_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "group_path!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "group_name!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "kind!: ProductKind",
+        "type_info": {
+          "Custom": {
+            "name": "product_kind",
+            "kind": {
+              "Enum": [
+                "ticket",
+                "normal",
+                "questionnaire",
+                "activity_visibility"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "name!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 6,
+        "name": "description!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 7,
+        "name": "image_url?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "price!",
+        "type_info": "Money"
+      },
+      {
+        "ordinal": 9,
+        "name": "max_uses",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 10,
+        "name": "sales_stock",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 11,
+        "name": "sales_start",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 12,
+        "name": "sales_stop",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 13,
+        "name": "resale_start",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 14,
+        "name": "resale_stop",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 15,
+        "name": "tickets_been_released",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 16,
+        "name": "store_general_sales",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 17,
+        "name": "store_online_self_serve",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 18,
+        "name": "activity_ids!: Vec<Uuid>",
+        "type_info": "UuidArray"
+      },
+      {
+        "ordinal": 19,
+        "name": "purchased_by_me!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "685754f483b1440f4c12859ca090ce3b11431e4683705b223c4b2d6a6ba67608"
+}

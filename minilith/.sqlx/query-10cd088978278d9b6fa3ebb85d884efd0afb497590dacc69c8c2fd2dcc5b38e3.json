@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select flow.user_id, flow.product_id\n            from users_in_purchase_flow flow\n            inner join product_release_queuers queuer\n                on queuer.user_id = flow.user_id\n                and queuer.product_id = flow.product_id\n            inner join products kind on kind.id = flow.product_id\n            where kind.tickets_been_released = true\n            and flow.release_queue = flow.user_id\n            order by flow.user_id\n            limit 1\n            for update of flow skip locked",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "product_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "10cd088978278d9b6fa3ebb85d884efd0afb497590dacc69c8c2fd2dcc5b38e3"
+}

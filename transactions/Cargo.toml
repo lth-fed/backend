@@ -4,13 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-async-stripe = { version = "1.0.0-rc.6", default-features = false, features = ["redact-generated-debug", "rustls-ring", "rustls-tls-webpki-roots"] }
-async-stripe-checkout = { version = "1.0.0-rc.6", features = ["checkout_session", "redact-generated-debug"] }
-async-stripe-core = { version = "1.0.0-rc.6", default-features = false, features = ["customer", "redact-generated-debug"] }
-async-stripe-misc = { version = "1.0.0-rc.6", features = ["webhook_endpoint", "redact-generated-debug"] }
-# async-stripe-payment = { version = "1.0.0-rc.6", features = ["card", "payment_link"] }
-async-stripe-types = { version = "1.0.0-rc.6", features = ["redact-generated-debug"] }
-async-stripe-webhook = { version = "1.0.0-rc.6", features = ["redact-generated-debug"] }
 base64.workspace = true
 bin-common = { path = "../bin-common" }
 clap.workspace = true
@@ -25,10 +18,11 @@ opentelemetry.workspace = true
 poem.workspace = true
 poem-openapi.workspace = true
 reqwest = { workspace = true, features = ["form", "multipart", "query"] }
-rustls = "0.23.43"
+rustls = { version = "0.23.43", features = ["ring"] }
 serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
+sumup = { version = "0.7.0", default-features = false, features = ["jiff", "reqwest-rustls-tls"] }
 time.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 tracing.workspace = true

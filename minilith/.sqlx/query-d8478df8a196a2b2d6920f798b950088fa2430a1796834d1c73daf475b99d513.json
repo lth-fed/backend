@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select max_choises, open from vote_rounds where id = $1 and meeting_id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "max_choises",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "open",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "d8478df8a196a2b2d6920f798b950088fa2430a1796834d1c73daf475b99d513"
+}

@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select product_id from purchases where id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "product_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "ea6127b94d750fdbf02ec2b0327dfb96f5e1a3062afa0b760df91735f48d9ab4"
+}

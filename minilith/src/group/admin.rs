@@ -200,12 +200,14 @@ pub async fn check_ticket_kind_adminship(
     let allowed = sqlx::query_scalar!(
         r#"select exists (
             select 1
-            from ticket_kinds
+            from products
+            inner join product_activity_assignments assignment
+                on assignment.product_id = products.id
             inner join activity_hosts
-                on activity_hosts.activity_id = ticket_kinds.activity_id
+                on activity_hosts.activity_id = assignment.activity_id
             inner join group_adminships
                 on group_adminships.group_id = activity_hosts.group_id
-            where ticket_kinds.id = $2
+            where products.id = $2
             and group_adminships.user_id = $1
         ) as "exists!""#,
         user_id,

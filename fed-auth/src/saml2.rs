@@ -343,7 +343,6 @@ impl SamlRouter {
             sub: format!("lund-university:{}", sub.to_owned()),
             email: email.map(ToOwned::to_owned),
             full_name: name.map(ToOwned::to_owned),
-            lth_guild: None,
             language: None,
         };
         self.validate_session(request_id, &user).await?;

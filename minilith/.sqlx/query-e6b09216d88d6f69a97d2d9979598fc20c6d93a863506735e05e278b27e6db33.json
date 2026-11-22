@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select target_group_id from news where id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "target_group_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e6b09216d88d6f69a97d2d9979598fc20c6d93a863506735e05e278b27e6db33"
+}

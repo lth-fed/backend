@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update products set sales_stock = sales_stock - $2\n                where id = $1 and sales_stock is not null",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f9f1c21b8b7fed9157c9d19efdb8378ab9ae0d56b8641afda4a543445b3a43de"
+}

@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into news (id, target_group_id, title, content, published_at)\n            values ($1, $2, $3, $4, $5)\n            on conflict (id) do update set\n                target_group_id = excluded.target_group_id,\n                title = excluded.title,\n                content = excluded.content,\n                published_at = excluded.published_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Jsonb",
+        "Jsonb",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d6533bc901b65f9bc865d10e58e7cd916f936e2e24f18078f58328ad432c668b"
+}

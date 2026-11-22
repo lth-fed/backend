@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into products (\n            id, group_id, kind, name, description, sales_price, sales_organization,\n            sales_stock, stock_real, stock_unit, stock_price, bookkeeping_tag, max_uses,\n            sales_start, sales_stop, resale_start, resale_stop\n        )\n        select\n            $1, target.group_id, 'activity_visibility', $3, $4, 0::money, target.id,\n            0, 0, 'st', 0,\n            (select tag.id from product_tags tag\n                where tag.group_id = target.group_id order by tag.id limit 1),\n            1, $5, $6, $6, $6\n        from sales_targets target\n        where target.id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Jsonb",
+        "Jsonb",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d0d0318ce616f1789c899bddc8050dc06053c1f2b82404c18102a362453bc63b"
+}

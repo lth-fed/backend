@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update product_reservations set transaction_id = $1\n            where id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "568ae90ad95c20446d7597a6b71d3c9b8e3e0b13a1b61f7f7791aa3145d639d0"
+}

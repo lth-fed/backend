@@ -9,9 +9,12 @@ create table client_ids (
     swish_payment_fee_max money not null,
     swish_refund_fee money not null,
 
-    stripe_secret text,
-    -- all stripe callbacks should go to the same URL, so keeping one per client_id is reasonable
-    stripe_endpoint_secret text,
+    -- SumUp card payments. Both are null when the client has no SumUp merchant.
+    sumup_api_key text,
+    sumup_merchant_code text,
+    -- Fraction of the amount charged as our transaction fee, e.g. 0.015 for 1.5 %.
+    sumup_online_fee_fraction double precision not null default 0,
+    sumup_physical_fee_fraction double precision not null default 0,
 
     -- for receipts
     name text not null,
@@ -27,8 +30,10 @@ create table api_tokens (
 );
 create type provider as enum (
     'swish',
+    -- legacy: Stripe support has been removed, this value is only read for historical rows
     'stripe',
-    'free'
+    'free',
+    'sumup'
 );
 -- for swish all these uuids are to be formatted as uppercase "simple"
 -- this datamodel is Swish-first. Stripe will not be used nearly as often and also Swish has a way
@@ -60,8 +65,15 @@ create table transactions (
     -- used to verify that the callbacks from e.g. Swish are actually from them
     callback_identifier uuid not null,
 
+    -- SumUp checkout id, used to deactivate it on timeout and to look up reader checkouts
+    sumup_checkout_id text,
+    -- set when the checkout was started on a physical reader
+    sumup_reader_id text,
+    -- set instead of deleting rows, so clients can tell "not created yet" from "cancelled"
+    cancelled_at timestamptz,
     refund_reference text,
     refund_id uuid,
+    refund_at timestamptz,
     -- used to verify that the callbacks from e.g. Swish are actually from them
     refund_callback_identifier uuid
 );
@@ -83,20 +95,3 @@ create table transaction_wares (
     primary key (idx, transaction_id)
 );
 create index transaction_wares_transaction_id on transaction_wares using hash (transaction_id);
-
--- The key here cannot exist in transactions aswell
-create table transaction_reserved_ids (
-    id uuid primary key,
-    created timestamptz not null default now()
-);
-
-create table stripe_customers (
-    customer_id text primary key,
-    stripe_id text not null
-);
-create table stripe_checkouts (
-    -- if transaction is removed, remove this too
-    transaction_id uuid primary key references transactions(id) on delete cascade,
-    stripe_id text not null
-);
-create index stripe_checkouts_stripe_id on stripe_checkouts using hash (stripe_id);

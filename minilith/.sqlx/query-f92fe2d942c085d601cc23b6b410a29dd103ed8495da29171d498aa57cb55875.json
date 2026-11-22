@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into product_release_queuers (user_id, product_id, started_queueing) select $1, $2, now()\n                where not exists (\n                    select 1 from purchases where product_id = $2 and owner_id = $1\n                )\n                on conflict (user_id) do update\n                set product_id = excluded.product_id,\n                    started_queueing = excluded.started_queueing",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f92fe2d942c085d601cc23b6b410a29dd103ed8495da29171d498aa57cb55875"
+}

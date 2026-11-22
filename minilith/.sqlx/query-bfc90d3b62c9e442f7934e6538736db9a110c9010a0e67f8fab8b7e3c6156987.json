@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select product_id, amount::float8 as \"amount!\", kind::text as \"kind!\"\n            from stock_transaction_records where transaction_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "product_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "amount!",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 2,
+        "name": "kind!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "bfc90d3b62c9e442f7934e6538736db9a110c9010a0e67f8fab8b7e3c6156987"
+}

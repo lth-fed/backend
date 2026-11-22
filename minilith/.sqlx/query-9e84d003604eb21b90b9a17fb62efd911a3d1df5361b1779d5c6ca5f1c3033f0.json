@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from product_reservation_queuers\n        where product_id = $1\n        and user_id = any($2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "9e84d003604eb21b90b9a17fb62efd911a3d1df5361b1779d5c6ca5f1c3033f0"
+}

@@ -7,7 +7,7 @@ insert into client_ids (
     swish_payment_fee_max,
     swish_refund_fee,
 
-    stripe_secret,
+    sumup_api_key,
 
     name,
     email,

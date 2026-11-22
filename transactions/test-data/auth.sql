@@ -7,8 +7,6 @@ insert into client_ids (
     swish_payment_fee_max,
     swish_refund_fee,
 
-    stripe_secret,
-
     name,
     email,
     address,
@@ -26,7 +24,6 @@ values
     0.0,
     '3'::money,
     '3'::money,
-    null,
     'E-sektionen inom TLTH',
     'informationschef@esek.se',
     'Edekvata, plan B i E-huset, LTH

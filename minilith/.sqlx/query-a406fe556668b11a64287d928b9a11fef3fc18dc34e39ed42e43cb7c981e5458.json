@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into purchases\n        (id, purchaser_id, owner_id, product_id, product_price, paid_price, activity_id,\n            purchased_at)\n        values ($1, $2, $2, $3, $4,\n            $4 + coalesce((\n                select sum(option_price)\n                from product_reservation_addons addon\n                cross join lateral unnest(addon.selected_options_prices) option_price\n                where addon.reservation_id = $1\n            ), '0.00'::money),\n            $5, now())\n        returning id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Uuid",
+        "Money",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a406fe556668b11a64287d928b9a11fef3fc18dc34e39ed42e43cb7c981e5458"
+}

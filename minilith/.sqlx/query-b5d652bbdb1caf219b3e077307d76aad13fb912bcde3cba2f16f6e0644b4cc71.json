@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into user_notification_state (user_id, last_full_read)\n            values ($1, now())\n            on conflict (user_id) do update set last_full_read = excluded.last_full_read",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b5d652bbdb1caf219b3e077307d76aad13fb912bcde3cba2f16f6e0644b4cc71"
+}

@@ -22,7 +22,7 @@ struct Now {
     utc: OffsetDateTime,
 }
 
-#[OpenApi]
+#[OpenApi(prefix_path = "/v0")]
 impl Router {
     #[oai(path = "/time", method = "get")]
     #[allow(clippy::unused_async, reason = "poem requires it")]

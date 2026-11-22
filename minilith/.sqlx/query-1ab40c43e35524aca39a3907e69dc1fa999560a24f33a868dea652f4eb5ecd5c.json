@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select group_id from products where id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "group_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1ab40c43e35524aca39a3907e69dc1fa999560a24f33a868dea652f4eb5ecd5c"
+}

@@ -10,7 +10,24 @@ create table auth_refresh_tokens (
 create table api_keys (
     key uuid primary key,
     user_id text not null,
+    email text not null,
     client_id text not null
+);
+
+create table password_associations (
+    user_id text not null,
+    client_id text not null,
+    password_salt bytea not null,
+    -- should use argon2id
+    password_hash bytea not null,
+    primary key (user_id, client_id)
+);
+
+create table admin_tokens (
+    key uuid primary key,
+    -- only valid for creating api_keys for this client_id
+    client_id text not null,
+    name text not null
 );
 
 create table sessions (
@@ -33,9 +50,7 @@ create table session_validated_users (
     sub text not null,
     email text,
     full_name text,
-    language text,
-    -- lowercase, single letter or close (e, doct)
-    lth_guild text
+    language text
 );
 
 create table saml2_request_id_cache (

@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update vote_rounds set open = $3 where id = $1 and meeting_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "85b3848bd5a6ca3e7f3efeb59f935fede2a1ee1c78d7ff50c0e2f9bed155dd2d"
+}

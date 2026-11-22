@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n                purchased_product_addons.purchase_id,\n                product_addons.id as addon_id,\n                product_addons.name as \"addon_name!: DIS\",\n                product_addons.multiple_alternatives,\n                product_addons.has_text_field,\n                product_addons.required,\n                purchased_product_addons.selected_options,\n                purchased_product_addons.selected_text\n            from purchases\n            inner join purchased_product_addons\n                on purchased_product_addons.purchase_id = purchases.id\n            inner join product_addons\n                on product_addons.id = purchased_product_addons.addon_id\n            where purchases.owner_id = $1 or purchases.purchaser_id = $1\n            order by product_addons.idx",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "purchase_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "addon_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "addon_name!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 3,
+        "name": "multiple_alternatives",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 4,
+        "name": "has_text_field",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 5,
+        "name": "required",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
+        "name": "selected_options",
+        "type_info": "Int4Array"
+      },
+      {
+        "ordinal": 7,
+        "name": "selected_text",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "3e919307ac67460d82e05939f40ff10764adcdc1bf94b58ed7410f188938c4b7"
+}

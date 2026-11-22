@@ -9,7 +9,7 @@ use tracing::error;
 
 use crate::accounting;
 use crate::push_notifications::{NotificationRow, PushDeviceRow, send_notifications};
-use crate::{ContextWrapper, DbInternationalizedString as DIS, report, ticket, transactions};
+use crate::{ContextWrapper, DbInternationalizedString as DIS, product, report, transactions};
 
 const NOTIFICATION_POLL_INTERVAL: Duration = Duration::from_secs(10);
 const ACCOUNTING_POLL_INTERVAL: Duration = Duration::from_hours(1);
@@ -25,7 +25,7 @@ pub async fn initial_checks(ctx: &ContextWrapper) -> MinilithResult<()> {
 async fn check_unpaid_transactions(ctx: &ContextWrapper) -> MinilithResult<()> {
     let unpaid_transactions = sqlx::query_scalar!(
         "select transaction_id as \"transaction_id!\"
-        from ticket_reservations
+        from product_reservations
         where transaction_id is not null"
     )
     .fetch_all(&ctx.db)
@@ -83,7 +83,7 @@ async fn check_unpaid_transactions(ctx: &ContextWrapper) -> MinilithResult<()> {
         }
     };
     for info in data {
-        ticket::callback(
+        product::callback(
             ctx,
             fed_auth_verifier::callbacks::TransactionsCallbackDataV1::single(
                 TransactionCallbackInfo {
@@ -115,18 +115,19 @@ async fn check_next_notification(ctx: &ContextWrapper) -> MinilithResult<bool> {
         NotificationRow,
         r#"select
             id,
+            kind as "kind!: crate::push_notifications::NotificationKind",
             coalesce(
-                (select activity_id from activity_notifications
-                    where notification_id = notifications.id),
-                (select activity_id from activity_buyers_notifications
-                    where notification_id = notifications.id),
-                (select activity_id from purchased_ticket_notifications
-                    where notification_id = notifications.id)
+                (select activity_id from activity_push_notifications
+                    where notification_id = push_notifications.id),
+                (select activity_id from purchased_ticket_push_notifications
+                    where notification_id = push_notifications.id),
+                (select activity_id from purchased_ticket_push_notifications
+                    where notification_id = push_notifications.id)
             ) as "activity_id?",
             sender as "sender!: DIS",
             title as "title!: DIS",
             content as "content!: DIS"
-        from notifications
+        from push_notifications
         where send_at <= now()
         and sent = false
         order by send_at, id
@@ -140,9 +141,7 @@ async fn check_next_notification(ctx: &ContextWrapper) -> MinilithResult<bool> {
         return Ok(false);
     };
 
-    // The view applies membership visibility and the closest notification setting on each allowed
-    // group. Until personalized behavior is defined, both `all` and `personalized` receive every
-    // matching notification.
+    // The view applies membership visibility; per-user preferences are not applied yet.
     let devices = sqlx::query_as!(
         PushDeviceRow,
         r#"select
@@ -155,14 +154,13 @@ async fn check_next_notification(ctx: &ContextWrapper) -> MinilithResult<bool> {
         from notification_recipients
         inner join push_devices using (user_id)
         inner join users on users.id = notification_recipients.user_id
-        where notification_recipients.notification_id = $1
-        and notification_level = 'all'::notification_level"#,
+        where notification_recipients.notification_id = $1"#,
         notification.id,
     )
     .fetch_all(&mut transaction.executor())
     .await?;
     sqlx::query!(
-        "update notifications set sent = true where id = $1",
+        "update push_notifications set sent = true where id = $1",
         notification.id
     )
     .execute(&mut transaction.executor())
@@ -264,7 +262,7 @@ pub fn spawn(ctx: &ContextWrapper) {
     // sql queries)
     tokio::spawn(async move {
         loop {
-            if let Err(err) = ticket::check_all_tickets(&ticket_ctx).await {
+            if let Err(err) = product::check_all_tickets(&ticket_ctx).await {
                 error!(?err, "Error from runtime->check_all_tickets");
             }
 
@@ -304,7 +302,7 @@ pub fn spawn(ctx: &ContextWrapper) {
                     Ok(true) => {}
                     Ok(false) => break,
                     Err(err) => {
-                        error!(?err, "error while checking for push notifications");
+                        error!(?err, "error while checking for push push_notifications");
                         break;
                     }
                 }

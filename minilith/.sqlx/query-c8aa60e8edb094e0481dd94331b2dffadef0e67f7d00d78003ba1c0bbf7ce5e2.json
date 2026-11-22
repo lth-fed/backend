@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n                purchased_product_addons.purchase_id,\n                purchased_product_addons.addon_id,\n                purchased_product_addons.selected_options,\n                purchased_product_addons.selected_text\n            from purchases\n            inner join purchased_product_addons\n                on purchased_product_addons.purchase_id = purchases.id\n            where purchases.product_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "purchase_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "addon_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "selected_options",
+        "type_info": "Int4Array"
+      },
+      {
+        "ordinal": 3,
+        "name": "selected_text",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "c8aa60e8edb094e0481dd94331b2dffadef0e67f7d00d78003ba1c0bbf7ce5e2"
+}

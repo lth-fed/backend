@@ -6,17 +6,17 @@ insert into users (id, name, language, latest_refresh) values
     ('user_c', ''::bytea, ''::bytea, now()),
     ('email:admin@example.com', ''::bytea, ''::bytea, now());
 
-insert into groups (path, name, description, logo_id, limit_membership_visibility) values
-    ('tlth',             '{}'::jsonb, '{}'::jsonb, 'e2a92dcc-06cf-4d47-9865-d33f59d0261f'::uuid, false),
-    ('tlth.e',           '{}'::jsonb, '{}'::jsonb, 'e2a92dcc-06cf-4d47-9865-d33f59d0261f'::uuid, false),
-    ('tlth.e.styrelsen', '{}'::jsonb, '{}'::jsonb, 'e2a92dcc-06cf-4d47-9865-d33f59d0261f'::uuid, false),
-    ('tlth.e.nolla',     '{}'::jsonb, '{}'::jsonb, 'e2a92dcc-06cf-4d47-9865-d33f59d0261f'::uuid, true),
-    ('tlth.d',           '{}'::jsonb, '{}'::jsonb, 'e2a92dcc-06cf-4d47-9865-d33f59d0261f'::uuid, false),
-    ('tlth.d.styrelsen', '{}'::jsonb, '{}'::jsonb, 'e2a92dcc-06cf-4d47-9865-d33f59d0261f'::uuid, false),
-    ('tlth.d.nolla',     '{}'::jsonb, '{}'::jsonb, 'e2a92dcc-06cf-4d47-9865-d33f59d0261f'::uuid, true),
-    ('tlth.f',           '{}'::jsonb, '{}'::jsonb, 'e2a92dcc-06cf-4d47-9865-d33f59d0261f'::uuid, false),
-    ('tlth.f.styrelsen', '{}'::jsonb, '{}'::jsonb, 'e2a92dcc-06cf-4d47-9865-d33f59d0261f'::uuid, false),
-    ('tlth.f.nolla',     '{}'::jsonb, '{}'::jsonb, 'e2a92dcc-06cf-4d47-9865-d33f59d0261f'::uuid, true);
+insert into groups (path, name, description, logo_id) values
+    ('tlth',             '{}'::jsonb, '{}'::jsonb, 'e2a92dcc-06cf-4d47-9865-d33f59d0261f'::uuid),
+    ('tlth.e',           '{}'::jsonb, '{}'::jsonb, 'e2a92dcc-06cf-4d47-9865-d33f59d0261f'::uuid),
+    ('tlth.e.styrelsen', '{}'::jsonb, '{}'::jsonb, 'e2a92dcc-06cf-4d47-9865-d33f59d0261f'::uuid),
+    ('tlth.e.nolla',     '{}'::jsonb, '{}'::jsonb, 'e2a92dcc-06cf-4d47-9865-d33f59d0261f'::uuid),
+    ('tlth.d',           '{}'::jsonb, '{}'::jsonb, 'e2a92dcc-06cf-4d47-9865-d33f59d0261f'::uuid),
+    ('tlth.d.styrelsen', '{}'::jsonb, '{}'::jsonb, 'e2a92dcc-06cf-4d47-9865-d33f59d0261f'::uuid),
+    ('tlth.d.nolla',     '{}'::jsonb, '{}'::jsonb, 'e2a92dcc-06cf-4d47-9865-d33f59d0261f'::uuid),
+    ('tlth.f',           '{}'::jsonb, '{}'::jsonb, 'e2a92dcc-06cf-4d47-9865-d33f59d0261f'::uuid),
+    ('tlth.f.styrelsen', '{}'::jsonb, '{}'::jsonb, 'e2a92dcc-06cf-4d47-9865-d33f59d0261f'::uuid),
+    ('tlth.f.nolla',     '{}'::jsonb, '{}'::jsonb, 'e2a92dcc-06cf-4d47-9865-d33f59d0261f'::uuid);
 
 insert into group_memberships (user_id, group_id) values
     -- guild member, no privileged subgroups
@@ -30,3 +30,6 @@ insert into group_memberships (user_id, group_id) values
 
 insert into group_adminships (user_id, group_id) values
     ('email:admin@example.com', (select id from groups where path = 'tlth.e'));
+
+update group_memberships set specific = true
+where group_id in (select id from groups where path::text like '%.nolla');

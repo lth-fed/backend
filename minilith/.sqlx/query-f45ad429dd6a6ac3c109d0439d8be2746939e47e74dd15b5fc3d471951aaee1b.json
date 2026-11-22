@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update purchases set no_show_hint = $3 where id = $1 and owner_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f45ad429dd6a6ac3c109d0439d8be2746939e47e74dd15b5fc3d471951aaee1b"
+}

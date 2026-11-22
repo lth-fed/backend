@@ -98,7 +98,9 @@ pub async fn get_endpoint(test_db: Option<PgPool>) -> color_eyre::Result<impl po
     let route = Route::new()
         .nest(
             "/api/v0",
-            api_service.with(SetHeader::new().overriding(CACHE_CONTROL, "no-cache")),
+            api_service
+                .data(auth_ctx.clone())
+                .with(SetHeader::new().overriding(CACHE_CONTROL, "no-cache")),
         )
         .nest("/api/v0/docs", ui)
         .nest("/api/v0/spec.json", spec)

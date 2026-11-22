@@ -32,10 +32,37 @@ pub struct CreatePaymentRequest {
     pub timeout: String,
     /// The list of items to be bought.
     pub wares: Vec<Ware>,
-    /// Used for tracking cards in e.g. Stripe.
+    /// Used for tracking cards in e.g. `SumUp`.
     pub customer_id: Option<String>,
-    /// Redirected back when user completes transaction.
-    pub stripe_success_url: Option<String>,
+    /// Redirected back when user completes transaction. Required for `SumUp`.
+    pub redirect_url: Option<String>,
+}
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FeeProvider {
+    Swish,
+    Sumup,
+}
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FeeKind {
+    /// Charging the amount.
+    Payment,
+    /// Refunding the amount.
+    Refund,
+}
+#[derive(Debug, Clone, Serialize)]
+pub struct FeeQuoteRequest {
+    pub provider: FeeProvider,
+    /// In ören.
+    pub amount: i64,
+    pub physical: bool,
+    pub kind: FeeKind,
+}
+#[derive(Debug, Clone, Deserialize)]
+pub struct FeeQuoteResponse {
+    /// In ören.
+    pub fee: i64,
 }
 #[derive(Debug, Clone, Deserialize)]
 pub struct CreatePaymentResponseSwish {
@@ -43,9 +70,9 @@ pub struct CreatePaymentResponseSwish {
     pub payment_request_token: String,
 }
 #[derive(Debug, Clone, Deserialize)]
-pub struct CreatePaymentResponseStripe {
-    /// See <https://docs.stripe.com/api/checkout/sessions/object#checkout_session_object-url>.
-    pub redirect_url: String,
+pub struct CreatePaymentResponseSumup {
+    /// `SumUp`-hosted payment page. `null` for physical sales on a reader.
+    pub redirect_url: Option<String>,
 }
 
 #[derive(Serialize, Debug, Clone, Copy)]
@@ -65,13 +92,26 @@ pub struct ReceiptRequest {
 pub struct InfoRequest {
     pub transaction_ids: Vec<Uuid>,
 }
+#[derive(Debug, Deserialize, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+pub enum Provider {
+    Swish,
+    /// Legacy: kept so historical rows still decode.
+    Stripe,
+    Free,
+    Sumup,
+}
 #[derive(Debug, Deserialize, Clone)]
 pub struct SingleInfoResponse {
     pub id: Uuid,
     pub state: TransactionState,
     // customer_id: Option<String>,
     pub total_fees: i64,
-    // provider: Provider,
+    /// Sum of the transaction's wares (in ören), including any fee wares. `0` when unknown.
+    pub total: i64,
+    /// The provider the transaction was made with, e.g. to quote the fee for refunding it.
+    /// `null` when the transaction does not exist.
+    pub provider: Option<Provider>,
     // payment_reference: Option<String>,
     // refund_reference: Option<String>,
 }

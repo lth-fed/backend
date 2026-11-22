@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into products\n                    (id, group_id, kind, name, description, sales_price, sales_organization,\n                     sales_stock, stock_real, stock_unit, stock_price, bookkeeping_tag, max_uses,\n                     sales_start, sales_stop, resale_start, resale_stop,\n                     been_purchased, tickets_been_released)\n                 values ($1, $2, 'ticket', $3, '{}', $4, $5, $8, $8, 'st', 0, $9, 1,\n                     $6, $7, $6, $7, false, ($6 < now() and $7 > now()))\n                 on conflict (id) do update set\n                    name = excluded.name,\n                    sales_price = excluded.sales_price,\n                    sales_start = excluded.sales_start,\n                    sales_stop = excluded.sales_stop,\n                    sales_stock = excluded.sales_stock,\n                    resale_start = excluded.resale_start,\n                    resale_stop = excluded.resale_stop,\n                    been_purchased = false,\n                    tickets_been_released = excluded.tickets_been_released",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Jsonb",
+        "Money",
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz",
+        "Int4",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8daef8cd3a3d0573e7bf37beb8be4caf2d59e4ed85db5f6457349e7737e4fdd6"
+}
