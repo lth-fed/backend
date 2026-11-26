@@ -23,6 +23,7 @@ use super::models::{
 };
 use super::validation::{ValidateRequest, ValidateResponse};
 use super::{apple_pass, catalog, purchase, queue, transfer, validation};
+use crate::activities::{Location, PoemLocation};
 use crate::push_notifications::{
     ClientNotification, NotificationAudience, NotificationKind, load_notification_history,
     load_notifications, mark_all_notifications_read, mark_notifications_read,
@@ -98,6 +99,8 @@ pub struct AppPurchase {
     pub activity_title: Option<IS>,
     pub activity_time_start: Option<OffsetDateTime>,
     pub activity_time_end: Option<OffsetDateTime>,
+    /// Where the activity takes place.
+    pub activity_location: Option<PoemLocation>,
     pub group_id: Uuid,
     pub group_path: String,
     pub group_name: IS,
@@ -647,6 +650,7 @@ impl AppRouter {
                 activity.title as "activity_title?: DIS",
                 activity.time_start as "activity_time_start?",
                 activity.time_end as "activity_time_end?",
+                activity.location as "activity_location?: Location",
                 product.group_id,
                 owner_group.path::text as "group_path!",
                 owner_group.name as "group_name!: DIS",
@@ -689,6 +693,7 @@ impl AppRouter {
             activity_title: row.activity_title.map(|title| title.0),
             activity_time_start: row.activity_time_start,
             activity_time_end: row.activity_time_end,
+            activity_location: row.activity_location.map(Into::into),
             group_id: row.group_id,
             group_path: row.group_path,
             group_name: row.group_name.0,
