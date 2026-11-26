@@ -82,6 +82,10 @@ pub struct AppProductDetails {
 }
 
 #[derive(Debug, Object)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent facts about the purchase, serialised as JSON fields"
+)]
 pub struct AppPurchase {
     pub id: Uuid,
     pub product_id: Uuid,
@@ -100,6 +104,9 @@ pub struct AppPurchase {
     pub image_url: Option<String>,
     /// False if the caller transferred it away.
     pub owned_by_me: bool,
+    /// Whether the caller paid for it. False for a ticket transferred to them, which has no
+    /// receipt (`/v1/purchases/{id}/receipt` answers only the buyer).
+    pub bought_by_me: bool,
     pub uses_left: i32,
     pub max_uses: i32,
     /// Non-null when the owner put the purchase up for resale.
@@ -645,6 +652,10 @@ impl AppRouter {
                 owner_group.name as "group_name!: DIS",
                 image.url as "image_url?",
                 (purchase.owner_id = $1) as "owned_by_me!",
+                exists (select 1 from purchase_transactions paid
+                    where paid.purchase_id = purchase.id
+                    and paid.buyer_id = $1
+                    and paid.transaction_id is not null) as "bought_by_me!",
                 product.max_uses,
                 (select count(*)::int from purchase_uses used
                     where used.purchase_id = purchase.id) as "uses_count!",
@@ -683,6 +694,7 @@ impl AppRouter {
             group_name: row.group_name.0,
             image_url: row.image_url,
             owned_by_me: row.owned_by_me,
+            bought_by_me: row.bought_by_me,
             uses_left: row.max_uses - row.uses_count,
             max_uses: row.max_uses,
             for_resale: row.for_resale.map(|price| price.0),
