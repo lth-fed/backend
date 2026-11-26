@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into users_in_purchase_flow (user_id, product_id)\n            values ($1, $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8de5a4d6cc412aba0cc8f99a0c66d2895363fabb9f6edd83b79b546e1ca5759c"
+}

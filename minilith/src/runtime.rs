@@ -141,7 +141,7 @@ async fn check_next_notification(ctx: &ContextWrapper) -> MinilithResult<bool> {
         return Ok(false);
     };
 
-    // The view applies membership visibility; per-user preferences are not applied yet.
+    // `receives` applies the user's preferences: the bell, tag opt-outs, ticket-holder news.
     let devices = sqlx::query_as!(
         PushDeviceRow,
         r#"select
@@ -154,7 +154,8 @@ async fn check_next_notification(ctx: &ContextWrapper) -> MinilithResult<bool> {
         from notification_recipients
         inner join push_devices using (user_id)
         inner join users on users.id = notification_recipients.user_id
-        where notification_recipients.notification_id = $1"#,
+        where notification_recipients.notification_id = $1
+        and notification_recipients.receives"#,
         notification.id,
     )
     .fetch_all(&mut transaction.executor())

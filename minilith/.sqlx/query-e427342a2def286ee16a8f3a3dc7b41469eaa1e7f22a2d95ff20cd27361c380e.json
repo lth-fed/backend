@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into product_transfer_groups (product_id, group_id)\n            values ($1, $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e427342a2def286ee16a8f3a3dc7b41469eaa1e7f22a2d95ff20cd27361c380e"
+}

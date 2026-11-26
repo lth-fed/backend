@@ -58,6 +58,8 @@ pub enum NotificationKind {
     TicketRelease,
     Transfer,
     Reservation,
+    /// A place in the reservation queue (push only); `Reservation` is a reservation itself.
+    ReservationQueue,
 }
 
 impl NotificationKind {
@@ -69,7 +71,15 @@ impl NotificationKind {
             Self::TicketRelease => "ticket_release",
             Self::Transfer => "transfer",
             Self::Reservation => "reservation",
+            Self::ReservationQueue => "reservation_queue",
         }
+    }
+
+    /// Whether notifications of this kind are stored and listed in the history. The rest are
+    /// pushes only: their id names no history entry.
+    #[must_use]
+    pub(crate) fn is_in_history(self) -> bool {
+        matches!(self, Self::Activity | Self::News | Self::TicketRelease)
     }
 }
 
@@ -98,87 +108,263 @@ pub(crate) struct NotificationRow {
     pub content: DIS,
 }
 
+/// Who an activity's notification was addressed to.
+#[derive(Enum, Clone, Copy, Debug, Eq, PartialEq)]
+#[oai(rename_all = "snake_case")]
+pub enum NotificationAudience {
+    /// Everyone who can see the activity (`activity_push_notifications`).
+    All,
+    /// Everyone allowed to buy the released ticket (`ticket_release_push_notifications`).
+    Buyers,
+    /// Everyone who owns a product for the activity (`purchased_ticket_push_notifications`).
+    TicketHolders,
+}
+
+impl NotificationAudience {
+    fn from_db(audience: &str) -> Option<Self> {
+        match audience {
+            "all" => Some(Self::All),
+            "buyers" => Some(Self::Buyers),
+            "ticket_holders" => Some(Self::TicketHolders),
+            _ => None,
+        }
+    }
+}
+
 /// A notification as shown to a client, with its read state.
 pub(crate) struct ClientNotification {
     pub id: Uuid,
     pub kind: NotificationKind,
     /// What the notification points at: activity id, news id or product id.
     pub target_id: Option<Uuid>,
-    /// Only set for activity notifications; kept for the legacy DTO.
+    /// The activity it is about, for activity news, ticket-holder news and ticket releases.
     pub activity_id: Option<Uuid>,
+    /// Who it was addressed to, for the activity kinds.
+    pub audience: Option<NotificationAudience>,
+    /// The group a news post was published to.
+    pub group_id: Option<Uuid>,
+    /// The activity's image, the released product's, or the news group's logo.
+    pub image_url: Option<String>,
     pub sender: DIS,
     pub title: DIS,
     pub content: DIS,
     pub send_at: OffsetDateTime,
     pub read: bool,
+    /// Removed from the inbox by the user.
+    pub dismissed: bool,
 }
 
-/// Notifications the user is currently eligible for, with read state.
+/// The history: notifications from the last six months the user received (eligible and not
+/// muted), with read state.
 pub(crate) async fn load_notification_history(
     db: &PgPool,
     user_id: &str,
+) -> sqlx::Result<Vec<ClientNotification>> {
+    load_notifications(db, user_id, None).await
+}
+
+/// With `activity`, everything about that activity the user is eligible for, including what they
+/// muted: the activity's own record. Otherwise the history (see [`load_notification_history`]).
+#[allow(clippy::too_many_lines, reason = "one query and its row mapping")]
+pub(crate) async fn load_notifications(
+    db: &PgPool,
+    user_id: &str,
+    activity: Option<Uuid>,
 ) -> sqlx::Result<Vec<ClientNotification>> {
     sqlx::query!(
         r#"select
             notification.id,
             notification.kind as "kind!: NotificationKind",
             case notification.kind
-                when 'news' then (
-                    select news_id from news_push_notifications
-                    where notification_id = notification.id)
-                when 'ticket_release' then (
-                    select ticket_id from ticket_release_push_notifications
-                    where notification_id = notification.id)
-                else coalesce(
-                    (select activity_id from activity_push_notifications
-                        where notification_id = notification.id),
-                    (select activity_id from purchased_ticket_push_notifications
-                        where notification_id = notification.id))
+                when 'news' then news_link.news_id
+                when 'ticket_release' then release_link.ticket_id
+                else coalesce(activity_link.activity_id, holders_link.activity_id)
             end as "target_id?",
             coalesce(
-                (select activity_id from activity_push_notifications
-                    where notification_id = notification.id),
-                (select activity_id from purchased_ticket_push_notifications
-                    where notification_id = notification.id)
+                activity_link.activity_id,
+                holders_link.activity_id,
+                release_activity.activity_id
             ) as "activity_id?",
+            case
+                when activity_link.activity_id is not null then 'all'
+                when release_link.ticket_id is not null then 'buyers'
+                when holders_link.activity_id is not null then 'ticket_holders'
+            end as "audience?",
+            news.target_group_id as "group_id?",
+            coalesce(activity_image.url, product_image.url, group_logo.url) as "image_url?",
             notification.sender as "sender!: DIS",
             notification.title as "title!: DIS",
             notification.content as "content!: DIS",
             notification.send_at,
-            (
-                exists (
-                    select 1 from notification_reads read
-                    where read.notification_id = notification.id
-                    and read.user_id = $1
-                )
-                or notification.send_at <= coalesce(
-                    state.last_full_read,
-                    (select creation from users where users.id = $1)
-                )
-            ) as "read!"
-        from notification_recipients
+            coalesce(
+                state.read,
+                notification.send_at <= coalesce(watermark.last_full_read, users.creation)
+            ) as "read!",
+            coalesce(state.dismissed, false) as "dismissed!"
+        from notification_recipients recipient
         inner join push_notifications notification
-            on notification.id = notification_recipients.notification_id
-        left join user_notification_state state on state.user_id = $1
-        where notification_recipients.user_id = $1
-        and notification.sent = true
-        and notification.send_at >= now() - '6 months'::interval
+            on notification.id = recipient.notification_id
+        inner join users on users.id = recipient.user_id
+        left join lateral (
+            select activity_id from activity_push_notifications
+            where notification_id = notification.id limit 1
+        ) activity_link on true
+        left join lateral (
+            select activity_id from purchased_ticket_push_notifications
+            where notification_id = notification.id limit 1
+        ) holders_link on true
+        left join lateral (
+            select ticket_id from ticket_release_push_notifications
+            where notification_id = notification.id limit 1
+        ) release_link on true
+        left join lateral (
+            select activity_id from product_activity_assignments
+            where product_id = release_link.ticket_id order by activity_id limit 1
+        ) release_activity on true
+        left join lateral (
+            select news_id from news_push_notifications
+            where notification_id = notification.id limit 1
+        ) news_link on true
+        left join news on news.id = news_link.news_id
+        left join activities activity on activity.id = coalesce(
+            activity_link.activity_id, holders_link.activity_id, release_activity.activity_id)
+        left join images activity_image on activity_image.id = activity.image_id
+        left join products product on product.id = release_link.ticket_id
+        left join images product_image on product_image.id = product.image_id
+        left join groups news_group on news_group.id = news.target_group_id
+        left join images group_logo on group_logo.id = news_group.logo_id
+        left join user_notification_state watermark on watermark.user_id = recipient.user_id
+        left join notification_reads state
+            on state.user_id = recipient.user_id and state.notification_id = notification.id
+        where recipient.user_id = $1
+        and notification.sent
+        and (
+            ($2::uuid is null
+                and recipient.receives
+                and notification.send_at >= now() - '6 months'::interval)
+            or coalesce(
+                activity_link.activity_id,
+                holders_link.activity_id,
+                release_activity.activity_id
+            ) = $2
+        )
         order by notification.send_at desc, notification.id"#,
         user_id,
+        activity,
     )
     .map(|row| ClientNotification {
         id: row.id,
         kind: row.kind,
         target_id: row.target_id,
         activity_id: row.activity_id,
+        audience: row
+            .audience
+            .as_deref()
+            .and_then(NotificationAudience::from_db),
+        group_id: row.group_id,
+        image_url: row.image_url,
         sender: row.sender,
         title: row.title,
         content: row.content,
         send_at: row.send_at,
         read: row.read,
+        dismissed: row.dismissed,
     })
     .fetch_all(db)
     .await
+}
+
+/// Marks `ids` read for `user_id`, skipping any the user isn't eligible for.
+pub(crate) async fn mark_notifications_read(
+    db: &PgPool,
+    user_id: &str,
+    ids: &[Uuid],
+) -> sqlx::Result<()> {
+    sqlx::query!(
+        r#"insert into notification_reads (user_id, notification_id, read)
+        select $1, recipient.notification_id, true
+        from notification_recipients recipient
+        where recipient.user_id = $1
+        and recipient.notification_id = any($2)
+        on conflict (user_id, notification_id) do update set read = true"#,
+        user_id,
+        ids,
+    )
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// Marks everything sent up to `up_to` (default: now) as read, including notifications marked
+/// unread, and leaves anything newer as it is. Dismissals are kept. The watermark never moves back.
+pub(crate) async fn mark_all_notifications_read(
+    db: &PgPool,
+    user_id: &str,
+    up_to: Option<OffsetDateTime>,
+) -> sqlx::Result<()> {
+    let mut txn = db.begin().await?;
+    let watermark = sqlx::query_scalar!(
+        r#"insert into user_notification_state (user_id, last_full_read)
+        values ($1, least(coalesce($2, now()), now()))
+        on conflict (user_id) do update set last_full_read =
+            greatest(user_notification_state.last_full_read, excluded.last_full_read)
+        returning last_full_read"#,
+        user_id,
+        up_to,
+    )
+    .fetch_one(&mut txn.executor())
+    .await?;
+    // Up to the watermark, read state follows it again: drop the user's own read/unread choices
+    // there, and the rows left with nothing to say.
+    sqlx::query!(
+        r#"update notification_reads state set read = null
+        from push_notifications notification
+        where state.user_id = $1
+        and notification.id = state.notification_id
+        and notification.send_at <= $2"#,
+        user_id,
+        watermark,
+    )
+    .execute(&mut txn.executor())
+    .await?;
+    sqlx::query!(
+        "delete from notification_reads
+        where user_id = $1 and read is null and not dismissed",
+        user_id,
+    )
+    .execute(&mut txn.executor())
+    .await?;
+    txn.commit().await
+}
+
+/// Sets one notification's read and/or dismissed state for `user_id`; `None` leaves that part as
+/// it is. Returns false when the user isn't eligible for the notification.
+pub(crate) async fn set_notification_state(
+    db: &PgPool,
+    user_id: &str,
+    id: Uuid,
+    read: Option<bool>,
+    dismissed: Option<bool>,
+) -> sqlx::Result<bool> {
+    let updated = sqlx::query!(
+        r#"insert into notification_reads (user_id, notification_id, read, dismissed)
+        select $1, $2, $3, coalesce($4, false)
+        where exists (
+            select 1 from notification_recipients
+            where user_id = $1 and notification_id = $2
+        )
+        on conflict (user_id, notification_id) do update set
+            read = coalesce($3, notification_reads.read),
+            dismissed = coalesce($4, notification_reads.dismissed)"#,
+        user_id,
+        id,
+        read,
+        dismissed,
+    )
+    .execute(db)
+    .await?
+    .rows_affected();
+    Ok(updated > 0)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -348,6 +534,11 @@ impl PushClients {
                 payload
                     .add_custom_data("kind", &kind.as_str())
                     .wrap_err_internal("failed to add kind to APNs payload")?;
+                if kind.is_in_history() {
+                    payload
+                        .add_custom_data("notification_id", &id.to_string())
+                        .wrap_err_internal("failed to add notification id to APNs payload")?;
+                }
                 if let Some(activity_id) = activity_id {
                     payload
                         .add_custom_data("activity_id", &activity_id.to_string())
@@ -378,6 +569,9 @@ impl PushClients {
                 let mut message = FcmMessage::new();
                 message.set_notification(Some(notification));
                 let mut data = HashMap::from([("kind".to_owned(), kind.as_str().to_owned())]);
+                if kind.is_in_history() {
+                    data.insert("notification_id".to_owned(), id.to_string());
+                }
                 if let Some(activity_id) = activity_id {
                     data.insert("activity_id".to_owned(), activity_id.to_string());
                 }
@@ -597,5 +791,182 @@ impl Router {
         .await?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::*;
+
+    const ACTIVITY: &str = "50000000-0000-0000-0000-000000000001";
+    const EVERYONE: &str = "30000000-0000-0000-0000-000000000007";
+    const HOLDERS: &str = "30000000-0000-0000-0000-000000000005";
+    const TAGGED_NEWS: &str = "30000000-0000-0000-0000-000000000008";
+
+    fn id(value: &str) -> Uuid {
+        Uuid::parse_str(value).unwrap()
+    }
+
+    async fn receives(db: &PgPool, notification: &str) -> BTreeMap<String, bool> {
+        sqlx::query!(
+            r#"select user_id as "user_id!", receives as "receives!"
+            from notification_recipients where notification_id = $1"#,
+            id(notification),
+        )
+        .fetch_all(db)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| (row.user_id, row.receives))
+        .collect()
+    }
+
+    async fn history(db: &PgPool, user_id: &str) -> Vec<ClientNotification> {
+        load_notification_history(db, user_id).await.unwrap()
+    }
+
+    async fn find(db: &PgPool, user_id: &str, notification: &str) -> ClientNotification {
+        history(db, user_id)
+            .await
+            .into_iter()
+            .find(|item| item.id == id(notification))
+            .unwrap()
+    }
+
+    #[sqlx::test(fixtures("notification_history", "notification_preferences"))]
+    async fn activity_news_reaches_everyone_who_can_see_it_unless_muted(db: sqlx::PgPool) {
+        let db = sqlx_tracing::Pool::from(db);
+        let expected: BTreeMap<String, bool> = [
+            ("eligible", true),
+            ("no-settings", true),
+            // the bell, off
+            ("muted", false),
+            // every tag the activity carries is opted out
+            ("tags-off", false),
+            // ... but the bell, on, wins
+            ("tags-off-follows", true),
+            // "Important" off, "Party" still on
+            ("important-off", true),
+        ]
+        .into_iter()
+        .map(|(user, receives)| (user.to_owned(), receives))
+        .collect();
+        assert_eq!(receives(&db, EVERYONE).await, expected);
+
+        // Ticket-holder news can't be muted: `owner-overridden` turned the activity's bell off.
+        let holders = receives(&db, HOLDERS).await;
+        assert_eq!(holders.get("owner-overridden"), Some(&true));
+        assert_eq!(holders.get("owner-muted"), Some(&true));
+    }
+
+    #[sqlx::test(fixtures("notification_history", "notification_preferences"))]
+    async fn history_lists_what_was_received_and_the_activity_lists_everything(db: sqlx::PgPool) {
+        let db = sqlx_tracing::Pool::from(db);
+        assert!(
+            !history(&db, "muted")
+                .await
+                .iter()
+                .any(|item| item.id == id(EVERYONE)),
+            "a muted activity's news stays out of the history"
+        );
+        let on_activity = load_notifications(&db, "muted", Some(id(ACTIVITY)))
+            .await
+            .unwrap();
+        assert_eq!(
+            on_activity.iter().map(|item| item.id).collect::<Vec<_>>(),
+            vec![id(EVERYONE)],
+            "the activity's own list still has it"
+        );
+
+        let item = find(&db, "eligible", EVERYONE).await;
+        assert_eq!(item.kind, NotificationKind::Activity);
+        assert_eq!(item.audience, Some(NotificationAudience::All));
+        assert_eq!(item.activity_id, Some(id(ACTIVITY)));
+        assert_eq!(item.target_id, Some(id(ACTIVITY)));
+        assert_eq!(
+            item.image_url.as_deref(),
+            Some("https://example.com/logo.png")
+        );
+        assert!(!item.read);
+        assert!(!item.dismissed);
+
+        let holders = find(&db, "owner-overridden", HOLDERS).await;
+        assert_eq!(holders.audience, Some(NotificationAudience::TicketHolders));
+    }
+
+    #[sqlx::test(fixtures("notification_history", "notification_preferences"))]
+    async fn news_is_muted_by_opting_out_of_its_tags(db: sqlx::PgPool) {
+        let db = sqlx_tracing::Pool::from(db);
+        let news = receives(&db, TAGGED_NEWS).await;
+        assert_eq!(news.get("eligible"), Some(&false));
+        assert_eq!(news.get("no-settings"), Some(&true));
+
+        let item = find(&db, "no-settings", TAGGED_NEWS).await;
+        assert_eq!(item.kind, NotificationKind::News);
+        assert_eq!(item.audience, None);
+        assert_eq!(
+            item.group_id,
+            Some(id("20000000-0000-0000-0000-000000000002"))
+        );
+    }
+
+    #[sqlx::test(fixtures("notification_history", "notification_preferences"))]
+    async fn read_state_overrides_the_watermark_and_read_all_resets_it(db: sqlx::PgPool) {
+        let db = sqlx_tracing::Pool::from(db);
+        let user = "eligible";
+        let state = |item: ClientNotification| (item.read, item.dismissed);
+
+        assert!(
+            set_notification_state(&db, user, id(EVERYONE), Some(true), None)
+                .await
+                .unwrap()
+        );
+        assert_eq!(state(find(&db, user, EVERYONE).await), (true, false));
+        assert!(
+            set_notification_state(&db, user, id(EVERYONE), Some(false), Some(true))
+                .await
+                .unwrap()
+        );
+        assert_eq!(state(find(&db, user, EVERYONE).await), (false, true));
+
+        // Read-all up to before it was sent leaves it unread: the user hasn't seen it.
+        let sent = find(&db, user, EVERYONE).await.send_at;
+        mark_all_notifications_read(&db, user, Some(sent - time::Duration::MINUTE))
+            .await
+            .unwrap();
+        assert_eq!(state(find(&db, user, EVERYONE).await), (false, true));
+
+        // Read-all past it overrides "unread", and keeps the dismissal.
+        mark_all_notifications_read(&db, user, None).await.unwrap();
+        assert_eq!(state(find(&db, user, EVERYONE).await), (true, true));
+
+        // The watermark never moves back.
+        mark_all_notifications_read(&db, user, Some(sent - time::Duration::DAY))
+            .await
+            .unwrap();
+        assert!(find(&db, user, EVERYONE).await.read);
+
+        // A notification the user isn't eligible for can't be given state.
+        assert!(
+            !set_notification_state(&db, "private-member", id(EVERYONE), Some(true), None)
+                .await
+                .unwrap()
+        );
+    }
+
+    #[sqlx::test(fixtures("notification_history", "notification_preferences"))]
+    async fn marking_read_overrides_unread(db: sqlx::PgPool) {
+        let db = sqlx_tracing::Pool::from(db);
+        let user = "no-settings";
+        set_notification_state(&db, user, id(EVERYONE), Some(false), None)
+            .await
+            .unwrap();
+        mark_notifications_read(&db, user, &[id(EVERYONE), id(TAGGED_NEWS)])
+            .await
+            .unwrap();
+        assert!(find(&db, user, EVERYONE).await.read);
+        assert!(find(&db, user, TAGGED_NEWS).await.read);
     }
 }

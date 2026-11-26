@@ -64,7 +64,7 @@ async fn send_release_notifications(
     let removed1 = send_notifications(ctx, &notification, reservation_devices).await;
     let notification = NotificationRow {
         id,
-        kind: NotificationKind::Reservation,
+        kind: NotificationKind::ReservationQueue,
         activity_id: Some(activity_id),
         // people know where it's from since they just used the app
         sender: sqlx::types::Json(IS::empty()),

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into user_notification_state (user_id, last_full_read)\n        values ($1, least(coalesce($2, now()), now()))\n        on conflict (user_id) do update set last_full_read =\n            greatest(user_notification_state.last_full_read, excluded.last_full_read)\n        returning last_full_read",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "last_full_read",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e4214381804b78594bafc4afaa07c83035c357a14078749f0fa347c3d1c3b68c"
+}

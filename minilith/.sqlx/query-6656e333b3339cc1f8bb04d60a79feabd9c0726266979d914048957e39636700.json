@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into product_activity_assignments (activity_id, product_id)\n        select $1, id from products where id = $2 and kind = 'normal'\n        on conflict (activity_id, product_id) do nothing",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6656e333b3339cc1f8bb04d60a79feabd9c0726266979d914048957e39636700"
+}
