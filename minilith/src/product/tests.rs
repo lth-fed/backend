@@ -5,8 +5,8 @@ use super::{
     access::{ensure_user_may_purchase_ticket, ensure_user_may_receive_transferred_ticket},
     allocation::{give_reservations, reserve_ticket_capacity},
     flow::{
-        reserve_user_purchase_flow, set_user_purchase_flow_release_queue,
-        set_user_purchase_flow_reservation_queue,
+        owns_purchase_for_same_activity, reserve_user_purchase_flow,
+        set_user_purchase_flow_release_queue, set_user_purchase_flow_reservation_queue,
     },
     release::{release, remove_expired_release_queuers},
     transfer::record_transfer,
@@ -521,4 +521,76 @@ async fn transferred_purchase_is_listed_for_recipient_and_sender(db: sqlx::PgPoo
     .await
     .unwrap();
     assert_eq!(payments, vec![paid_with]);
+}
+
+/// One ticket per activity counts tickets only: a drink or merch sold for the activity neither
+/// blocks a ticket nor is blocked by one.
+#[sqlx::test(fixtures("../fixtures/ticket_capacity.sql"))]
+async fn one_ticket_per_activity_ignores_other_products(db: sqlx::PgPool) {
+    let db = sqlx_tracing::Pool::from(db);
+    let ticket = Uuid::parse_str("00000000-0000-0000-0000-000000000004").unwrap();
+    let other_ticket = Uuid::parse_str("00000000-0000-0000-0000-000000000005").unwrap();
+    let activity = Uuid::parse_str("00000000-0000-0000-0000-000000000003").unwrap();
+    let drink = Uuid::new_v4();
+    sqlx::query!(
+        "insert into products (
+            id, group_id, kind, name, description, sales_price, sales_organization,
+            sales_stock, stock_real, stock_unit, stock_price, bookkeeping_tag, max_uses,
+            sales_start, sales_stop, resale_start, resale_stop
+        )
+        select $1, group_id, 'normal', '{}'::jsonb, '{}'::jsonb, 0::money, sales_organization,
+            3, 3, 'st', 0, bookkeeping_tag, 1, sales_start, sales_stop, resale_start, resale_stop
+        from products where id = $2",
+        drink,
+        ticket,
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    sqlx::query!(
+        "insert into product_activity_assignments (activity_id, product_id) values ($1, $2)",
+        activity,
+        drink,
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    let owns = |product: Uuid| {
+        let db = db.clone();
+        async move {
+            sqlx::query!(
+                "insert into purchases
+                    (id, product_id, product_price, paid_price, purchaser_id, owner_id, purchased_at)
+                    values ($1, $2, 0::money, 0::money, $3, $3, now())",
+                Uuid::new_v4(),
+                product,
+                "test:purchase-flow-1",
+            )
+            .execute(&db)
+            .await
+            .unwrap();
+        }
+    };
+    let blocked = |product: Uuid| {
+        let db = db.clone();
+        async move {
+            let mut txn = db.begin().await.unwrap();
+            owns_purchase_for_same_activity(&mut txn, "test:purchase-flow-1", product)
+                .await
+                .unwrap()
+        }
+    };
+
+    owns(drink).await;
+    assert!(!blocked(ticket).await, "a drink doesn't block a ticket");
+
+    owns(ticket).await;
+    assert!(
+        blocked(other_ticket).await,
+        "a ticket blocks a second ticket"
+    );
+    assert!(
+        !blocked(drink).await,
+        "a ticket doesn't block another drink"
+    );
 }

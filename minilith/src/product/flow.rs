@@ -56,8 +56,9 @@ pub(super) async fn reserve_user_purchase_flow(
     }
     Ok(())
 }
-/// Whether `user_id` owns a purchase of any product assigned to an activity `product` is
-/// assigned to. One ticket per activity is enforced with this.
+/// Whether `product` is a ticket and `user_id` already owns a ticket for an activity it is
+/// assigned to. One ticket per activity is enforced with this; other products (a drink, a
+/// visibility product) neither count nor are limited by it.
 pub(super) async fn owns_purchase_for_same_activity(
     db: &mut Transaction<'_>,
     user_id: &str,
@@ -67,8 +68,12 @@ pub(super) async fn owns_purchase_for_same_activity(
         "select exists (
             select 1
             from product_activity_assignments target
+            inner join products target_product
+                on target_product.id = target.product_id and target_product.kind = 'ticket'
             inner join product_activity_assignments other
                 on other.activity_id = target.activity_id
+            inner join products other_product
+                on other_product.id = other.product_id and other_product.kind = 'ticket'
             inner join purchases pt on pt.product_id = other.product_id
             where target.product_id = $2 and pt.owner_id = $1
         ) as \"exists!\"",
