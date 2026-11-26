@@ -82,6 +82,19 @@ select a.id,
         from activity_hosts host
         where host.activity_id = a.id
     ) as "host_ids!: Vec<Uuid>",
+    array(
+        select host_group.path::text
+        from activity_hosts host
+        inner join groups host_group on host_group.id = host.group_id
+        where host.activity_id = a.id
+        order by host_group.path
+    ) as "host_paths!: Vec<String>",
+    array(
+        select assigned.tag_id
+        from activity_assigned_tags assigned
+        where assigned.activity_id = a.id
+        order by assigned.tag_id
+    ) as "tag_ids!: Vec<Uuid>",
     a.title as "title!: DIS",
     a.description as "description!: DIS",
     a.location as "location!: Location",

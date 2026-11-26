@@ -99,6 +99,11 @@ struct BriefActivity {
     id: Uuid,
     /// Includes the creator and every additional host.
     host_ids: Vec<Uuid>,
+    /// The paths of `host_ids`' groups, so clients can file an activity under its guilds even
+    /// when they aren't members of the hosts.
+    host_paths: Vec<String>,
+    /// The activity's tags (`/v1/activity-tags`).
+    tag_ids: Vec<Uuid>,
     sales_target_group_name: InternationalizedString,
     sales_target_group_path: String,
     title: InternationalizedString,
@@ -181,6 +186,8 @@ impl Router {
         .map(|activity| BriefActivity {
             id: activity.id,
             host_ids: activity.host_ids,
+            host_paths: activity.host_paths,
+            tag_ids: activity.tag_ids,
             sales_target_group_path: activity.sales_target_group_path.to_string(),
             sales_target_group_name: activity.sales_target_group_name.0,
             title: activity.title.0,

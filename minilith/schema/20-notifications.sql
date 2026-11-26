@@ -25,7 +25,9 @@ create table news (
 create table news_tags (
     id uuid primary key,
     creator_id uuid not null references groups(id),
-    title jsonb not null
+    title jsonb not null,
+    -- false for tags everyone gets, such as "Important": they can't be opted out of
+    can_opt_out boolean not null default true
 );
 create table news_assigned_tags (
     news_id uuid not null references news (id),
