@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into users (id, name, language) values\n                ('email:board@example.com', ''::bytea, ''::bytea),\n                ('email:peer@example.com', ''::bytea, ''::bytea),\n                ('email:new@example.com', ''::bytea, ''::bytea)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "8fc82b38db4e716967b130a233e63bdcce801974b23c0fe64e9010521dc7dcfc"
+}

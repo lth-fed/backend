@@ -1,0 +1,47 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n                meeting.id,\n                meeting.group_id,\n                meeting.activity_id,\n                meeting.title as \"title!: DIS\",\n                meeting.secure_voting\n            from vote_meetings meeting\n            where ($2::uuid is null or meeting.group_id = $2)\n            and (exists (select 1 from group_adminships admin\n                where admin.group_id = meeting.group_id and admin.user_id = $1)\n                or exists (select 1 from vote_meeting_admins admin\n                where admin.meeting_id = meeting.id and admin.user_id = $1))\n            order by meeting.title::text",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "group_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "activity_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "title!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "secure_voting",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "e9f9381e0e786bd52f583038de210b702b3378983941c61668779aef7edfdb4a"
+}

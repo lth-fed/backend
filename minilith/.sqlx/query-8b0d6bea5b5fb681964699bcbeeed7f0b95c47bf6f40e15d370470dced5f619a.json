@@ -1,0 +1,53 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select kind.id,\n            kind.name as \"name!: DIS\",\n            kind.sales_price as \"price!\",\n            kind.sales_start,\n            kind.sales_stop,\n            coalesce(kind.sales_stock, 0) as \"available_tickets!\"\n\n            from products as kind\n            inner join product_activity_assignments assignment\n                on assignment.product_id = kind.id\n            where assignment.activity_id = $1\n            and kind.kind = 'ticket'\n            and (\n                (\n                    exists (\n                        select 1\n                        from group_memberships\n                        inner join groups member_group on member_group.id = group_memberships.group_id\n                        inner join product_allowed_groups tk_ag on tk_ag.product_id = kind.id\n                        inner join groups allowed_group on allowed_group.id = tk_ag.group_id\n                            and allowed_group.path @> member_group.path\n\n                        where group_memberships.user_id = $2\n                        and (\n                            not group_memberships.specific\n                            or tk_ag.group_id = group_memberships.group_id\n                        )\n                    )\n                )\n                or exists (select 1 from product_buyers buyer\n                    where buyer.activity_id = $1 and buyer.product_id = kind.id\n                    and buyer.user_id = $2)\n                -- admin\n                or exists (select 1 from group_adminships admin\n                    inner join activity_hosts host on admin.group_id = host.group_id\n                    where admin.user_id = $2\n                    and host.activity_id = $1\n                )\n            )\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 2,
+        "name": "price!",
+        "type_info": "Money"
+      },
+      {
+        "ordinal": 3,
+        "name": "sales_start",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "sales_stop",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "available_tickets!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "8b0d6bea5b5fb681964699bcbeeed7f0b95c47bf6f40e15d370470dced5f619a"
+}

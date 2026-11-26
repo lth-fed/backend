@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into groups (id, path, name, description, logo_id)\n            values ($1, 'root.child', '{}'::jsonb, '{}'::jsonb, $2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "51540cb0ce85bddf8f04422a215b59d7c42a81c1e95dfc1edd88561cf47d7b91"
+}
