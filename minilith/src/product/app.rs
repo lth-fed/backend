@@ -22,7 +22,7 @@ use super::models::{
     PurchasedAddon, QueueRequest, QueueResponse,
 };
 use super::validation::{ValidateRequest, ValidateResponse};
-use super::{catalog, purchase, queue, transfer, validation};
+use super::{apple_pass, catalog, purchase, queue, transfer, validation};
 use crate::push_notifications::{
     ClientNotification, NotificationAudience, NotificationKind, load_notification_history,
     load_notifications, mark_all_notifications_read, mark_notifications_read,
@@ -725,6 +725,22 @@ impl AppRouter {
         Path(id): Path<Uuid>,
     ) -> MinilithResult<Response<Binary<poem::Body>>> {
         catalog::receipt(self, auth, id).await
+    }
+
+    /// An Apple Wallet pass (`application/vnd.apple.pkpass`) for a ticket the caller holds.
+    /// Its barcode is `{"tid": <purchase id>, "sig": <signature>}`, which `/v1/validate` accepts
+    /// as `pass_signature` until the ticket changes owner.
+    ///
+    /// # Errors
+    ///
+    /// AUTH, DB. NOT FOUND when this server isn't configured to issue passes.
+    #[oai(path = "/purchases/:id/apple-pass", method = "get")]
+    async fn apple_pass(
+        &self,
+        auth: User,
+        Path(id): Path<Uuid>,
+    ) -> MinilithResult<Response<Binary<Vec<u8>>>> {
+        apple_pass::apple_pass(self, auth, id).await
     }
 
     /// Take one use out of a purchase (e.g. a clip card or a physical item).

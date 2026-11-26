@@ -14,6 +14,7 @@ pub mod activities;
 pub mod admin;
 mod admin_addons;
 mod api;
+pub mod apple_wallet;
 pub mod context;
 pub mod group;
 pub mod healthcheck;
