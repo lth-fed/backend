@@ -8,7 +8,9 @@ use uuid::Uuid;
 use super::{
     access::ensure_user_may_receive_transferred_ticket,
     ensure_affected_rows,
-    flow::{reserve_user_purchase_flow, unlist_user_purchase_flow},
+    flow::{
+        owns_purchase_for_same_activity, reserve_user_purchase_flow, unlist_user_purchase_flow,
+    },
     notifications::{TicketNotification, notify_ticket_users},
 };
 use crate::{ContextWrapper, MinilithEndpointError, MinilithResult};
@@ -127,6 +129,18 @@ pub(super) async fn transfer(
             "",
             "ticket has been used",
             "ticket_id",
+        ));
+    }
+
+    // `reserve_user_purchase_flow` below enforces this too, but as a 403 meant for buggy clients.
+    // A recipient who already holds a ticket for the activity is a user mistake, so say so here
+    // the way the other recipient problems are said. The check below still guards the race.
+    if owns_purchase_for_same_activity(&mut txn, &to_user, ticket_kind).await? {
+        return Err(MinilithEndpointError::bad_user_input(
+            "transfer",
+            "",
+            "recipient already has a ticket for this activity",
+            "to_user",
         ));
     }
 
