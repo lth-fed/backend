@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into notification_reads (user_id, notification_id, read)\n        select $1, recipient.notification_id, true\n        from notification_recipients recipient\n        where recipient.user_id = $1\n        and recipient.notification_id = any($2)\n        on conflict (user_id, notification_id) do update set read = true",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f98df6fdc3e30a02d2c04dcd9366be6b7e73016ef2d7c12b4b977195ce883607"
+}

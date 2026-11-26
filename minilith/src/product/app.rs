@@ -23,7 +23,11 @@ use super::models::{
 };
 use super::validation::{ValidateRequest, ValidateResponse};
 use super::{catalog, purchase, queue, transfer, validation};
-use crate::push_notifications::{NotificationKind, load_notification_history};
+use crate::push_notifications::{
+    ClientNotification, NotificationAudience, NotificationKind, load_notification_history,
+    load_notifications, mark_all_notifications_read, mark_notifications_read,
+    set_notification_state,
+};
 use crate::readers;
 use crate::{
     DbInternationalizedString as DIS, InternationalizedString as IS, MinilithEndpointError,
@@ -162,14 +166,6 @@ pub struct AppResaleRequest {
     pub price: i64,
 }
 
-#[derive(Debug, Object)]
-pub struct AppActivityNotification {
-    pub id: Uuid,
-    pub title: IS,
-    pub content: IS,
-    pub send_at: OffsetDateTime,
-}
-
 #[derive(Debug, Clone, Copy, Object)]
 pub struct AppNotificationEvent {
     pub notification_id: Uuid,
@@ -193,11 +189,49 @@ pub struct AppNotification {
     pub kind: NotificationKind,
     /// Activity id, news id or product id depending on `kind`.
     pub target_id: Option<Uuid>,
+    /// The activity it is about: activity news, ticket-holder news and ticket releases.
+    pub activity_id: Option<Uuid>,
+    /// Who an activity's notification was addressed to.
+    pub audience: Option<NotificationAudience>,
+    /// The group a news post was published to.
+    pub group_id: Option<Uuid>,
+    /// The activity's image, the released product's, or the news group's logo.
+    pub image_url: Option<String>,
     pub sender: IS,
     pub title: IS,
     pub content: IS,
     pub send_at: OffsetDateTime,
     pub read: bool,
+    /// Removed from the inbox by the user. The activity's own list still shows it.
+    pub dismissed: bool,
+}
+
+impl From<ClientNotification> for AppNotification {
+    fn from(notification: ClientNotification) -> Self {
+        Self {
+            id: notification.id,
+            kind: notification.kind,
+            target_id: notification.target_id,
+            activity_id: notification.activity_id,
+            audience: notification.audience,
+            group_id: notification.group_id,
+            image_url: notification.image_url,
+            sender: notification.sender.0,
+            title: notification.title.0,
+            content: notification.content.0,
+            send_at: notification.send_at,
+            read: notification.read,
+            dismissed: notification.dismissed,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Object)]
+pub struct AppNotificationState {
+    /// Read or unread. Omitted to leave unchanged.
+    pub read: Option<bool>,
+    /// Removed from the inbox, or restored. Omitted to leave unchanged.
+    pub dismissed: Option<bool>,
 }
 
 #[derive(Debug, Clone, Object)]
@@ -969,7 +1003,10 @@ impl AppRouter {
             .map(Json)
     }
 
-    /// Notifications that were sent for this activity.
+    /// Everything sent about this activity that the caller is eligible for, newest first, with
+    /// read state: news to everyone who can see it, to ticket holders, and ticket releases. Unlike
+    /// `/v1/notifications` it includes what the caller muted and dismissed, so it is the
+    /// activity's full record.
     ///
     /// # Errors
     ///
@@ -979,30 +1016,10 @@ impl AppRouter {
         &self,
         user: User,
         Path(id): Path<Uuid>,
-    ) -> MinilithResult<Json<Vec<AppActivityNotification>>> {
+    ) -> MinilithResult<Json<Vec<AppNotification>>> {
         self.test_activity_access(user.get_id(), &id).await?;
-        let notifications = sqlx::query!(
-            r#"select notification.id,
-                notification.title as "title!: DIS",
-                notification.content as "content!: DIS",
-                notification.send_at
-            from push_notifications notification
-            inner join activity_push_notifications activity_push
-                on activity_push.notification_id = notification.id
-            where activity_push.activity_id = $1
-            and notification.sent
-            order by notification.send_at desc"#,
-            id
-        )
-        .map(|row| AppActivityNotification {
-            id: row.id,
-            title: row.title.0,
-            content: row.content.0,
-            send_at: row.send_at,
-        })
-        .fetch_all(&self.db)
-        .await?;
-        Ok(Json(notifications))
+        let notifications = load_notifications(&self.db, user.get_id(), Some(id)).await?;
+        Ok(Json(notifications.into_iter().map(Into::into).collect()))
     }
 
     /// Tell the organiser that the owner will not attend (shown to admins only).
@@ -1042,21 +1059,7 @@ impl AppRouter {
     #[oai(path = "/notifications", method = "get")]
     async fn notifications(&self, user: User) -> MinilithResult<Json<Vec<AppNotification>>> {
         let notifications = load_notification_history(&self.db, user.get_id()).await?;
-        Ok(Json(
-            notifications
-                .into_iter()
-                .map(|notification| AppNotification {
-                    id: notification.id,
-                    kind: notification.kind,
-                    target_id: notification.target_id,
-                    sender: notification.sender.0,
-                    title: notification.title.0,
-                    content: notification.content.0,
-                    send_at: notification.send_at,
-                    read: notification.read,
-                })
-                .collect(),
-        ))
+        Ok(Json(notifications.into_iter().map(Into::into).collect()))
     }
 
     /// Mark these notifications as read.
@@ -1070,36 +1073,44 @@ impl AppRouter {
         user: User,
         Json(body): Json<AppMarkNotificationsRead>,
     ) -> MinilithResult<()> {
-        sqlx::query!(
-            r#"insert into notification_reads (user_id, notification_id)
-            select $1, recipient.notification_id
-            from notification_recipients recipient
-            where recipient.user_id = $1
-            and recipient.notification_id = any($2)
-            on conflict do nothing"#,
-            user.get_id(),
-            &body.ids,
-        )
-        .execute(&self.db)
-        .await?;
+        mark_notifications_read(&self.db, user.get_id(), &body.ids).await?;
         Ok(())
     }
 
-    /// Mark everything sent so far as read.
+    /// Mark everything sent up to `up_to` as read, including notifications individually marked
+    /// unread; anything newer, which the user hasn't seen, stays unread. Without `up_to`,
+    /// everything sent so far. Dismissals are kept.
     ///
     /// # Errors
     ///
     /// AUTH, DB.
     #[oai(path = "/notifications/read-all", method = "put")]
-    async fn mark_all_notifications_read(&self, user: User) -> MinilithResult<()> {
-        sqlx::query!(
-            r#"insert into user_notification_state (user_id, last_full_read)
-            values ($1, now())
-            on conflict (user_id) do update set last_full_read = excluded.last_full_read"#,
-            user.get_id(),
-        )
-        .execute(&self.db)
-        .await?;
+    async fn mark_all_notifications_read(
+        &self,
+        user: User,
+        Query(up_to): Query<Option<OffsetDateTime>>,
+    ) -> MinilithResult<()> {
+        mark_all_notifications_read(&self.db, user.get_id(), up_to).await?;
+        Ok(())
+    }
+
+    /// Mark one notification read or unread, or remove it from the inbox (or restore it).
+    ///
+    /// # Errors
+    ///
+    /// AUTH, DB, NOT FOUND when the notification isn't one the caller is eligible for.
+    #[oai(path = "/notifications/:id/state", method = "put")]
+    async fn update_notification_state(
+        &self,
+        user: User,
+        Path(id): Path<Uuid>,
+        Json(body): Json<AppNotificationState>,
+    ) -> MinilithResult<()> {
+        let updated =
+            set_notification_state(&self.db, user.get_id(), id, body.read, body.dismissed).await?;
+        if !updated {
+            return Err(MinilithEndpointError::not_found());
+        }
         Ok(())
     }
 

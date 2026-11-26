@@ -88,6 +88,16 @@ struct ActivitySetting {
     follow: bool,
 }
 
+#[derive(Debug, Object)]
+struct ActivityNotificationState {
+    activity_id: Uuid,
+    /// Whether the user gets the activity's general news: their own choice for it, otherwise yes
+    /// unless they opted out of every tag the activity carries.
+    follow: bool,
+    /// News for ticket holders reaches them whatever `follow` says.
+    holds_ticket: bool,
+}
+
 #[OpenApi(prefix_path = "/v0/user")]
 impl Router {
     /// Lists notifications from the last six months that the user is currently eligible to
@@ -230,8 +240,8 @@ impl Router {
         Ok(())
     }
 
-    /// Lists the user's explicit group filter settings. Groups without a row
-    /// inherit from their nearest configured ancestor.
+    /// Lists the user's own choices about following upcoming activities (the activity's bell).
+    /// An activity without one follows the default; see `/activity-settings/{activity_id}`.
     #[oai(path = "/activity-settings", method = "get")]
     async fn activity_settings(&self, user: User) -> MinilithResult<Json<Vec<ActivitySetting>>> {
         let settings = sqlx::query_as!(
@@ -251,7 +261,39 @@ impl Router {
         Ok(Json(settings))
     }
 
-    /// Creates or replaces an explicit group filter setting.
+    /// Whether the user gets this activity's news: their own choice for it if they made one,
+    /// otherwise yes unless they opted out of every tag the activity carries.
+    ///
+    /// # Errors
+    ///
+    /// AUTH, DB.
+    #[oai(path = "/activity-settings/:activity_id", method = "get")]
+    async fn activity_setting(
+        &self,
+        user: User,
+        activity_id: poem_openapi::param::Path<Uuid>,
+    ) -> MinilithResult<Json<ActivityNotificationState>> {
+        let state = sqlx::query!(
+            r#"select
+                follows_activity($1, $2) as "follow!",
+                exists (
+                    select 1 from purchases
+                    where purchases.activity_id = $2 and purchases.owner_id = $1
+                ) as "holds_ticket!""#,
+            user.get_id(),
+            activity_id.0,
+        )
+        .fetch_one(&self.db)
+        .await?;
+        Ok(Json(ActivityNotificationState {
+            activity_id: activity_id.0,
+            follow: state.follow,
+            holds_ticket: state.holds_ticket,
+        }))
+    }
+
+    /// Creates or replaces the user's choice for one activity (its bell), overriding what its
+    /// tags would give.
     #[oai(path = "/activity-settings", method = "put")]
     #[allow(trivial_casts, reason = "sqlx custom enum parameter type override")]
     async fn update_activity_setting(
