@@ -47,21 +47,7 @@ pub(super) async fn reserve_user_purchase_flow(
         .zip(skip_activity_check.iter().copied())
         .filter(|(_, skip)| !skip)
     {
-        let has_purchased_ticket_for_activity = sqlx::query_scalar!(
-            "select exists (
-                select 1
-                from product_activity_assignments target
-                inner join product_activity_assignments other
-                    on other.activity_id = target.activity_id
-                inner join purchases pt on pt.product_id = other.product_id
-                where target.product_id = $2 and pt.owner_id = $1
-            ) as \"exists!\"",
-            user_id,
-            ticket_kind
-        )
-        .fetch_one(&mut db.executor())
-        .await?;
-        if has_purchased_ticket_for_activity {
+        if owns_purchase_for_same_activity(db, user_id, ticket_kind).await? {
             return Err(MinilithEndpointError::bad_frontend_code(
                 "cannot own two tickets to an activity!",
                 "",
@@ -70,6 +56,34 @@ pub(super) async fn reserve_user_purchase_flow(
     }
     Ok(())
 }
+/// Whether `product` is a ticket and `user_id` already owns a ticket for an activity it is
+/// assigned to. One ticket per activity is enforced with this; other products (a drink, a
+/// visibility product) neither count nor are limited by it.
+pub(super) async fn owns_purchase_for_same_activity(
+    db: &mut Transaction<'_>,
+    user_id: &str,
+    product: Uuid,
+) -> MinilithResult<bool> {
+    Ok(sqlx::query_scalar!(
+        "select exists (
+            select 1
+            from product_activity_assignments target
+            inner join products target_product
+                on target_product.id = target.product_id and target_product.kind = 'ticket'
+            inner join product_activity_assignments other
+                on other.activity_id = target.activity_id
+            inner join products other_product
+                on other_product.id = other.product_id and other_product.kind = 'ticket'
+            inner join purchases pt on pt.product_id = other.product_id
+            where target.product_id = $2 and pt.owner_id = $1
+        ) as \"exists!\"",
+        user_id,
+        product
+    )
+    .fetch_one(&mut db.executor())
+    .await?)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PurchaseFlow {
     ReleaseQueue,

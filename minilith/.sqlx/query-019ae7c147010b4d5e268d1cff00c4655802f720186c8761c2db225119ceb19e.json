@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select exists (\n            select 1\n            from product_activity_assignments target\n            inner join products target_product\n                on target_product.id = target.product_id and target_product.kind = 'ticket'\n            inner join product_activity_assignments other\n                on other.activity_id = target.activity_id\n            inner join products other_product\n                on other_product.id = other.product_id and other_product.kind = 'ticket'\n            inner join purchases pt on pt.product_id = other.product_id\n            where target.product_id = $2 and pt.owner_id = $1\n        ) as \"exists!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "019ae7c147010b4d5e268d1cff00c4655802f720186c8761c2db225119ceb19e"
+}

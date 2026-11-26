@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into products (\n            id, group_id, kind, name, description, sales_price, sales_organization,\n            sales_stock, stock_real, stock_unit, stock_price, bookkeeping_tag, max_uses,\n            sales_start, sales_stop, resale_start, resale_stop\n        )\n        select $1, group_id, 'normal', '{}'::jsonb, '{}'::jsonb, 0::money, sales_organization,\n            3, 3, 'st', 0, bookkeeping_tag, 1, sales_start, sales_stop, resale_start, resale_stop\n        from products where id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "587f13241e3d897218290460b01967b93cacd61205a015af937873954932ea21"
+}

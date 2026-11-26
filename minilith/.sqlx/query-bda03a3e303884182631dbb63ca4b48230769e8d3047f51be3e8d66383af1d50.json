@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select exists (\n                select 1 from purchase_transactions history\n                where history.purchase_id = $1 and history.buyer_id = $2\n            ) as \"listed!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "listed!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "bda03a3e303884182631dbb63ca4b48230769e8d3047f51be3e8d66383af1d50"
+}

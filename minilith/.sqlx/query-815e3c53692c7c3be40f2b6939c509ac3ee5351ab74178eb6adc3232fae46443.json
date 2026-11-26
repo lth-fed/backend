@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select owner_id from purchases where id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "owner_id",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "815e3c53692c7c3be40f2b6939c509ac3ee5351ab74178eb6adc3232fae46443"
+}
