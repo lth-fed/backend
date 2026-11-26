@@ -48,7 +48,9 @@ create table activities (
 create table activity_tags (
     id uuid primary key,
     creator_id uuid not null references groups(id),
-    title jsonb not null
+    title jsonb not null,
+    -- false for tags everyone gets, such as "Important": they can't be opted out of
+    can_opt_out boolean not null default true
 );
 create table activity_assigned_tags (
     activity_id uuid not null references activities(id),

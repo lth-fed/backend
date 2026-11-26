@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update activity_tags set can_opt_out = false\n            where id = '60000000-0000-0000-0000-000000000001'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "f8ce6841a037235da1dcca1ffbe1ec007fe776e168e845cf4f0a5d7fd1c510f5"
+}
