@@ -9,6 +9,7 @@ use super::{
         set_user_purchase_flow_reservation_queue,
     },
     release::{release, remove_expired_release_queuers},
+    transfer::record_transfer,
 };
 use crate::MinilithResult;
 
@@ -443,4 +444,81 @@ async fn cannot_purchase_ticket_after_activity_ends(db: sqlx::PgPool) {
             .await
             .is_err()
     );
+}
+
+/// The purchase listings (`/v1/purchases`, `/v0/tickets`) show what the caller appears in as a
+/// buyer, so a transfer has to write the recipient into the history or the ticket vanishes from
+/// their wallet.
+#[sqlx::test(fixtures("../fixtures/ticket_capacity.sql"))]
+async fn transferred_purchase_is_listed_for_recipient_and_sender(db: sqlx::PgPool) {
+    let db = sqlx_tracing::Pool::from(db);
+    let product = Uuid::parse_str("00000000-0000-0000-0000-000000000004").unwrap();
+    let purchase = Uuid::new_v4();
+    let paid_with = Uuid::new_v4();
+    sqlx::query!(
+        "insert into purchases
+            (id, product_id, product_price, paid_price, purchaser_id, owner_id, purchased_at)
+            values ($1, $2, 0::money, 0::money, $3, $3, now())",
+        purchase,
+        product,
+        "test:purchase-flow-1",
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    sqlx::query!(
+        "insert into purchase_transactions
+            (purchase_id, seller_id, buyer_id, completed_at, transaction_id)
+            values ($1, null, $2, now(), $3)",
+        purchase,
+        "test:purchase-flow-1",
+        paid_with,
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+
+    let mut txn = db.begin().await.unwrap();
+    record_transfer(
+        &mut txn,
+        purchase,
+        "test:purchase-flow-1",
+        "test:purchase-flow-2",
+    )
+    .await
+    .unwrap();
+    txn.commit().await.unwrap();
+
+    for user in ["test:purchase-flow-1", "test:purchase-flow-2"] {
+        let listed = sqlx::query_scalar!(
+            r#"select exists (
+                select 1 from purchase_transactions history
+                where history.purchase_id = $1 and history.buyer_id = $2
+            ) as "listed!""#,
+            purchase,
+            user,
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert!(listed, "{user} should still see the transferred purchase");
+    }
+
+    let owner = sqlx::query_scalar!("select owner_id from purchases where id = $1", purchase)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(owner, "test:purchase-flow-2");
+
+    // The transfer is not a payment: the only paid transaction is still the original one, so
+    // receipts and refunds keep resolving to it.
+    let payments: Vec<Uuid> = sqlx::query_scalar!(
+        r#"select transaction_id as "transaction_id!" from purchase_transactions
+            where purchase_id = $1 and transaction_id is not null"#,
+        purchase,
+    )
+    .fetch_all(&db)
+    .await
+    .unwrap();
+    assert_eq!(payments, vec![paid_with]);
 }

@@ -1,3 +1,4 @@
+use bin_common::Transaction;
 use fed_auth_verifier::User;
 use minilith_errors::MinilithErrorOptionExt as _;
 use poem_openapi::Object;
@@ -29,6 +30,44 @@ pub(super) fn is_transferable(
     now: OffsetDateTime,
 ) -> bool {
     owned_by_me && !used && !refunded && resale_start <= now && now < resale_stop
+}
+
+/// Moves `purchase_id` from `from_user` to `to_user` and writes the transfer into the purchase's
+/// history.
+///
+/// The history row (no `transaction_id`, as the schema describes for transfers) is what lists the
+/// purchase for the recipient: `/v1/purchases` and `/v0/tickets` show purchases the caller appears
+/// in as a buyer. Without it a transferred ticket vanished from the recipient's wallet. Every
+/// payment lookup filters on `transaction_id is not null`, so the row never reads as a payment.
+pub(super) async fn record_transfer(
+    txn: &mut Transaction<'_>,
+    purchase_id: Uuid,
+    from_user: &str,
+    to_user: &str,
+) -> MinilithResult<()> {
+    let affected = sqlx::query!(
+        "update purchases set owner_id = $2 where id = $1",
+        purchase_id,
+        to_user
+    )
+    .execute(&mut txn.executor())
+    .await?;
+    ensure_affected_rows(
+        affected.rows_affected(),
+        1,
+        "purchased ticket disappeared while transferring",
+    )?;
+    sqlx::query!(
+        "insert into purchase_transactions
+            (purchase_id, seller_id, buyer_id, completed_at, transaction_id)
+            values ($1, $2, $3, now(), null)",
+        purchase_id,
+        from_user,
+        to_user,
+    )
+    .execute(&mut txn.executor())
+    .await?;
+    Ok(())
 }
 
 #[allow(
@@ -131,18 +170,7 @@ pub(super) async fn transfer(
         ));
     }
     ensure_user_may_receive_transferred_ticket(&mut txn.executor(), &to_user, ticket_kind).await?;
-    let affected = sqlx::query!(
-        "update purchases set owner_id = $2 where id = $1",
-        body.purchased_ticket_id,
-        to_user
-    )
-    .execute(&mut txn.executor())
-    .await?;
-    ensure_affected_rows(
-        affected.rows_affected(),
-        1,
-        "purchased ticket disappeared while transferring",
-    )?;
+    record_transfer(&mut txn, body.purchased_ticket_id, auth.get_id(), &to_user).await?;
 
     unlist_user_purchase_flow(&mut txn, auth.get_id()).await?;
     unlist_user_purchase_flow(&mut txn, &to_user).await?;
