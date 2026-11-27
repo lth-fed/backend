@@ -637,6 +637,50 @@ impl AppRouter {
             map
         });
 
+        // The options of every add-on above, so a client can name what `selected_options` points
+        // at (a hoodie's size). Bookkeeping is for admins and left out.
+        let mut addon_ids: Vec<Uuid> = addons
+            .values()
+            .flatten()
+            .map(|addon| addon.inner.id)
+            .collect();
+        addon_ids.sort_unstable();
+        addon_ids.dedup();
+        let options: std::collections::HashMap<Uuid, Vec<super::models::AddonOption>> =
+            sqlx::query!(
+                r#"select product_addon_id, id, idx, name as "name!: DIS", price
+                from product_addon_options
+                where product_addon_id = any($1)
+                order by idx"#,
+                &addon_ids
+            )
+            .map(|row| {
+                (
+                    row.product_addon_id,
+                    super::models::AddonOption {
+                        id: row.id,
+                        idx: row.idx,
+                        name: row.name.0,
+                        price: row.price.0,
+                        bookkeeping_prices: Vec::new(),
+                        bookkeeping_price_categories: Vec::new(),
+                    },
+                )
+            })
+            .fetch_all(&self.db)
+            .await?
+            .into_iter()
+            .fold(
+                std::collections::HashMap::new(),
+                |mut map, (addon_id, option)| {
+                    map.entry(addon_id).or_insert_with(Vec::new).push(option);
+                    map
+                },
+            );
+        for addon in addons.values_mut().flatten() {
+            addon.options = options.get(&addon.inner.id).cloned().unwrap_or_default();
+        }
+
         let now = OffsetDateTime::now_utc();
         let purchases = sqlx::query!(
             r#"select
