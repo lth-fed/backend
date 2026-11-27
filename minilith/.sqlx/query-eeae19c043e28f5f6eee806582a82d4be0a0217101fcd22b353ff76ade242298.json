@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n            activities.title as \"sender!: DIS\",\n            min(products.sales_start) as \"released_at?\"\n        from activities\n        left join product_activity_assignments assignment on assignment.activity_id = activities.id\n        left join products\n            on products.id = assignment.product_id\n            and products.kind = 'ticket'\n            and products.sales_start > now()\n        where activities.id = $1\n        group by activities.id, activities.title",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "sender!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 1,
+        "name": "released_at?",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "eeae19c043e28f5f6eee806582a82d4be0a0217101fcd22b353ff76ade242298"
+}

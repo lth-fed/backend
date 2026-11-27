@@ -10,7 +10,7 @@ shared libraries:
 | --- | --- | --- |
 | `minilith` | Main application: tickets, groups, activities, admin, users, push. Biggest crate. | 8000 |
 | `fed-auth` | OIDC + SAML2 identity provider. | 8001 |
-| `transactions` | Payment provider integration (Stripe, Swish, free) + receipts. | 8002 |
+| `transactions` | Payment provider integration (SumUp, Swish, free) + receipts. | 8002 |
 | `bin-common` | Shared infra: DB pool, OTEL/tracing setup, listeners, shutdown. | — |
 | `minilith-errors` | Shared error type, extension traits, alert/email system. | — |
 | `fed-auth-verifier` | JWT/JWKS verification, `User` extractor, shared transaction callbacks. | — |
@@ -261,6 +261,7 @@ podman compose up -d                   # local Postgres + observability stack (h
 (written by hand by Erik Davidsson)
 
 - Don't run `cargo sqlx prepare`, the human will do that before committing.
+- cd relatively (e.g. `backend/minilith` or similar, not `/home/xxx/`)
 - use sqlx macros for database queries
 - ask the human to restart minilith or other service when regenerating schema
 - To update the schema: write to files under `schema/xx-<name>.sql` in the

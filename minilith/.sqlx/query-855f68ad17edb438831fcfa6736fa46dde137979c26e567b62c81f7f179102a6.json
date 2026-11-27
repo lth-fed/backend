@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n                is_hidden,\n                exists (select 1 from product_activity_assignments where activity_id = $1) as \"has_ticket_kinds!\",\n                exists (\n                    select 1\n                    from push_notifications\n                    where id in (\n                        select notification_id from activity_push_notifications where activity_id = $1\n                        union\n                        select notification_id from purchased_ticket_push_notifications where activity_id = $1\n                        union\n                        select notification_id from purchased_ticket_push_notifications where activity_id = $1\n                    )\n                ) as \"has_sent_notifications!\"\n            from activities\n            where id = $1\n            for update",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "is_hidden",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 1,
+        "name": "has_ticket_kinds!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 2,
+        "name": "has_sent_notifications!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "855f68ad17edb438831fcfa6736fa46dde137979c26e567b62c81f7f179102a6"
+}

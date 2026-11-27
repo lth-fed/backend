@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from product_release_queuers where user_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "19dcc53c9d600c775f1fd8ec99cb3a1cb88cbabcfcbfd00b96ae2c38976784ac"
+}

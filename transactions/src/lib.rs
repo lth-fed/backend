@@ -22,6 +22,7 @@ pub mod callback;
 pub mod context;
 pub mod receipt;
 pub mod runtime;
+pub mod sumup;
 pub mod swish;
 
 #[derive(sqlx::Type, Debug, Clone, Copy, Serialize, Enum)]
@@ -29,8 +30,10 @@ pub mod swish;
 #[oai(rename_all = "lowercase")]
 pub enum Provider {
     Swish,
+    /// Legacy: Stripe support has been removed; kept so historical rows still decode.
     Stripe,
     Free,
+    Sumup,
 }
 
 #[derive(Serialize, Deserialize, Debug, Object, Clone)]

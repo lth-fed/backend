@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select group_id, activity_id from physical_sales_clients where id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "group_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "activity_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "b4f92ecbdf91a68bba727a9640616d1f9b8556ae2a4989353a561fe4d023a9d2"
+}

@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n            terminal.id,\n            terminal.name,\n            terminal.group_id,\n            grp.path::text as \"group_path!\",\n            grp.name as \"group_name!: DIS\"\n        from physical_payment_terminals terminal\n        inner join groups grp on grp.id = terminal.group_id\n        where terminal.group_id = any($1)\n        order by grp.path, terminal.name",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "group_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "group_path!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "group_name!: DIS",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      false
+    ]
+  },
+  "hash": "5c6757b3a32ca325db4cdf957f554806716a26cb56b6caa52f04f0bcaa33254c"
+}

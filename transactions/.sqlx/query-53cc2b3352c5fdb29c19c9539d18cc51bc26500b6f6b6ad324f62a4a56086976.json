@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into transactions (id, customer_id, client_id, callback_url_v1,\n                timeout, provider, total_transaction_fee, callback_identifier,\n                sumup_checkout_id, sumup_reader_id)\n            values ($1, $2, $3, $4, $5, 'sumup'::provider, $6, $7, $8, $9)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Timestamptz",
+        "Money",
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "53cc2b3352c5fdb29c19c9539d18cc51bc26500b6f6b6ad324f62a4a56086976"
+}

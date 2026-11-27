@@ -25,58 +25,68 @@
       },
       {
         "ordinal": 4,
-        "name": "stripe_secret",
-        "type_info": "Text"
-      },
-      {
-        "ordinal": 5,
-        "name": "stripe_endpoint_secret",
-        "type_info": "Text"
-      },
-      {
-        "ordinal": 6,
         "name": "name",
         "type_info": "Text"
       },
       {
-        "ordinal": 7,
+        "ordinal": 5,
         "name": "email",
         "type_info": "Text"
       },
       {
-        "ordinal": 8,
+        "ordinal": 6,
         "name": "address",
         "type_info": "Text"
       },
       {
-        "ordinal": 9,
+        "ordinal": 7,
         "name": "organization_number",
         "type_info": "Text"
       },
       {
-        "ordinal": 10,
+        "ordinal": 8,
         "name": "svg_icon",
         "type_info": "Text"
       },
       {
-        "ordinal": 11,
+        "ordinal": 9,
         "name": "swish_payment_fee_fixed",
         "type_info": "Money"
       },
       {
-        "ordinal": 12,
+        "ordinal": 10,
         "name": "swish_payment_fee_fraction",
         "type_info": "Float8"
       },
       {
-        "ordinal": 13,
+        "ordinal": 11,
         "name": "swish_payment_fee_max",
         "type_info": "Money"
       },
       {
-        "ordinal": 14,
+        "ordinal": 12,
         "name": "swish_refund_fee",
         "type_info": "Money"
+      },
+      {
+        "ordinal": 13,
+        "name": "sumup_api_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 14,
+        "name": "sumup_merchant_code",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 15,
+        "name": "sumup_online_fee_fraction",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 16,
+        "name": "sumup_physical_fee_fraction",
+        "type_info": "Float8"
       }
     ],
     "parameters": {
@@ -89,8 +99,6 @@
       false,
       false,
       false,
-      true,
-      true,
       false,
       false,
       false,
@@ -98,6 +106,10 @@
       true,
       false,
       false,
+      false,
+      false,
+      true,
+      true,
       false,
       false
     ]

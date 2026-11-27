@@ -12,17 +12,23 @@ use poem_openapi::OpenApiService;
 mod accounting;
 pub mod activities;
 pub mod admin;
-mod admin_addons;
+pub mod admin_addons;
+pub mod admin_purchases;
 mod api;
 pub mod context;
 pub mod group;
 pub mod healthcheck;
+pub mod news;
+pub mod product;
 pub mod push_notifications;
+pub mod readers;
 mod report;
 mod runtime;
-pub mod ticket;
+mod stock_report;
+pub mod tags;
 mod transactions;
 pub mod user;
+pub mod vote;
 
 pub use bin_common::PgPool;
 pub use context::{Context, ContextWrapper};
@@ -119,6 +125,9 @@ pub async fn get_endpoint(
             admin::Router {
                 context: Arc::clone(&context),
             },
+            admin_purchases::Router {
+                context: Arc::clone(&context),
+            },
             activities::Router {
                 context: Arc::clone(&context),
             },
@@ -128,7 +137,10 @@ pub async fn get_endpoint(
             group::Router {
                 context: Arc::clone(&context),
             },
-            ticket::Router {
+            product::Router {
+                context: Arc::clone(&context),
+            },
+            product::app::AppRouter {
                 context: Arc::clone(&context),
             },
             healthcheck::Router {
@@ -137,7 +149,25 @@ pub async fn get_endpoint(
             push_notifications::Router {
                 context: Arc::clone(&context),
             },
+            tags::Router {
+                context: Arc::clone(&context),
+            },
+            tags::AdminRouter {
+                context: Arc::clone(&context),
+            },
             user::Router {
+                context: Arc::clone(&context),
+            },
+            vote::Router {
+                context: Arc::clone(&context),
+            },
+            vote::AdminRouter {
+                context: Arc::clone(&context),
+            },
+            news::AdminRouter {
+                context: Arc::clone(&context),
+            },
+            news::Router {
                 context: Arc::clone(&context),
             },
         ),
@@ -145,7 +175,7 @@ pub async fn get_endpoint(
         env!("CARGO_PKG_VERSION"),
     )
     // this url is just for the Swagger UI
-    .server("http://localhost:8000/v0");
+    .server("http://localhost:8000");
     let ui = api_service.swagger_ui();
     let spec = api_service.spec_endpoint();
 
@@ -153,11 +183,11 @@ pub async fn get_endpoint(
 
     Ok(Route::new()
         .nest(
-            "/v0",
+            "/",
             api_service.data(auth_context).data(transaction_context),
         )
-        .nest("/v0/docs", ui)
-        .nest("/v0/spec.json", spec)
+        .nest("/docs", ui)
+        .nest("/spec.json", spec)
         .with(OpenTelemetryMetrics::new())
         .with(AppVersionMetrics::new())
         .with(OpenTelemetryTracing::new(

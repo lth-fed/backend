@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select resale_start, resale_stop,\n            (purchases.refunded_id is not null) as \"refunded!\",\n            exists (select 1 from purchase_uses\n                where purchase_id = purchases.id) as \"used!\"\n            from purchases\n            inner join products kind on kind.id = purchases.product_id\n            where purchases.id = $1 and owner_id = $2\n            for update of purchases",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "resale_start",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 1,
+        "name": "resale_stop",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 2,
+        "name": "refunded!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 3,
+        "name": "used!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "50a40bc908ad2a2463b8317742be0ebc4f9c7d827008b376997f2322582e7696"
+}

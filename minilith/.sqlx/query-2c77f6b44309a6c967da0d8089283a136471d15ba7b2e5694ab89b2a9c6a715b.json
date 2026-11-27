@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update purchases\n                        set refunded_id = $1\n                        where id in (\n                            select purchase_id from purchase_transactions\n                            where transaction_id = $1\n                        )\n                        and $1 = (select transaction_id from purchase_transactions latest\n                            where latest.purchase_id = purchases.id\n                            and latest.buyer_id = purchases.owner_id\n                            and latest.transaction_id is not null\n                            order by latest.completed_at desc limit 1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2c77f6b44309a6c967da0d8089283a136471d15ba7b2e5694ab89b2a9c6a715b"
+}

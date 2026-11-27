@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select exists (\n            select 1 from group_adminships\n            where user_id = $1 and group_id = $2\n        ) or ($3::uuid is not null and exists (\n            select 1 from activity_hosts host\n            inner join group_adminships admin on admin.group_id = host.group_id\n            where host.activity_id = $3 and admin.user_id = $1\n        )) as \"exists!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "eca3c560c56f653461a531b5c00fb28c81fa8fbdfb49f7cef8ac172839475039"
+}

@@ -1,11 +1,12 @@
 use std::collections::{BTreeMap, HashMap};
 
 use minilith_errors::{MinilithErrorResultExt as _, MinilithResult};
+use sqlx::postgres::types::PgMoney;
 use tracing::error;
 use uuid::Uuid;
 
 use crate::{
-    ContextWrapper, DbInternationalizedString as DIS, MinilithErrorOptionExt as _, report, ticket,
+    ContextWrapper, DbInternationalizedString as DIS, MinilithErrorOptionExt as _, product, report,
     transactions,
 };
 
@@ -13,13 +14,28 @@ use crate::{
 struct PurchasedTicket {
     id: Uuid,
     ticket_kind_id: Uuid,
-    transaction_id: Uuid,
+    /// Set by an admin refund of the purchase; resales never set it.
+    refunded_id: Option<Uuid>,
+    /// What the current owner paid (ticket + addons; the resale price after a resale).
+    paid_price: PgMoney,
+}
+
+impl PurchasedTicket {
+    fn is_refunded(&self) -> bool {
+        self.refunded_id.is_some()
+    }
+}
+
+struct ReportProduct {
+    name: crate::InternationalizedString,
+    addons: Vec<product::AvailableAddon>,
 }
 
 #[derive(Debug)]
 struct PurchasedAddon {
     addon_id: Uuid,
     selected_options: Vec<i32>,
+    selected_options_prices: Vec<PgMoney>,
 }
 
 pub(crate) struct GeneratedReport {
@@ -40,17 +56,14 @@ pub(crate) async fn generate_activity_report(
     external_sale_fees: i64,
     bookkeeping_export: bool,
 ) -> MinilithResult<GeneratedReport> {
-    let lang = match language {
-        report::Language::Swedish => "sv",
-        report::Language::English => "en",
-    };
     let activity = sqlx::query!(
         r#"select
             activities.title as "title!: DIS",
             creator.name as "creator_name!: DIS",
             images.url as creator_logo_url
         from activities
-        inner join groups creator on creator.id = activities.creator_id
+        inner join sales_targets target on target.id = activities.sales_target_id
+        inner join groups creator on creator.id = target.group_id
         inner join images on images.id = creator.logo_id
         where activities.id = $1"#,
         activity_id,
@@ -59,8 +72,101 @@ pub(crate) async fn generate_activity_report(
     .await?
     .wrap_err_not_found()?;
 
-    let extension = activity
-        .creator_logo_url
+    let activity_name = activity
+        .title
+        .resolve_intl(language_code(language), "<title>")
+        .to_owned();
+    generate_report(
+        ctx,
+        Some(activity_id),
+        None,
+        None,
+        None,
+        None,
+        language,
+        activity_name,
+        activity.creator_name.0,
+        activity.creator_logo_url,
+        external_sales,
+        external_sale_fees,
+        bookkeeping_export,
+    )
+    .await
+}
+
+/// Group reports include only purchases of products owned by the group, in the half-open period.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "report parameters describe the export scope"
+)]
+pub(crate) async fn generate_group_report(
+    ctx: &ContextWrapper,
+    group_id: Uuid,
+    start: Option<time::OffsetDateTime>,
+    end: Option<time::OffsetDateTime>,
+    activity_id: Option<Uuid>,
+    product_id: Option<Uuid>,
+    language: report::Language,
+) -> MinilithResult<GeneratedReport> {
+    let group = sqlx::query!(
+        r#"select groups.name as "name!: DIS", images.url as logo_url
+        from groups inner join images on images.id = groups.logo_id where groups.id = $1"#,
+        group_id
+    )
+    .fetch_optional(&ctx.db)
+    .await?
+    .wrap_err_not_found()?;
+    let fmt = |date: Option<time::OffsetDateTime>| {
+        date.map_or_else(|| "…".to_owned(), |value| value.to_string())
+    };
+    let period = format!("{} – {}", fmt(start), fmt(end));
+    generate_report(
+        ctx,
+        activity_id,
+        product_id,
+        Some(group_id),
+        start,
+        end,
+        language,
+        period,
+        group.name.0,
+        group.logo_url,
+        Vec::new(),
+        0,
+        false,
+    )
+    .await
+}
+
+fn language_code(language: report::Language) -> &'static str {
+    match language {
+        report::Language::Swedish => "sv",
+        report::Language::English => "en",
+    }
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    reason = "shared report calculation"
+)]
+async fn generate_report(
+    ctx: &ContextWrapper,
+    activity_id: Option<Uuid>,
+    product_id: Option<Uuid>,
+    group_id: Option<Uuid>,
+    start: Option<time::OffsetDateTime>,
+    end: Option<time::OffsetDateTime>,
+    language: report::Language,
+    activity_name: String,
+    creator_name: crate::InternationalizedString,
+    creator_logo_url: String,
+    external_sales: Vec<(String, i64)>,
+    external_sale_fees: i64,
+    bookkeeping_export: bool,
+) -> MinilithResult<GeneratedReport> {
+    let lang = language_code(language);
+    let extension = creator_logo_url
         .rsplit('.')
         .next()
         .map(str::to_ascii_lowercase);
@@ -72,11 +178,10 @@ pub(crate) async fn generate_activity_report(
         _ => None,
     };
     let image_data = if image_format.is_some() {
-        let path = activity
-            .creator_logo_url
+        let path = creator_logo_url
             .rsplit('/')
             .next()
-            .unwrap_or(&activity.creator_logo_url);
+            .unwrap_or(&creator_logo_url);
         match ctx.image_bucket().get_object(path).await {
             Err(err) => {
                 error!(error = ?err, "s3: failed to get creator icon for accounting report");
@@ -89,49 +194,76 @@ pub(crate) async fn generate_activity_report(
         None
     };
 
-    let ticket_kind_ids = sqlx::query_scalar!(
-        "select id from ticket_kinds where activity_id = $1",
-        activity_id,
-    )
-    .fetch_all(&ctx.db)
-    .await?;
-    let mut kinds = HashMap::with_capacity(ticket_kind_ids.len());
-    for ticket_kind_id in ticket_kind_ids {
-        kinds.insert(
-            ticket_kind_id,
-            ticket::load_ticket_kind_unchecked(ctx, ticket_kind_id).await?,
-        );
-    }
-
     let tickets = sqlx::query_as!(
         PurchasedTicket,
-        r#"select purchased_tickets.id, purchased_tickets.ticket_kind_id,
-            purchased_tickets.transaction_id
-        from purchased_tickets
-        inner join ticket_kinds on ticket_kinds.id = purchased_tickets.ticket_kind_id
-        where ticket_kinds.activity_id = $1
-        order by purchased_tickets.id"#,
-        activity_id,
+        r#"select purchases.id, purchases.product_id as ticket_kind_id,
+            purchases.paid_price as "paid_price!",
+            purchases.refunded_id
+        from purchases
+        inner join products on products.id = purchases.product_id
+        where ($1::uuid is null or purchases.activity_id = $1)
+        and (case when $2::uuid is null then products.kind = 'ticket' else products.group_id = $2 end)
+        and ($3::timestamptz is null or purchases.purchased_at >= $3)
+        and ($4::timestamptz is null or purchases.purchased_at < $4)
+        and ($5::uuid is null or purchases.product_id = $5)
+        order by purchases.id"#,
+        activity_id, group_id, start, end, product_id,
     )
     .fetch_all(&ctx.db)
     .await?;
+    let product_ids = tickets
+        .iter()
+        .map(|ticket| ticket.ticket_kind_id)
+        .collect::<std::collections::HashSet<_>>();
+    let mut kinds = HashMap::with_capacity(product_ids.len());
+    for id in product_ids {
+        let row = sqlx::query!(
+            r#"select name as "name!: DIS" from products where id = $1"#,
+            id
+        )
+        .fetch_one(&ctx.db)
+        .await?;
+        // A product can have add-ons from multiple sets; load each linked set, base price included.
+        let sets = sqlx::query_scalar!(
+            "select distinct addon.set_id from product_addons addon inner join product_addon_links link on link.addon_id = addon.id where link.product_id = $1", id
+        ).fetch_all(&ctx.db).await?;
+        let mut available = Vec::new();
+        for set in sets {
+            available.extend(
+                product::load_addons(&mut ctx.db.begin().await?, set, Some(id), true).await?,
+            );
+        }
+        kinds.insert(
+            id,
+            ReportProduct {
+                name: row.name.0,
+                addons: available,
+            },
+        );
+    }
     let addons = sqlx::query!(
-        r#"select purchased_ticket_addons.ticket_id,
-            purchased_ticket_addons.addon_id,
-            purchased_ticket_addons.selected_options
-        from purchased_ticket_addons
-        inner join purchased_tickets
-            on purchased_tickets.id = purchased_ticket_addons.ticket_id
-        inner join ticket_kinds on ticket_kinds.id = purchased_tickets.ticket_kind_id
-        where ticket_kinds.activity_id = $1"#,
-        activity_id,
+        r#"select purchased_product_addons.purchase_id,
+            purchased_product_addons.addon_id,
+            purchased_product_addons.selected_options,
+            purchased_product_addons.selected_options_prices
+        from purchased_product_addons
+        inner join purchases
+            on purchases.id = purchased_product_addons.purchase_id
+        inner join products on products.id = purchases.product_id
+        where ($1::uuid is null or purchases.activity_id = $1)
+        and (case when $2::uuid is null then products.kind = 'ticket' else products.group_id = $2 end)
+        and ($3::timestamptz is null or purchases.purchased_at >= $3)
+        and ($4::timestamptz is null or purchases.purchased_at < $4)
+        and ($5::uuid is null or purchases.product_id = $5)"#,
+        activity_id, group_id, start, end, product_id,
     )
     .map(|row| {
         (
-            row.ticket_id,
+            row.purchase_id,
             PurchasedAddon {
                 addon_id: row.addon_id,
                 selected_options: row.selected_options,
+                selected_options_prices: row.selected_options_prices,
             },
         )
     })
@@ -146,12 +278,32 @@ pub(crate) async fn generate_activity_report(
         },
     );
 
-    let transaction_ids = tickets
-        .iter()
-        .map(|ticket| ticket.transaction_id)
-        .collect::<Vec<_>>();
-    let fees = if transaction_ids.is_empty() {
-        0
+    // Every transaction of a purchase is a fee: the original sale, each resale, and the refunds
+    // they caused (a resale refunds the previous owner). The provider charges those to us, so the
+    // report has to account for all of them.
+    let mut transaction_ids = sqlx::query_scalar!(
+        r#"select transaction_id as "transaction_id!"
+        from purchase_transactions
+        inner join purchases on purchases.id = purchase_transactions.purchase_id
+        inner join products on products.id = purchases.product_id
+        where transaction_id is not null
+        and ($1::uuid is null or purchases.activity_id = $1)
+        and (case when $2::uuid is null then products.kind = 'ticket' else products.group_id = $2 end)
+        and ($3::timestamptz is null or purchases.purchased_at >= $3)
+        and ($4::timestamptz is null or purchases.purchased_at < $4)
+        and ($5::uuid is null or purchases.product_id = $5)"#,
+        activity_id,
+        group_id,
+        start,
+        end,
+        product_id,
+    )
+    .fetch_all(&ctx.db)
+    .await?;
+    transaction_ids.sort_unstable();
+    transaction_ids.dedup();
+    let transaction_info = if transaction_ids.is_empty() {
+        HashMap::new()
     } else {
         ctx.transactions_post("/v0/info")
             .json(&transactions::InfoRequest { transaction_ids })
@@ -164,76 +316,113 @@ pub(crate) async fn generate_activity_report(
             .await
             .wrap_err_internal("accounting: failed to parse transaction info")?
             .into_iter()
-            .map(|info| info.total_fees)
-            .sum()
+            .map(|info| (info.id, info))
+            .collect::<HashMap<_, _>>()
     };
+    let fees: i64 = transaction_info
+        .values()
+        .map(|info| info.purchase_fees)
+        .sum();
+    let fees_refund: i64 = transaction_info
+        .values()
+        .filter(|info| {
+            matches!(
+                info.state,
+                fed_auth_verifier::callbacks::TransactionState::Refunded
+            )
+        })
+        .map(|info| info.refund_fee)
+        .sum();
 
     let mut per_object = BTreeMap::new();
+    let mut per_refund = BTreeMap::new();
     let mut per_alcohol_category = BTreeMap::new();
     for purchased_ticket in &tickets {
         let kind = kinds
             .get(&purchased_ticket.ticket_kind_id)
             .wrap_err_internal("accounting: purchased ticket kind is missing")?;
-        let kind_name = kind.inner.ticket_kind_name.resolve_intl(lang, "");
-        *per_object
-            .entry((report::Kind::Ticket, kind_name.to_owned(), kind.price))
-            .or_insert(0) += 1;
-        *per_alcohol_category.entry("null".to_owned()).or_insert(0) += kind.price;
+        let kind_name = kind.name.resolve_intl(lang, "");
+        // The price actually paid is snapshotted in the purchase's add-ons (the product's own price
+        // is its base-price add-on); the catalogue price may have changed since, so only the
+        // snapshot counts as income.
+        let mut contributions = Vec::new();
 
         for addon in addons.get(&purchased_ticket.id).into_iter().flatten() {
             let addon_data = kind
-                .available_addons
+                .addons
                 .iter()
                 .find(|available| available.inner.id == addon.addon_id)
                 .wrap_err_internal("accounting: purchased ticket addon is missing")?;
-            for selected_option in &addon.selected_options {
+            for (selected_option, selected_price) in addon
+                .selected_options
+                .iter()
+                .zip(addon.selected_options_prices.iter())
+            {
                 let option = addon_data
                     .options
                     .iter()
                     .find(|option| option.idx == *selected_option)
                     .wrap_err_internal("accounting: purchased ticket addon option is missing")?;
+                let price = selected_price.0;
                 let name = format!(
                     "{} - {}",
                     addon_data.inner.name.resolve_intl(lang, ""),
                     option.name.resolve_intl(lang, "")
                 );
-                *per_object
-                    .entry((report::Kind::Option, name, option.price))
-                    .or_insert(0) += 1;
-                for (category, price) in option
-                    .bookkeeping_price_categories
-                    .iter()
-                    .zip(option.bookkeeping_prices.iter())
-                {
-                    *per_alcohol_category.entry(category.clone()).or_insert(0) += *price;
-                }
+                *per_object.entry((name, price)).or_insert(0) += 1;
+                contributions.extend(allocate_across_categories(
+                    price,
+                    &option.bookkeeping_price_categories,
+                    &option.bookkeeping_prices,
+                ));
+            }
+        }
+
+        if purchased_ticket.is_refunded() {
+            // A resold purchase is refunded at what its owner paid, not at the original price.
+            let refunded_amount = purchased_ticket.paid_price.0;
+            *per_refund
+                .entry((kind_name.to_owned(), refunded_amount))
+                .or_insert(0) += 1;
+            for (category, amount) in contributions {
+                *per_alcohol_category.entry(category).or_insert(0) -= amount;
+            }
+        } else {
+            for (category, amount) in contributions {
+                *per_alcohol_category.entry(category).or_insert(0) += amount;
             }
         }
     }
     let total_sales = per_object
         .iter()
-        .fold(0, |acc, ((_, _, price), number)| acc + price * number);
+        .fold(0, |acc, ((_, price), number)| acc + price * number);
     for (category, total) in external_sales {
-        *per_object
-            .entry((report::Kind::External, category.clone(), total))
-            .or_insert(0) += 1;
+        *per_object.entry((category.clone(), total)).or_insert(0) += 1;
         *per_alcohol_category.entry(category).or_insert(0) += total;
     }
 
-    let activity_name = activity.title.resolve_intl(lang, "<title>").to_owned();
     let data = report::Data {
         language,
         activity_name: activity_name.clone(),
-        creator_name: activity.creator_name.resolve_intl(lang, "").to_owned(),
+        is_group: group_id.is_some(),
+        creator_name: creator_name.resolve_intl(lang, "").to_owned(),
         creator_logo_format: image_format,
         creator_logo_data: image_data,
         fees,
         fees_external: external_sale_fees,
+        fees_refund,
         per_object: per_object
             .into_iter()
-            .map(|((kind, name, price), number)| report::Object {
+            .map(|((name, price), number)| report::Object {
                 name,
-                kind,
+                price,
+                number,
+            })
+            .collect(),
+        per_refund: per_refund
+            .into_iter()
+            .map(|((name, price), number)| report::Object {
+                name,
                 price,
                 number,
             })
@@ -255,4 +444,32 @@ pub(crate) async fn generate_activity_report(
         total_sales,
         pdf,
     })
+}
+
+/// Splits the paid price across an addon option's bookkeeping categories. The declared prices may
+/// be stale (the purchase snapshots the price it was actually sold for), so they are used as
+/// weights and the rounding remainder is added to the first category.
+fn allocate_across_categories(
+    price: i64,
+    categories: &[String],
+    weights: &[i64],
+) -> Vec<(String, i64)> {
+    let total_weight: i64 = weights.iter().sum();
+    if total_weight <= 0 {
+        return Vec::new();
+    }
+    let mut allocated = 0;
+    let mut shares = categories
+        .iter()
+        .zip(weights)
+        .map(|(category, weight)| {
+            let share = price * weight / total_weight;
+            allocated += share;
+            (category.clone(), share)
+        })
+        .collect::<Vec<_>>();
+    if let Some((_, first)) = shares.first_mut() {
+        *first += price - allocated;
+    }
+    shares
 }

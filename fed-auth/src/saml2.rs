@@ -22,8 +22,7 @@ use crate::{Context, ContextWrapper};
 pub async fn get_service_provider(
     api_domain: &str,
 ) -> color_eyre::Result<(ServiceProvider, openssl::pkey::PKey<openssl::pkey::Private>)> {
-    // let resp = reqwest::get("https://idpv4.lu.se/idp/shibboleth")
-    let resp = reqwest::get("https://mocksaml.com/api/saml/metadata")
+    let resp = reqwest::get("https://idpv4.lu.se/idp/shibboleth")
         .await?
         .text()
         .await?;
@@ -292,18 +291,58 @@ impl SamlRouter {
             .await?
             .wrap_err_internal("saml2 response to non-existing session")?;
 
-        println!("{ass:#?}");
-        let sub = ass
-            .subject
+        // println!("{ass:#?}");
+        let attrs = &ass
+            .attribute_statements
             .as_ref()
-            .and_then(|sub| sub.name_id.as_ref())
-            .wrap_err_internal("saml2: no sub")?;
+            .wrap_err_internal("saml2: no sub: attribute_statements")?
+            .first()
+            .wrap_err_internal("saml2: no sub: attribute_statements.first")?
+            .attributes;
+
+        let sub_attr_name = "urn:oasis:names:tc:SAML:attribute:subject-id";
+        let display_name_attr_name = "urn:oid:2.16.840.1.113730.3.1.241";
+        let email_attr_name = "urn:oid:0.9.2342.19200300.100.1.3";
+
+        let sub = attrs
+            .iter()
+            .find(|attr| attr.name.as_deref() == Some(sub_attr_name))
+            .wrap_err_internal("saml2: no sub: no subject-id")?
+            .values
+            .first()
+            .wrap_err_internal("saml2: no sub: subject-id values first")?
+            .value
+            .as_ref()
+            .wrap_err_internal("saml2: no sub: subject-id value")?
+            .strip_suffix("@lu.se")
+            .wrap_err_internal("saml2: no sub: not lu")?;
+        let name = async {
+            let name = attrs
+                .iter()
+                .find(|attr| attr.name.as_deref() == Some(display_name_attr_name))?
+                .values
+                .first()?
+                .value
+                .as_ref()?;
+            Some(name)
+        }
+        .await;
+        let email = async {
+            let email = attrs
+                .iter()
+                .find(|attr| attr.name.as_deref() == Some(email_attr_name))?
+                .values
+                .first()?
+                .value
+                .as_ref()?;
+            Some(email)
+        }
+        .await;
 
         let user = ValidatedUser {
-            sub: format!("lund-university:{}", sub.value.clone()),
-            email: None,
-            full_name: None,
-            lth_guild: None,
+            sub: format!("lund-university:{}", sub.to_owned()),
+            email: email.map(ToOwned::to_owned),
+            full_name: name.map(ToOwned::to_owned),
             language: None,
         };
         self.validate_session(request_id, &user).await?;

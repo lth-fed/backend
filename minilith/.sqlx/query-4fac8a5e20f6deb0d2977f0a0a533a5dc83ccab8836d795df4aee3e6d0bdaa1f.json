@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into activity_opt_out_tags (user_id, tag_id) values ($1, $2)\n            on conflict do nothing",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4fac8a5e20f6deb0d2977f0a0a533a5dc83ccab8836d795df4aee3e6d0bdaa1f"
+}

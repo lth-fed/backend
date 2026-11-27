@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into product_buyers (activity_id, product_id, user_id, guaranteed)\n            values ($1, $2, $3, true)\n            on conflict (activity_id, product_id, user_id) do nothing",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bbdc743e09aa7d1201a88b7c9734f8339ae4d9744897cb6dd61f59486c15c49c"
+}

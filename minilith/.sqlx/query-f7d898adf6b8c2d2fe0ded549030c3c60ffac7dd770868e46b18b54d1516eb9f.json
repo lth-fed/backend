@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into product_addon_option_bookkeepings (id, option_id, price, category)\n        select uuidv4(), $1, entry.price, tag.id\n        from unnest($2::money[], $3::text[]) as entry(price, category)\n        inner join product_tags tag on tag.name->>'en' = entry.category",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "MoneyArray",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f7d898adf6b8c2d2fe0ded549030c3c60ffac7dd770868e46b18b54d1516eb9f"
+}

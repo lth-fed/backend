@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into purchased_product_addons\n            (addon_id, purchase_id, selected_options, selected_options_prices, selected_text)\n            select addon_id, item_id, selected_options, selected_options_prices, selected_text\n            from physical_sale_item_addons\n            where item_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "63182d9877702a92d5918175acb32851bae0fdd91667c5d59adfa231fc432a64"
+}

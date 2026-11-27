@@ -66,6 +66,30 @@ pub async fn send_callbacks(ctx: &Context, events: impl Iterator<Item = Callback
     }
 }
 
+/// Tells the client that a purchase has been refunded.
+pub async fn send_refunded(
+    ctx: &Context,
+    transaction_id: Uuid,
+    callback_url_v1: &str,
+    client_id: &str,
+) {
+    send_callbacks(
+        ctx,
+        [CallbackEvent {
+            callback_url_v1: callback_url_v1.to_owned(),
+            client_id: client_id.to_owned(),
+            inner: CallbackInfo {
+                transaction_id,
+                inner: TransactionInfo {
+                    state: TransactionState::Refunded,
+                },
+            },
+        }]
+        .into_iter(),
+    )
+    .await;
+}
+
 /// # Errors
 ///
 /// DB errors & `callback_identifier` validation error.
@@ -157,11 +181,15 @@ pub async fn handle_callback_to_us(
             )
             .await;
             // it's important that we write after! If we are stopped or crash, we want to send
-            // the callback, then when we start up again realize this is should be deleted and
+            // the callback, then when we start up again realize this should be cancelled and
             // send another callback.
-            sqlx::query!("delete from transactions where id = $1", data.id)
-                .execute(&ctx.db)
-                .await?;
+            sqlx::query!(
+                "update transactions set cancelled_at = now()
+                where id = $1 and cancelled_at is null",
+                data.id
+            )
+            .execute(&ctx.db)
+            .await?;
         }
     }
     Ok(())

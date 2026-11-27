@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update purchases purchase\n            set for_resale = $3::money\n            from products product\n            where purchase.id = $1\n            and purchase.product_id = product.id\n            and purchase.owner_id = $2\n            and purchase.refunded_id is null\n            and purchase.for_resale is null\n            and now() between product.resale_start and product.resale_stop\n            and not exists (\n                select 1 from purchase_transactions transaction\n                where transaction.purchase_id = purchase.id\n                and transaction.transaction_id is null\n            )\n            and not exists (\n                select 1 from purchase_uses used\n                where used.purchase_id = purchase.id\n            )\n            and $3::money <= purchase.paid_price",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Money"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "94f9e19a4f65919ee7725ba909aef05ba4a85c29e357afb4c6e5e0ef8c7306ad"
+}

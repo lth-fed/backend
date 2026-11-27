@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update purchases\n        set resale_transaction_id = $2, resale_buyer_id = $3\n        where id = $1\n        and owner_id = $4\n        and for_resale is not null\n        and resale_transaction_id is null",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b50f3aaf56fd6b5a51ca3d89f4332c4a2726f31a74ddd8edb5759ac739d5db8b"
+}

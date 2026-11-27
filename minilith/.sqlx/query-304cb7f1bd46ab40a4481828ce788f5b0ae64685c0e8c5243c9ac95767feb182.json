@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into product_addon_options (id, product_addon_id, idx, name, price)\n            values ($1, $2, $3, $4, $5)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int4",
+        "Jsonb",
+        "Money"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "304cb7f1bd46ab40a4481828ce788f5b0ae64685c0e8c5243c9ac95767feb182"
+}

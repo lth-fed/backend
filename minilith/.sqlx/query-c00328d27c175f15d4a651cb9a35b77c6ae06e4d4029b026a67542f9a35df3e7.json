@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select product_id from product_release_queuers where user_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "product_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c00328d27c175f15d4a651cb9a35b77c6ae06e4d4029b026a67542f9a35df3e7"
+}

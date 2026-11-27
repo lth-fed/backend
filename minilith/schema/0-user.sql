@@ -1,5 +1,5 @@
 create table users (
-    -- `lund-university:<stil-id>` or `email:<email>`
+    -- `lund-university:<stil-id>` or `email:<email>` or `x-external-temporary:<token>`
     id text primary key,
     -- needs to be pseudoanonymised according to GDPR, therefore we have to store the encrypted bytes. Remember to pad.
     name bytea not null,

@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select count(distinct pt.owner_id) as \"count!\"\n            from purchase_use_validations validation\n            inner join purchase_uses uses on uses.id = validation.use_id\n            inner join purchases pt on pt.id = uses.purchase_id\n            where pt.activity_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "07bc6119e11b099faf2cd29621b4d73df574a7e73a1dba2ef99fe719bf2a269f"
+}

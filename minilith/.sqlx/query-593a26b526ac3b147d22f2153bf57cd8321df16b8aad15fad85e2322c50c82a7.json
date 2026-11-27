@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n                product.name as \"name!: DIS\",\n                base.price as \"price!\",\n                (now() between product.sales_start and product.sales_stop) as \"on_sale!\",\n                (select assignment.activity_id from product_activity_assignments assignment\n                    where assignment.product_id = product.id\n                    order by assignment.activity_id limit 1) as \"activity_id?\"\n            from products product\n            inner join product_base_prices base on base.product_id = product.id\n            where product.id = $1\n            and product.kind <> 'activity_visibility'\n            and (\n                -- a sales device may only sell what it is registered for\n                ($2::uuid is null and $3::uuid is null)\n                or product.store_general_sales and (\n                    ($2::uuid is not null and (\n                        product.group_id = $2\n                        or exists (\n                            select 1\n                            from product_activity_assignments assignment\n                            inner join activity_hosts host\n                                on host.activity_id = assignment.activity_id\n                            where assignment.product_id = product.id\n                            and host.group_id = $2\n                        )\n                    ))\n                    or ($3::uuid is not null and exists (\n                        select 1 from product_activity_assignments assignment\n                        where assignment.product_id = product.id\n                        and assignment.activity_id = $3\n                    ))\n                )\n            )",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 1,
+        "name": "price!",
+        "type_info": "Money"
+      },
+      {
+        "ordinal": 2,
+        "name": "on_sale!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 3,
+        "name": "activity_id?",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      null,
+      null
+    ]
+  },
+  "hash": "593a26b526ac3b147d22f2153bf57cd8321df16b8aad15fad85e2322c50c82a7"
+}

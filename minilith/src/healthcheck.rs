@@ -16,7 +16,7 @@ impl Deref for Router {
     }
 }
 
-#[OpenApi]
+#[OpenApi(prefix_path = "/v0")]
 impl Router {
     #[oai(path = "/healthcheck", method = "get")]
     async fn health_check(&self) -> MinilithResult<PlainText<String>> {

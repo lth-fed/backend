@@ -1,0 +1,63 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n                activity_host_invites.activity_id,\n                activity_host_invites.group_id,\n                activities.title as \"activity_title!: DIS\",\n                activities.time_start as activity_time_start,\n                creator.name as \"sales_target_group_name!: DIS\",\n                invited.name as \"group_name!: DIS\",\n                invited.path as \"group_path!: group::Path\"\n            from activity_host_invites\n            inner join activities\n                on activities.id = activity_host_invites.activity_id\n            inner join sales_targets target on target.id = activities.sales_target_id\n            inner join groups creator on creator.id = target.group_id\n            inner join groups invited on invited.id = activity_host_invites.group_id\n            inner join group_adminships\n                on group_adminships.group_id = activity_host_invites.group_id\n                and group_adminships.user_id = $1\n            where not invited.deleted\n            order by activities.time_start, invited.path, activities.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "activity_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "group_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "activity_title!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 3,
+        "name": "activity_time_start",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "sales_target_group_name!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 5,
+        "name": "group_name!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 6,
+        "name": "group_path!: group::Path",
+        "type_info": {
+          "Custom": {
+            "name": "ltree",
+            "kind": "Simple"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "4f2ecda2f34fee1ccc7692a4b88c089f8d74f07e5882d040f7229ad2aaeb7b5c"
+}

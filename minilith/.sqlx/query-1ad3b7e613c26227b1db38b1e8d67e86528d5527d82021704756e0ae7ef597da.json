@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into sales_targets (id, group_id, email, iban)\n                 values ($1, $2, 'informationschef@esek.se', 'SE48 8000 0831 3907 4120 7096')\n                 on conflict (id) do nothing",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1ad3b7e613c26227b1db38b1e8d67e86528d5527d82021704756e0ae7ef597da"
+}

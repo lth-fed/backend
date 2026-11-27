@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into vote_meeting_admins (user_id, meeting_id, readonly)\n            values ($1, $2, false)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fffd6ff06bf66c79c2663efdf51ae574a0d5453102dfd584b817997d6dda5b95"
+}

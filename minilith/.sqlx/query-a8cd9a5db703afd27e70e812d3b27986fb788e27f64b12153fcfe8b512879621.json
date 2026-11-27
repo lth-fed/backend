@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n                addon.name as \"addon_name!: DIS\",\n                option.name as \"option_name!: DIS\",\n                option.price as \"price!\"\n            from physical_sale_item_addons item_addon\n            inner join product_addons addon on addon.id = item_addon.addon_id\n            cross join lateral unnest(item_addon.selected_options) with ordinality\n                as chosen(idx, ord)\n            inner join product_addon_options option\n                on option.product_addon_id = addon.id and option.idx = chosen.idx\n            where item_addon.item_id = $1\n            order by addon.idx, chosen.ord",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "addon_name!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 1,
+        "name": "option_name!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 2,
+        "name": "price!",
+        "type_info": "Money"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "a8cd9a5db703afd27e70e812d3b27986fb788e27f64b12153fcfe8b512879621"
+}

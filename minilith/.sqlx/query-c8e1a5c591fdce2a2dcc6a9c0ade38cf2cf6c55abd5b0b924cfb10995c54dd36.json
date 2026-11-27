@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into product_addon_links (product_id, addon_id)\n            select $1, addon_id from unnest($2::uuid[]) selected(addon_id)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c8e1a5c591fdce2a2dcc6a9c0ade38cf2cf6c55abd5b0b924cfb10995c54dd36"
+}

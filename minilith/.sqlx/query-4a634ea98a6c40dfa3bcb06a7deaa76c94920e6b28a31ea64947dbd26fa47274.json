@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into physical_sale_items\n                (transaction_id, product_id, product_price, activity_id)\n            values ($1, $2, $3, $4)\n            returning id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Money",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4a634ea98a6c40dfa3bcb06a7deaa76c94920e6b28a31ea64947dbd26fa47274"
+}

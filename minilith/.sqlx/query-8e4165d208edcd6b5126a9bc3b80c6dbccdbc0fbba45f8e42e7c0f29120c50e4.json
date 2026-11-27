@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select product_id from physical_sale_items\n        where transaction_id = $1\n        for update",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "product_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "8e4165d208edcd6b5126a9bc3b80c6dbccdbc0fbba45f8e42e7c0f29120c50e4"
+}

@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into push_notifications (id, kind, sender, title, content, send_at)\n            values ($1, 'ticket_release', $2, $3, $4, $5)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Jsonb",
+        "Jsonb",
+        "Jsonb",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c8c72f2594a9943acc269ba3ba1f5085648ff241f6a5a9ee917935715e1dd5dd"
+}

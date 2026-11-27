@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select purchase.id, purchase.for_resale as \"price!\", purchase.purchased_at\n            from purchases purchase\n            where purchase.product_id = $1\n            and purchase.for_resale is not null\n            and purchase.refunded_id is null\n            order by purchase.for_resale, purchase.purchased_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "price!",
+        "type_info": "Money"
+      },
+      {
+        "ordinal": 2,
+        "name": "purchased_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "06d3bb14816a21f07a90131c6dce243f2f3f91471e5647eb04ad417f51196498"
+}

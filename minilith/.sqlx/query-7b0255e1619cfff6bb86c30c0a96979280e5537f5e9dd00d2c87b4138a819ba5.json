@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into product_tags (id, group_id, hidden, name)\n        select uuidv4(), target.group_id, false, '{\"en\":\"Ticket\"}'::jsonb\n        from sales_targets target\n        where target.id = $1\n        and not exists (\n            select 1 from product_tags tag where tag.group_id = target.group_id\n        )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7b0255e1619cfff6bb86c30c0a96979280e5537f5e9dd00d2c87b4138a819ba5"
+}

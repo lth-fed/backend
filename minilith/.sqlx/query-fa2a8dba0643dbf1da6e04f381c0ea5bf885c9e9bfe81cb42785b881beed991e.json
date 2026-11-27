@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n                exists (\n                    select 1\n                    from groups_ask_to_join\n                    inner join group_memberships\n                        on group_memberships.group_id = groups_ask_to_join.joiner_id\n                    where groups_ask_to_join.target_id = $2\n                    and group_memberships.user_id = $1\n                ) as \"may_request!\",\n                exists (\n                    select 1\n                    from groups target\n                    inner join groups parent on parent.path = target.parent_path\n                    inner join group_memberships membership\n                        on membership.group_id = parent.id\n                    where target.id = $2\n                    and parent.parent_members_can_join\n                    and membership.user_id = $1\n                ) as \"may_join!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "may_request!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 1,
+        "name": "may_join!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null,
+      null
+    ]
+  },
+  "hash": "fa2a8dba0643dbf1da6e04f381c0ea5bf885c9e9bfe81cb42785b881beed991e"
+}

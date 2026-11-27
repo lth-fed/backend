@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select secure_voting from vote_meetings where id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "secure_voting",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e3478d9eb7c312536258b5def8d6ab15d10488d66ea7ec55f491ae88b8eee839"
+}

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select notification_id from purchased_ticket_push_notifications\n        where activity_id = $1 and id = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "notification_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "794e1d94b8aa98067d2c55809517f8d786f472af749c1dabb32ed2a80aa49fe2"
+}

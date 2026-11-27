@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into purchase_transactions\n        (purchase_id, seller_id, buyer_id, completed_at, transaction_id)\n        values ($1, $2, $3, now(), $4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5e1359f2c58dda58d75bfd4d08f7060ced178a657230be469c737b1527109cf2"
+}

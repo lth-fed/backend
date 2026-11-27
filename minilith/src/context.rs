@@ -34,6 +34,10 @@ pub struct Context {
     transactions_client: reqwest::Client,
     transactions_token: String,
 
+    auth_api: String,
+    auth_client: reqwest::Client,
+    auth_admin_token: Uuid,
+
     push_clients: Option<PushClients>,
 
     email_client: Option<EmailClient>,
@@ -99,6 +103,19 @@ impl Context {
             "https://transactions.teknologappen.se"
         };
         let transactions_api = default_transactions_api.to_owned();
+        let auth_api = if debug.service_urls {
+            "https://fed-auth:8051"
+        } else if cfg!(debug_assertions) {
+            "https://localhost:8051"
+        } else {
+            "https://api.auth.teknologappen.se"
+        }
+        .to_owned();
+        let auth_admin_token = std::env::var("FED_AUTH_ADMIN_TOKEN")
+            .wrap_err("Error: Missing env variable: 'FED_AUTH_ADMIN_TOKEN'.")?;
+        let auth_admin_token = auth_admin_token
+            .parse()
+            .wrap_err("Error: Could not parse env variable 'FED_AUTH_ADMIN_TOKEN' as a UUID.")?;
 
         let client = reqwest::Client::builder()
             .tls_danger_accept_invalid_certs(debug.enabled)
@@ -112,7 +129,7 @@ impl Context {
                     if !debug.enabled {
                         alert(
                             AlertLevel::L2,
-                            "push-notifications credentials not available",
+                            "push notifications credentials not available",
                         );
                     }
                     warn!(
@@ -127,7 +144,7 @@ impl Context {
                         if !debug.enabled {
                             alert(
                                 AlertLevel::L2,
-                                "push-notifications credential test failed. See logs",
+                                "push notification credential test failed. See logs",
                             );
                         }
                         error!(
@@ -139,7 +156,7 @@ impl Context {
                 },
                 Err(error) => {
                     if !debug.enabled {
-                        alert(AlertLevel::L2, "push-notifications setup failed. See logs");
+                        alert(AlertLevel::L2, "push notification setup failed. See logs");
                     }
                     error!(
                         ?error,
@@ -219,8 +236,11 @@ impl Context {
             debug,
             encryption_key,
             transactions_api,
+            auth_client: client.clone(),
             transactions_client: client,
             transactions_token,
+            auth_api,
+            auth_admin_token,
 
             push_clients,
 
@@ -340,6 +360,30 @@ impl Context {
                 format!("Bearer {}", self.transactions_token),
             )
     }
+    pub fn auth_post(&self, endpoint: impl AsRef<str>) -> reqwest::RequestBuilder {
+        self.auth_client
+            .post(format!("{}{}", self.auth_api, endpoint.as_ref()))
+    }
+    #[must_use]
+    pub fn auth_admin_token(&self) -> Uuid {
+        self.auth_admin_token
+    }
+    pub fn transactions_patch(&self, endpoint: impl AsRef<str>) -> reqwest::RequestBuilder {
+        self.transactions_client
+            .patch(format!("{}{}", self.transactions_api, endpoint.as_ref()))
+            .header(
+                "authorization",
+                format!("Bearer {}", self.transactions_token),
+            )
+    }
+    pub fn transactions_delete(&self, endpoint: impl AsRef<str>) -> reqwest::RequestBuilder {
+        self.transactions_client
+            .delete(format!("{}{}", self.transactions_api, endpoint.as_ref()))
+            .header(
+                "authorization",
+                format!("Bearer {}", self.transactions_token),
+            )
+    }
     pub fn transactions_post(&self, endpoint: impl AsRef<str>) -> reqwest::RequestBuilder {
         self.transactions_client
             .post(format!("{}{}", self.transactions_api, endpoint.as_ref()))
@@ -371,10 +415,7 @@ impl Context {
         &self,
         platform: PushPlatform,
         push_token: &str,
-        notification_id: Uuid,
-        activity_id: Option<Uuid>,
-        title: &str,
-        content: &str,
+        message: &crate::push_notifications::PushMessage<'_>,
     ) -> MinilithResult<PushSendResult> {
         let sender = self.push_clients.as_ref().ok_or_else(|| {
             MinilithEndpointError::internal_error(
@@ -382,16 +423,7 @@ impl Context {
                 "",
             )
         })?;
-        sender
-            .send(
-                platform,
-                push_token,
-                notification_id,
-                activity_id,
-                title,
-                content,
-            )
-            .await
+        sender.send(platform, push_token, message).await
     }
 
     #[must_use]
@@ -423,15 +455,20 @@ impl Context {
                         on member_group.id = group_memberships.group_id
                     inner join groups allowed_group
                         on allowed_group.path @> member_group.path
-                    inner join ticket_kind_allowed_groups tk_ag
+                    inner join product_allowed_groups tk_ag
                         on tk_ag.group_id = allowed_group.id
-                    inner join ticket_kinds kind on kind.id = tk_ag.ticket_kind_id
+                    inner join product_activity_assignments assignment
+                        on assignment.product_id = tk_ag.product_id
                     where group_memberships.user_id = $1
-                    and kind.activity_id = $2
+                    and assignment.activity_id = $2
                     and (
-                        member_group.limit_membership_visibility = false
+                        not group_memberships.specific
                         or tk_ag.group_id = group_memberships.group_id
                     )
+                )
+                or exists (
+                    select 1 from product_buyers
+                    where activity_id = $2 and user_id = $1
                 )
                 or exists (
                     select 1

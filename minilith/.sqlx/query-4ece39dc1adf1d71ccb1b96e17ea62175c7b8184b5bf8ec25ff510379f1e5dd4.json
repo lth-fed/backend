@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into product_transfer_groups (product_id, group_id)\n        select $1, group_id from unnest($2::uuid[]) selected(group_id)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4ece39dc1adf1d71ccb1b96e17ea62175c7b8184b5bf8ec25ff510379f1e5dd4"
+}

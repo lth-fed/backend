@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into purchased_ticket_push_notifications (id, activity_id, notification_id)\n                values ($1, $2, $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "866ee1c1f960c7ae180795ae346852fd33282cc95553998b6998b0d3a90446a8"
+}

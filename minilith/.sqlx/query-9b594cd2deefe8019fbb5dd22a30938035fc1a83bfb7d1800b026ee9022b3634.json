@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select group_id from activity_hosts where activity_id = $1\n                    union\n                    select target.group_id\n                        from activities\n                        inner join sales_targets target on target.id = activities.sales_target_id\n                        where activities.id = $1\n                    union\n                    select stock_group from activities\n                        where id = $1 and stock_group is not null",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "group_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "9b594cd2deefe8019fbb5dd22a30938035fc1a83bfb7d1800b026ee9022b3634"
+}

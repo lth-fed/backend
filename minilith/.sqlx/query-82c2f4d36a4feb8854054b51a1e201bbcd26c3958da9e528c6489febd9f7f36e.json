@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "with promised as (\n            select coalesce(count(*), 0)::int as remaining\n            from product_buyers buyer\n            where buyer.product_id = $1\n            and buyer.guaranteed\n            and not exists (\n                select 1 from purchases purchase\n                where purchase.product_id = $1\n                and purchase.owner_id = buyer.user_id\n                and purchase.refunded_id is null\n            )\n            and not exists (\n                select 1 from product_reservations reservation\n                where reservation.product_id = $1\n                and reservation.user_id = buyer.user_id\n            )\n        ), capacity as materialized (\n            select kind.id,\n                least(\n                    $2,\n                    greatest(\n                        0,\n                        kind.sales_stock - case when $3 then promised.remaining else 0 end\n                    )\n                ) as granted\n            from products kind\n            cross join promised\n            where kind.id = $1 and kind.sales_stock is not null\n            for update of kind\n        ), updated as (\n            update products\n            set sales_stock = sales_stock - capacity.granted\n            from capacity\n            where products.id = capacity.id\n            returning products.id\n        )\n        select capacity.granted::int as \"granted!\"\n        from capacity",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "granted!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "82c2f4d36a4feb8854054b51a1e201bbcd26c3958da9e528c6489febd9f7f36e"
+}

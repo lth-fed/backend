@@ -70,7 +70,7 @@ pub struct Activity {
     pub responsible: Responsible,
     /// The creator is the first in the `hosts` too.
     /// Used to find out which guild holds the event.
-    pub creator_id: Uuid,
+    pub sales_target_group_id: Uuid,
     pub title: InternationalizedString,
     pub description: InternationalizedString,
     pub location: PoemLocation,
@@ -85,6 +85,12 @@ pub struct Activity {
     pub hosts: Vec<Host>,
     /// If there are any tickets for this event.
     pub tickets_exist: bool,
+    /// Where the activity's manually managed stock lives.
+    pub stock_group_id: Option<Uuid>,
+    /// Total number of times the activity has been opened.
+    pub views: i64,
+    /// The product that grants visibility; may also be a normal ticket.
+    pub base_ticket: Uuid,
     /// Some if any tickets are purchasable.
     pub earliest_purchasable_ticket_release: Option<OffsetDateTime>,
 }
@@ -93,8 +99,8 @@ struct BriefActivity {
     id: Uuid,
     /// Includes the creator and every additional host.
     host_ids: Vec<Uuid>,
-    creator_name: InternationalizedString,
-    creator_path: String,
+    sales_target_group_name: InternationalizedString,
+    sales_target_group_path: String,
     title: InternationalizedString,
     description: InternationalizedString,
     location: PoemLocation,
@@ -128,7 +134,7 @@ impl Deref for Router {
     }
 }
 
-#[OpenApi(prefix_path = "/activities")]
+#[OpenApi(prefix_path = "/v0/activities")]
 impl Router {
     /// `paging_start` & `paging_end` have to both be null or not null.
     /// They cannot be more than 50 days apart.
@@ -175,8 +181,8 @@ impl Router {
         .map(|activity| BriefActivity {
             id: activity.id,
             host_ids: activity.host_ids,
-            creator_path: activity.creator_path.to_string(),
-            creator_name: activity.creator_name.0,
+            sales_target_group_path: activity.sales_target_group_path.to_string(),
+            sales_target_group_name: activity.sales_target_group_name.0,
             title: activity.title.0,
             description: activity.description.0,
             location: activity.location.into(),
@@ -196,115 +202,8 @@ impl Router {
     /// - user might not be allowed to access this activity
     /// - activity not found
     #[oai(path = "/:id", method = "get")]
-    #[allow(clippy::too_many_lines, reason = "it's very easy to read")]
     pub async fn details(&self, user: User, id: Path<Uuid>) -> MinilithResult<Json<Activity>> {
-        let owns_ticket = sqlx::query_scalar!(
-            r#"select exists (
-                select 1
-                from purchased_tickets
-                inner join ticket_kinds
-                    on ticket_kinds.id = purchased_tickets.ticket_kind_id
-                where purchased_tickets.owner_id = $1
-                and ticket_kinds.activity_id = $2
-            ) as "exists!""#,
-            user.get_id(),
-            id.0,
-        )
-        .fetch_one(&self.db)
-        .await?;
-        if !owns_ticket {
-            self.test_activity_access(user.get_id(), &id.0).await?;
-        }
-        let activity = sqlx::query!(
-            r#"select activities.id,
-                title as "title!: DIS",
-                activities.description as "description!: DIS",
-                location as "location!: Location", time_start, time_end,
-                max_tickets,
-                responsible_name,
-                responsible_contact,
-                images.url as "image_url",
-                activities.image_id,
-                creator_id,
-                is_hidden,
-                is_hidden_for_other_admins,
-                -- NOT SAME as activity-list.sql, because it filters for if it's not sold out
-                -- either. This controls the tappableness of the button
-                (select purchasing_available_start
-                    from ticket_kinds tk
-                    inner join ticket_kind_allowed_groups g on g.ticket_kind_id = tk.id
-                    inner join groups ag on ag.id = g.group_id
-                    inner join groups ug on ag.path @> ug.path
-                    inner join group_memberships m on m.group_id = ug.id
-                    where tk.activity_id = $1
-                    and not for_visibility
-                    and m.user_id = $2
-                    order by purchasing_available_start
-                    limit 1
-                ) as "earliest_ticket_release?",
-                (select exists (
-                    select 1
-                    from ticket_kinds tk
-                    where tk.activity_id = $1
-                    and not for_visibility
-                )) as "tickets_exist!"
-            from activities
-            inner join images on images.id = image_id
-            where activities.id = $1;
-            "#,
-            *id,
-            user.get_id()
-        )
-        .fetch_optional(&self.context.db)
-        .await?
-        .wrap_err_not_found()?;
-        let hosts = sqlx::query!(
-            r#"select hosts.id, path, name as "name!: DIS", url
-            from activity_hosts
-            inner join groups hosts on hosts.id = activity_hosts.group_id
-            inner join images on hosts.logo_id = images.id
-            where activity_id = $1
-            order by hosts.id = $2 desc, hosts.path
-            "#,
-            *id,
-            activity.creator_id,
-        )
-        .fetch_all(&self.context.db)
-        .await?;
-
-        let hosts = hosts
-            .into_iter()
-            .map(|host| Host {
-                name: host.name.0,
-                id: host.id,
-                path: host.path.to_string(),
-                logo_url: host.url,
-            })
-            .collect();
-
-        let activity = Activity {
-            id: activity.id,
-            creator_id: activity.creator_id,
-            responsible: Responsible {
-                name: activity.responsible_name,
-                contact: activity.responsible_contact,
-            },
-            title: activity.title.0,
-            description: activity.description.0,
-            location: activity.location.into(),
-            time_start: activity.time_start,
-            time_end: activity.time_end,
-            image_url: activity.image_url,
-            image_id: activity.image_id,
-            is_hidden: activity.is_hidden,
-            is_hidden_for_other_admins: activity.is_hidden_for_other_admins,
-            max_tickets: activity.max_tickets,
-            hosts,
-            tickets_exist: activity.tickets_exist,
-            earliest_purchasable_ticket_release: activity.earliest_ticket_release,
-        };
-
-        Ok(Json(activity))
+        activity_details(self, user, id.0).await.map(Json)
     }
     /// The ticket kinds not purchasable due to membership check are not shown.
     ///
@@ -321,39 +220,37 @@ impl Router {
         let kinds = sqlx::query!(
             r#"select kind.id,
             kind.name as "name!: DIS",
-            kind.price,
-            kind.purchasing_available_start,
-            kind.purchasing_available_stop,
-            greatest(least(
-                kind.max_tickets - kind.reserved_or_purchased_tickets,
-                activities.max_tickets - (
-                    select coalesce(sum(all_kinds.reserved_or_purchased_tickets), 0)::int
-                    from ticket_kinds all_kinds
-                    where all_kinds.activity_id = activities.id
-                )
-            ), 0)::int as "available_tickets!"
+            (select base.price from product_base_prices base
+                where base.product_id = kind.id) as "price!",
+            kind.sales_start,
+            kind.sales_stop,
+            coalesce(kind.sales_stock, 0) as "available_tickets!"
 
-            from ticket_kinds as kind
-            inner join activities on activities.id = kind.activity_id
-            where kind.activity_id = $1
+            from products as kind
+            inner join product_activity_assignments assignment
+                on assignment.product_id = kind.id
+            where assignment.activity_id = $1
+            and kind.kind = 'ticket'
             and (
                 (
-                    not kind.for_visibility
-                    and exists (
+                    exists (
                         select 1
                         from group_memberships
                         inner join groups member_group on member_group.id = group_memberships.group_id
-                        inner join ticket_kind_allowed_groups tk_ag on tk_ag.ticket_kind_id = kind.id
+                        inner join product_allowed_groups tk_ag on tk_ag.product_id = kind.id
                         inner join groups allowed_group on allowed_group.id = tk_ag.group_id
                             and allowed_group.path @> member_group.path
 
                         where group_memberships.user_id = $2
                         and (
-                            member_group.limit_membership_visibility = false
+                            not group_memberships.specific
                             or tk_ag.group_id = group_memberships.group_id
                         )
                     )
                 )
+                or exists (select 1 from product_buyers buyer
+                    where buyer.activity_id = $1 and buyer.product_id = kind.id
+                    and buyer.user_id = $2)
                 -- admin
                 or exists (select 1 from group_adminships admin
                     inner join activity_hosts host on admin.group_id = host.group_id
@@ -370,8 +267,8 @@ impl Router {
                 id: kind.id,
                 name: kind.name.0,
                 price: kind.price.0,
-                purchasing_available_start: kind.purchasing_available_start,
-                purchasing_available_stop: kind.purchasing_available_stop,
+                purchasing_available_start: kind.sales_start,
+                purchasing_available_stop: kind.sales_stop,
                 tickets_left: (kind.available_tickets < 10).then_some(kind.available_tickets),
             }
         })
@@ -379,4 +276,149 @@ impl Router {
         .await?;
         Ok(Json(kinds))
     }
+}
+
+/// Loads an activity if the user may see it and records the view.
+///
+/// # Errors
+///
+/// - user might not be allowed to access this activity
+/// - activity not found
+#[allow(clippy::too_many_lines, reason = "linear activity mapping")]
+pub(crate) async fn activity_details(
+    ctx: &ContextWrapper,
+    user: User,
+    id: Uuid,
+) -> MinilithResult<Activity> {
+    let owns_ticket = sqlx::query_scalar!(
+        r#"select exists (
+                select 1
+                from purchases
+                where purchases.owner_id = $1
+                and purchases.activity_id = $2
+            ) as "exists!""#,
+        user.get_id(),
+        id,
+    )
+    .fetch_one(&ctx.db)
+    .await?;
+    if !owns_ticket {
+        ctx.test_activity_access(user.get_id(), &id).await?;
+    }
+    let activity = sqlx::query!(
+            r#"select activities.id,
+                title as "title!: DIS",
+                activities.description as "description!: DIS",
+                location as "location!: Location", time_start, time_end,
+                2147483647 as "max_tickets!",
+                responsible_name,
+                responsible_contact,
+                images.url as "image_url",
+                activities.image_id,
+                (select target.group_id from sales_targets target where target.id = activities.sales_target_id) as "sales_target_group_id!",
+                is_hidden,
+                is_hidden_for_other_admins,
+                stock_group as "stock_group_id?",
+                base_ticket,
+                coalesce((select sum(views.count) from activity_views views
+                    where views.activity_id = activities.id), 0) as "views!",
+                -- NOT SAME as activity-list.sql, because it filters for if it's not sold out
+                -- either. This controls the tappableness of the button
+                (select tk.sales_start
+                    from products tk
+                    inner join product_activity_assignments assignment on assignment.product_id = tk.id
+                    where assignment.activity_id = $1
+                    and tk.kind = 'ticket'
+                    and (exists (
+                        select 1 from product_allowed_groups g
+                        inner join groups ag on ag.id = g.group_id
+                        inner join groups ug on ag.path @> ug.path
+                        inner join group_memberships m on m.group_id = ug.id
+                        where g.product_id = tk.id and m.user_id = $2
+                        and (not m.specific or g.group_id = m.group_id)
+                    ) or exists (
+                        select 1 from product_buyers b
+                        where b.product_id = tk.id and b.activity_id = $1 and b.user_id = $2
+                    ))
+                    order by tk.sales_start
+                    limit 1
+                ) as "earliest_ticket_release?",
+                (select exists (
+                    select 1
+                    from product_activity_assignments assignment
+                    inner join products kind on kind.id = assignment.product_id
+                    where assignment.activity_id = $1
+                    and kind.kind = 'ticket'
+                )) as "tickets_exist!"
+            from activities
+            inner join images on images.id = image_id
+            where activities.id = $1;
+            "#,
+            id,
+            user.get_id()
+        )
+        .fetch_optional(&ctx.db)
+        .await?
+        .wrap_err_not_found()?;
+    let hosts = sqlx::query!(
+        r#"select hosts.id, path, name as "name!: DIS", url
+            from activity_hosts
+            inner join groups hosts on hosts.id = activity_hosts.group_id
+            inner join images on hosts.logo_id = images.id
+            where activity_id = $1
+            order by hosts.id = $2 desc, hosts.path
+            "#,
+        id,
+        activity.sales_target_group_id,
+    )
+    .fetch_all(&ctx.db)
+    .await?;
+
+    let hosts = hosts
+        .into_iter()
+        .map(|host| Host {
+            name: host.name.0,
+            id: host.id,
+            path: host.path.to_string(),
+            logo_url: host.url,
+        })
+        .collect();
+
+    let activity = Activity {
+        id: activity.id,
+        sales_target_group_id: activity.sales_target_group_id,
+        views: activity.views,
+        responsible: Responsible {
+            name: activity.responsible_name,
+            contact: activity.responsible_contact,
+        },
+        title: activity.title.0,
+        description: activity.description.0,
+        location: activity.location.into(),
+        time_start: activity.time_start,
+        time_end: activity.time_end,
+        image_url: activity.image_url,
+        image_id: activity.image_id,
+        is_hidden: activity.is_hidden,
+        is_hidden_for_other_admins: activity.is_hidden_for_other_admins,
+        stock_group_id: activity.stock_group_id,
+        base_ticket: activity.base_ticket,
+        max_tickets: activity.max_tickets,
+        hosts,
+        tickets_exist: activity.tickets_exist,
+        earliest_purchasable_ticket_release: activity.earliest_ticket_release,
+    };
+
+    sqlx::query!(
+        "insert into activity_views (id, activity_id, user_id, count)
+        values (uuidv4(), $1, $2, 1)
+        on conflict (user_id) do update set
+            activity_id = excluded.activity_id,
+            count = activity_views.count + 1",
+        id,
+        user.get_id(),
+    )
+    .execute(&ctx.db)
+    .await?;
+    Ok(activity)
 }

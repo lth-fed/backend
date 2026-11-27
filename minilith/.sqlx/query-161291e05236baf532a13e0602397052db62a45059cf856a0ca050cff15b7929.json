@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n                transaction.time,\n                coalesce(sum(case record.kind\n                    when 'purchase' then record.amount\n                    when 'put-back' then record.amount\n                    when 'inventory' then record.amount\n                    when 'refund' then -record.amount\n                    when 'take-out' then -record.amount\n                    else 0\n                end), 0)::float8 as \"delta!\",\n                max(case when record.kind = 'balance' then record.amount end)\n                    ::float8 as \"balance?\"\n            from stock_transaction_records record\n            inner join stock_transactions transaction on transaction.id = record.transaction_id\n            where transaction.group_id = $1 and record.product_id = $2\n            group by transaction.id, transaction.time\n            order by transaction.time, transaction.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "time",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 1,
+        "name": "delta!",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 2,
+        "name": "balance?",
+        "type_info": "Float8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "161291e05236baf532a13e0602397052db62a45059cf856a0ca050cff15b7929"
+}

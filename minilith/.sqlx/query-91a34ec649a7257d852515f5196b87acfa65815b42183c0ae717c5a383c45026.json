@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into push_notifications (id, kind, sender, title, content, send_at)\n            values ($1, 'activity', $2, $3, $4, $5)\n            on conflict (id) do update set\n                kind = excluded.kind,\n                sender = excluded.sender,\n                title = excluded.title,\n                content = excluded.content,\n                send_at = excluded.send_at\n            where push_notifications.sent = false",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Jsonb",
+        "Jsonb",
+        "Jsonb",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "91a34ec649a7257d852515f5196b87acfa65815b42183c0ae717c5a383c45026"
+}

@@ -42,7 +42,6 @@ pub struct ValidatedUser {
     pub email: Option<String>,
     pub full_name: Option<String>,
     pub language: Option<String>,
-    pub lth_guild: Option<String>,
     // ALSO UPDATE `fed_auth_verifier`
 }
 #[derive(sqlx::Type)]
@@ -102,14 +101,6 @@ impl CallbackUrl {
 
 pub(crate) type ContextWrapper = Arc<Context>;
 
-// TODO: remove fed-lu hack
-#[derive(Clone)]
-pub(crate) struct FedLuConfig {
-    pub authorize_url: String,
-    pub token_url: String,
-    pub client_secret: Option<String>,
-}
-
 #[derive(Clone)]
 pub(crate) struct Context {
     // service connections
@@ -120,17 +111,9 @@ pub(crate) struct Context {
     pub api_domain: &'static str,
     pub website_domain: &'static str,
 
-    // TODO: remove fed-lu hack
-    pub fed_lu: FedLuConfig,
-
     // keys
     pub private_key: EncodingKey,
     pub jwks: JwkSet,
-    // TODO: remove fed-lu hack
-    #[allow(
-        dead_code,
-        reason = "used again when the temporary LU bridge is removed"
-    )]
     pub saml_private_key: openssl::pkey::PKey<openssl::pkey::Private>,
 
     pub service_provider: ServiceProvider,
@@ -206,15 +189,6 @@ impl Context {
             .tls_danger_accept_invalid_certs(debug.enabled)
             .build()?;
 
-        // TODO: remove fed-lu hack
-        let fed_lu = FedLuConfig {
-            authorize_url: std::env::var("FED_LU_AUTHORIZE_URL")
-                .unwrap_or_else(|_| "https://auth.esek.se/fed-lu/authorize".to_owned()),
-            token_url: std::env::var("FED_LU_TOKEN_URL")
-                .unwrap_or_else(|_| "https://auth.esek.se/fed-lu/token".to_owned()),
-            client_secret: std::env::var("FED_LU_CLIENT_SECRET").ok(),
-        };
-
         let (sp, saml_pk) = saml2::get_service_provider(api_domain).await?;
 
         // so they are grouped with the usual poem errors:
@@ -227,7 +201,6 @@ impl Context {
             debug,
             api_domain,
             website_domain,
-            fed_lu,
             private_key,
             jwks,
             service_provider: sp,
@@ -304,7 +277,6 @@ impl Context {
                 sub: row.sub,
                 email: row.email,
                 full_name: row.full_name,
-                lth_guild: row.lth_guild,
                 language: row.language,
             },
         })
@@ -340,7 +312,6 @@ impl Context {
                 sub: row.sub,
                 email: row.email,
                 full_name: row.full_name,
-                lth_guild: row.lth_guild,
                 language: row.language,
             },
         })
@@ -358,17 +329,17 @@ impl Context {
     ) -> Result<(), sqlx::Error> {
         sqlx::query!(
             "insert into session_validated_users
-            (session_id, sub, email, full_name, lth_guild) values ($1, $2, $3, $4, $5)
+            (session_id, sub, email, full_name, language) values ($1, $2, $3, $4, $5)
             on conflict (session_id) do update set
                 sub = excluded.sub,
                 email = excluded.email,
                 full_name = excluded.full_name,
-                lth_guild = excluded.lth_guild",
+                language = excluded.language",
             session,
             user.sub,
             user.email,
             user.full_name,
-            user.lth_guild
+            user.language
         )
         .execute(&self.db)
         .await
@@ -421,7 +392,7 @@ impl Context {
                         if !resp.status().is_success() {
                             let status = resp.status();
                             let body = resp.text().await.ok();
-                            warn!(%status, ?body, "auth callback POST failed");
+                            warn!(%status, url=url.as_ref(), ?body, "auth callback POST failed");
                             return Err(());
                         }
                         if resp.status() == reqwest::StatusCode::CREATED

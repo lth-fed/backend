@@ -9,11 +9,11 @@ insert into users (id, name, language) values
     ('owner-muted', ''::bytea, ''::bytea),
     ('owner-overridden', ''::bytea, ''::bytea);
 
-insert into groups (id, path, name, description, logo_id, limit_membership_visibility) values
-    ('20000000-0000-0000-0000-000000000001', 'tlth', '{}'::jsonb, '{}'::jsonb, '10000000-0000-0000-0000-000000000001', false),
-    ('20000000-0000-0000-0000-000000000002', 'tlth.e', '{}'::jsonb, '{}'::jsonb, '10000000-0000-0000-0000-000000000001', false),
-    ('20000000-0000-0000-0000-000000000003', 'tlth.e.open', '{}'::jsonb, '{}'::jsonb, '10000000-0000-0000-0000-000000000001', false),
-    ('20000000-0000-0000-0000-000000000004', 'tlth.e.private', '{}'::jsonb, '{}'::jsonb, '10000000-0000-0000-0000-000000000001', true);
+insert into groups (id, path, name, description, logo_id) values
+    ('20000000-0000-0000-0000-000000000001', 'tlth', '{}'::jsonb, '{}'::jsonb, '10000000-0000-0000-0000-000000000001'),
+    ('20000000-0000-0000-0000-000000000002', 'tlth.e', '{}'::jsonb, '{}'::jsonb, '10000000-0000-0000-0000-000000000001'),
+    ('20000000-0000-0000-0000-000000000003', 'tlth.e.open', '{}'::jsonb, '{}'::jsonb, '10000000-0000-0000-0000-000000000001'),
+    ('20000000-0000-0000-0000-000000000004', 'tlth.e.private', '{}'::jsonb, '{}'::jsonb, '10000000-0000-0000-0000-000000000001');
 
 insert into group_memberships (user_id, group_id) values
     ('eligible', '20000000-0000-0000-0000-000000000003'),
@@ -21,67 +21,123 @@ insert into group_memberships (user_id, group_id) values
     ('private-member', '20000000-0000-0000-0000-000000000004'),
     ('no-settings', '20000000-0000-0000-0000-000000000003');
 
-insert into user_group_settings (user_id, group_id, visible, notification_level) values
-    ('eligible', '20000000-0000-0000-0000-000000000002', true, 'all'),
-    ('muted', '20000000-0000-0000-0000-000000000001', true, 'all'),
-    ('muted', '20000000-0000-0000-0000-000000000002', true, 'none'),
-    ('private-member', '20000000-0000-0000-0000-000000000002', true, 'all'),
-    ('owner-muted', '20000000-0000-0000-0000-000000000002', false, 'none'),
-    ('owner-overridden', '20000000-0000-0000-0000-000000000002', true, 'all');
+update group_memberships set specific = true
+where group_id = '20000000-0000-0000-0000-000000000004';
+
+insert into sales_targets (id, group_id, email, iban) values
+    ('20000000-0000-0000-0000-000000000005', '20000000-0000-0000-0000-000000000002', 'seed@invalid', '');
+
+insert into product_tags (id, group_id, hidden, name) values
+    ('20000000-0000-0000-0000-000000000006', '20000000-0000-0000-0000-000000000002', false, '{"en":"Ticket"}'::jsonb);
+
+insert into product_tags (id, group_id, hidden, name)
+select '20000000-0000-0000-0000-000000000006'::uuid, target.group_id, false, '{"en":"Ticket"}'::jsonb
+from sales_targets target where target.id = '20000000-0000-0000-0000-000000000005'::uuid
+and not exists (select 1 from product_tags where group_id = target.group_id);
+
+insert into products (
+    id, group_id, kind, name, description, sales_organization,
+    sales_stock, stock_real, stock_unit, stock_price, max_uses,
+    sales_start, sales_stop, resale_start, resale_stop
+)
+select
+    '50000000-0000-0000-0000-000000000007'::uuid, target.group_id, 'activity_visibility', '{}'::jsonb, '{}'::jsonb,
+    target.id, 0, 0, 'st', 0,
+    1, now(), now() + interval '1 hour', now() + interval '1 hour', now() + interval '1 hour'
+from sales_targets target where target.id = '20000000-0000-0000-0000-000000000005'::uuid;
 
 insert into activities (
-    id, responsible_name, responsible_contact, creator_id,
+    id, responsible_name, responsible_contact, sales_target_id,
     title, description, location, time_start, time_end, image_id,
-    is_hidden, is_hidden_for_other_admins, max_tickets
+    is_hidden, is_hidden_for_other_admins, max_tickets_per_user, base_ticket
 ) values (
     '50000000-0000-0000-0000-000000000001', 'Responsible', 'mailto:test@example.com',
-    '20000000-0000-0000-0000-000000000003', '{}', '{}',
+    '20000000-0000-0000-0000-000000000005', '{}', '{}',
     row(null, null, null, null)::location, now(), now() + interval '1 hour',
-    '10000000-0000-0000-0000-000000000001', false, false, 100
+    '10000000-0000-0000-0000-000000000001', false, false, 100,
+    '50000000-0000-0000-0000-000000000007'
 );
 
 insert into activity_hosts (activity_id, group_id) values
     ('50000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000003');
 
-insert into ticket_kinds (
-    id, activity_id, name, price,
-    purchasing_available_start, purchasing_available_stop,
-    max_tickets, min_tickets, reserved_or_purchased_tickets,
-    allow_transfer_ticket_start, allow_transfer_ticket_stop,
-    has_been_purchased, has_been_released
+insert into products (
+    id, group_id, kind, name, description, sales_organization,
+    sales_stock, stock_real, stock_unit, stock_price, max_uses,
+    sales_start, sales_stop, resale_start, resale_stop, been_purchased
 ) values (
-    '50000000-0000-0000-0000-000000000002',
-    '50000000-0000-0000-0000-000000000001', '{}', 0::money,
-    now(), now() + interval '1 hour', 100, 0, 2,
-    now(), now() + interval '1 hour', true, true
+    '50000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000002',
+    'ticket', '{}', '{}', '20000000-0000-0000-0000-000000000005',
+    100, 100, 'st', 0, 1,
+    now(), now() + interval '1 hour', now(), now() + interval '1 hour', true
 );
 
-insert into ticket_kind_allowed_groups (ticket_kind_id, group_id) values
+insert into product_activity_assignments (activity_id, product_id) values
+    ('50000000-0000-0000-0000-000000000001', '50000000-0000-0000-0000-000000000007'),
+    ('50000000-0000-0000-0000-000000000001', '50000000-0000-0000-0000-000000000002');
+
+insert into product_allowed_groups (product_id, group_id) values
     ('50000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000002');
 
-insert into purchased_tickets (id, ticket_kind_id, purchaser_id, owner_id, transaction_id) values
-    ('50000000-0000-0000-0000-000000000003', '50000000-0000-0000-0000-000000000002', 'owner-muted', 'owner-muted', '50000000-0000-0000-0000-000000000005'),
-    ('50000000-0000-0000-0000-000000000004', '50000000-0000-0000-0000-000000000002', 'owner-overridden', 'owner-overridden', '50000000-0000-0000-0000-000000000006');
+insert into purchases (id, product_id, paid_price, activity_id, purchaser_id, owner_id, purchased_at) values
+    ('50000000-0000-0000-0000-000000000003', '50000000-0000-0000-0000-000000000002',
+     0::money,
+     '50000000-0000-0000-0000-000000000001', 'owner-muted', 'owner-muted', now()),
+    ('50000000-0000-0000-0000-000000000004', '50000000-0000-0000-0000-000000000002',
+     0::money,
+     '50000000-0000-0000-0000-000000000001', 'owner-overridden', 'owner-overridden', now());
 
-insert into notifications (id, sender, title, content, send_at, sent) values
-    ('30000000-0000-0000-0000-000000000001', '{"en":"Group"}', '{"en":"Recent"}', '{"en":"Visible"}', now() - interval '1 day', true),
-    ('30000000-0000-0000-0000-000000000002', '{"en":"Group"}', '{"en":"Scheduled"}', '{"en":"Hidden"}', now() + interval '1 day', false),
-    ('30000000-0000-0000-0000-000000000003', '{"en":"Group"}', '{"en":"Old"}', '{"en":"Hidden"}', now() - interval '7 months', true),
-    ('30000000-0000-0000-0000-000000000004', '{"en":"Group"}', '{"en":"Private"}', '{"en":"Direct members"}', now() - interval '1 hour', true),
-    ('30000000-0000-0000-0000-000000000005', '{"en":"Activity"}', '{"en":"Owners"}', '{"en":"Ticket holders"}', now() - interval '30 minutes', true),
-    ('30000000-0000-0000-0000-000000000006', '{"en":"Activity"}', '{"en":"Buyers"}', '{"en":"Eligible buyers"}', now() + interval '1 hour', false);
+insert into purchase_transactions (purchase_id, seller_id, buyer_id, completed_at, transaction_id) values
+    ('50000000-0000-0000-0000-000000000003', null, 'owner-muted', now(), '50000000-0000-0000-0000-000000000005'),
+    ('50000000-0000-0000-0000-000000000004', null, 'owner-overridden', now(), '50000000-0000-0000-0000-000000000006');
 
-insert into group_notifications (id, group_id, notification_id) values
-    ('40000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000002', '30000000-0000-0000-0000-000000000001'),
-    ('40000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000002', '30000000-0000-0000-0000-000000000002'),
-    ('40000000-0000-0000-0000-000000000003', '20000000-0000-0000-0000-000000000002', '30000000-0000-0000-0000-000000000003'),
-    ('40000000-0000-0000-0000-000000000004', '20000000-0000-0000-0000-000000000004', '30000000-0000-0000-0000-000000000004');
+insert into push_notifications (id, kind, sender, title, content, send_at, sent) values
+    ('30000000-0000-0000-0000-000000000001', 'news', '{"en":"Group"}', '{"en":"Recent"}', '{"en":"Visible"}', now() - interval '1 day', true),
+    ('30000000-0000-0000-0000-000000000002', 'news', '{"en":"Group"}', '{"en":"Scheduled"}', '{"en":"Hidden"}', now() + interval '1 day', false),
+    ('30000000-0000-0000-0000-000000000003', 'news', '{"en":"Group"}', '{"en":"Old"}', '{"en":"Hidden"}', now() - interval '7 months', true),
+    ('30000000-0000-0000-0000-000000000004', 'news', '{"en":"Group"}', '{"en":"Private"}', '{"en":"Direct members"}', now() - interval '1 hour', true),
+    ('30000000-0000-0000-0000-000000000005', 'activity', '{"en":"Activity"}', '{"en":"Owners"}', '{"en":"Ticket holders"}', now() - interval '30 minutes', true),
+    ('30000000-0000-0000-0000-000000000006', 'activity', '{"en":"Activity"}', '{"en":"Buyers"}', '{"en":"Eligible buyers"}', now() + interval '1 hour', false);
 
-insert into purchased_ticket_notifications (id, activity_id, notification_id) values
-    ('40000000-0000-0000-0000-000000000005', '50000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000005');
+insert into news (id, target_group_id, title, content, published_at) values
+    ('40000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000002', '{"en":"Recent"}', '{"en":"Visible"}', now() - interval '1 day'),
+    ('40000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000002', '{"en":"Scheduled"}', '{"en":"Hidden"}', now() + interval '1 day'),
+    ('40000000-0000-0000-0000-000000000003', '20000000-0000-0000-0000-000000000002', '{"en":"Old"}', '{"en":"Hidden"}', now() - interval '7 months'),
+    ('40000000-0000-0000-0000-000000000004', '20000000-0000-0000-0000-000000000004', '{"en":"Private"}', '{"en":"Direct members"}', now() - interval '1 hour');
 
-insert into activity_buyers_notifications (id, activity_id, notification_id) values
+insert into news_push_notifications (id, news_id, notification_id) values
+    ('40000000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000001'),
+    ('40000000-0000-0000-0000-000000000002', '40000000-0000-0000-0000-000000000002', '30000000-0000-0000-0000-000000000002'),
+    ('40000000-0000-0000-0000-000000000003', '40000000-0000-0000-0000-000000000003', '30000000-0000-0000-0000-000000000003'),
+    ('40000000-0000-0000-0000-000000000004', '40000000-0000-0000-0000-000000000004', '30000000-0000-0000-0000-000000000004');
+
+insert into purchased_ticket_push_notifications (id, activity_id, notification_id) values
+    ('40000000-0000-0000-0000-000000000005', '50000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000005'),
     ('40000000-0000-0000-0000-000000000006', '50000000-0000-0000-0000-000000000001', '30000000-0000-0000-0000-000000000006');
 
-insert into activity_notification_overrides (user_id, activity_id, follow) values
+insert into activity_followers (user_id, activity_id, follow) values
     ('owner-overridden', '50000000-0000-0000-0000-000000000001', false);
+
+
+-- Every product's price is its base-price add-on (see `product_base_prices`).
+insert into product_addon_sets (id, product_id) select id, id from products;
+insert into product_addons (id, set_id, idx, name, multiple_alternatives, has_text_field, required, is_base_price)
+select uuidv4(), products.id, -1, '{"en":"Price","sv":"Pris"}'::jsonb, false, false, true, true
+from products;
+insert into product_addon_links (product_id, addon_id)
+select products.id, addon.id from products
+inner join product_addons addon on addon.set_id = products.id and addon.is_base_price;
+insert into product_addon_options (id, product_addon_id, idx, name, price)
+select uuidv4(), addon.id, 0, products.name, 0::money
+from products
+inner join product_addons addon on addon.set_id = products.id and addon.is_base_price;
+insert into product_addon_option_bookkeepings (id, option_id, price, category)
+select uuidv4(), options.id, options.price,
+    (select tag.id from product_tags tag where tag.group_id = products.group_id order by tag.id limit 1)
+from products
+inner join product_addons addon on addon.set_id = products.id and addon.is_base_price
+inner join product_addon_options options on options.product_addon_id = addon.id;
+insert into purchased_product_addons (addon_id, purchase_id, selected_options, selected_options_prices, selected_text)
+select addon.id, purchases.id, '{0}'::integer[], array[0::money], ''
+from purchases
+inner join product_addons addon on addon.set_id = purchases.product_id and addon.is_base_price;

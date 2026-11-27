@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update physical_sales set total = $2::money where transaction_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Money"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "92febd1f6d47a9003a520f50c59b80aa37142dac7b30c1b7b1926636d33370e1"
+}

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select exists (\n                select 1\n                from product_activity_assignments target\n                inner join activities activity on activity.id = target.activity_id\n                inner join products purchased on purchased.id = target.product_id\n                where target.product_id = $2\n                and purchased.kind = 'ticket'\n                and (\n                    select count(*)\n                    from purchases owned\n                    inner join products owned_kind on owned_kind.id = owned.product_id\n                    inner join product_activity_assignments owned_assignment\n                        on owned_assignment.product_id = owned.product_id\n                        and owned_assignment.activity_id = target.activity_id\n                    where owned.owner_id = $1\n                    and owned_kind.kind = 'ticket'\n                    and owned.refunded_id is null\n                ) >= activity.max_tickets_per_user\n            ) as \"exists!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "exists!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "52b60f03929b823e8ba2fd62a3c8a9700e9b6644225dee14067ef522e563183f"
+}

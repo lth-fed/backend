@@ -353,20 +353,6 @@ struct DatasharingResponse {
     url: String,
 }
 
-// TODO: remove fed-lu hack
-#[derive(Deserialize)]
-struct FedLuCallbackQuery {
-    code: String,
-    state: String,
-}
-
-// TODO: remove fed-lu hack
-#[derive(Deserialize)]
-struct FedLuIdentity {
-    sub: String,
-    state: String,
-}
-
 #[derive(Clone)]
 pub(crate) struct MainRouter {
     pub context: ContextWrapper,
@@ -695,7 +681,11 @@ impl MainRouter {
         }
 
         // default value ensures we're redirected to provider selection if no value is specified
-        let mut providers = body.providers.as_deref().unwrap_or("lu mail").split(' ');
+        let mut providers = body
+            .providers
+            .as_deref()
+            .unwrap_or("lu mail password")
+            .split(' ');
         let first_provider = providers.next().unwrap_or("non-existant-provider");
         // if there is more than 1
         if providers.next().is_some() {
@@ -794,53 +784,44 @@ impl MainRouter {
     ) -> Result<(String, String), Response<AuthorizeResponse>> {
         Ok(match provider {
             "lu" => {
-                // let req = self
-                //     .service_provider
-                //     // .make_authentication_request("https://idpv4.lu.se/idp/profile/SAML2/Redirect/SSO")
-                //     .make_authentication_request("https://mocksaml.com/api/saml/sso")
-                //     .map_err(|err| {
-                //         error!(?err, "Failed to make LU SSO request");
-                //         oauth2error_redirect(OAuth2ErrorKind::Internal, "lu sso saml2 error", ctx)
-                //     })?;
-                // let redirect = req
-                //     .signed_redirect("", &self.saml_private_key)
-                //     .ok()
-                //     .flatten()
-                //     .ok_or_else(|| {
-                //         error!("Failed to create LU SSO link");
-                //         oauth2error_redirect(OAuth2ErrorKind::Internal, "lu sso saml2 error", ctx)
-                //     })?;
-                // sqlx::query!(
-                //     "insert into saml2_request_id_cache (id) values ($1)",
-                //     req.id
-                // )
-                // .execute(&self.db)
-                // .await
-                // .map_err(|error| {
-                //     drop(MinilithEndpointError::from(error));
-                //     oauth2error_redirect(OAuth2ErrorKind::Internal, "insert to cache failed", ctx)
-                // })?;
-                // debug!("Added ID {} to saml2 request id cache", req.id);
-                // (req.id, redirect.to_string());
-
-                // TODO: remove fed-lu hack
-                let code = Uuid::new_v4().to_string();
-                let params = serde_urlencoded::to_string([
-                    (
-                        "redirect_uri",
-                        format!("{}/oidc/v1/fed-lu/callback", self.api_domain),
-                    ),
-                    ("state", code.clone()),
-                ])
-                .map_err(|err| {
-                    error!(?err, "Failed to create temporary LU login link");
-                    oauth2error_redirect(OAuth2ErrorKind::Internal, "lu login error", ctx)
+                let req = self
+                    .service_provider
+                    .make_authentication_request(
+                        "https://idpv4.lu.se/idp/profile/SAML2/Redirect/SSO",
+                    )
+                    .map_err(|err| {
+                        error!(?err, "Failed to make LU SSO request");
+                        oauth2error_redirect(OAuth2ErrorKind::Internal, "lu sso saml2 error", ctx)
+                    })?;
+                let redirect = req
+                    .signed_redirect("", &self.saml_private_key)
+                    .ok()
+                    .flatten()
+                    .ok_or_else(|| {
+                        error!("Failed to create LU SSO link");
+                        oauth2error_redirect(OAuth2ErrorKind::Internal, "lu sso saml2 error", ctx)
+                    })?;
+                sqlx::query!(
+                    "insert into saml2_request_id_cache (id) values ($1)",
+                    req.id
+                )
+                .execute(&self.db)
+                .await
+                .map_err(|error| {
+                    drop(MinilithEndpointError::from(error));
+                    oauth2error_redirect(OAuth2ErrorKind::Internal, "insert to cache failed", ctx)
                 })?;
-                (code, format!("{}?{params}", self.fed_lu.authorize_url))
+                tracing::debug!("Added ID {} to saml2 request id cache", req.id);
+                (req.id, redirect.to_string())
             }
             "email" => {
                 let code = Uuid::new_v4();
                 let redirect = format!("{}/providers/email/?code={code}", self.website_domain);
+                (code.to_string(), redirect)
+            }
+            "password" => {
+                let code = Uuid::new_v4();
+                let redirect = format!("{}/providers/password/?code={code}", self.website_domain);
                 (code.to_string(), redirect)
             }
             "test" if self.debug.enabled => {
@@ -856,86 +837,6 @@ impl MainRouter {
                 ));
             }
         })
-    }
-
-    // TODO: remove fed-lu hack
-    #[oai(path = "/fed-lu/callback", method = "get")]
-    async fn fed_lu_callback(
-        &self,
-        query: poem::web::Query<FedLuCallbackQuery>,
-    ) -> Response<AuthorizeResponse> {
-        let Some(session) = self.get_session(&query.state).await.ok().flatten() else {
-            return OAuth2ApiResponse::oauth2error(
-                OAuth2ErrorKind::InvalidRequest,
-                "invalid or expired LU login state",
-            )
-            .into();
-        };
-        let redirect_uri = session.redirect_uri.clone();
-        let ctx = OAuth2ErrorCtx(&redirect_uri, self, "/oidc/v1/fed-lu/callback");
-        let Some(client_secret) = self.fed_lu.client_secret.as_deref() else {
-            error!("FED_LU_CLIENT_SECRET is not configured");
-            return oauth2error_redirect(OAuth2ErrorKind::Internal, "lu login error", &ctx);
-        };
-        let token_body = serde_urlencoded::to_string([
-            ("code", query.code.as_str()),
-            ("client_secret", client_secret),
-        ])
-        .unwrap_or_default();
-        let response = match self
-            .reqwest_client
-            .post(&self.fed_lu.token_url)
-            .header("content-type", "application/x-www-form-urlencoded")
-            .body(token_body)
-            .send()
-            .await
-        {
-            Ok(response) if response.status().is_success() => response,
-            Ok(response) => {
-                warn!(status = %response.status(), "Temporary LU code exchange failed");
-                return oauth2error_redirect(OAuth2ErrorKind::Internal, "lu login error", &ctx);
-            }
-            Err(err) => {
-                error!(?err, "Temporary LU code exchange failed");
-                return oauth2error_redirect(OAuth2ErrorKind::Internal, "lu login error", &ctx);
-            }
-        };
-        let identity = match response.json::<FedLuIdentity>().await {
-            Ok(identity) if !identity.sub.is_empty() && identity.state == query.state => identity,
-            Ok(_) => {
-                warn!("Temporary LU code exchange returned an empty subject");
-                return oauth2error_redirect(OAuth2ErrorKind::Internal, "lu login error", &ctx);
-            }
-            Err(err) => {
-                error!(?err, "Temporary LU code exchange returned invalid JSON");
-                return oauth2error_redirect(OAuth2ErrorKind::Internal, "lu login error", &ctx);
-            }
-        };
-        let user = crate::context::ValidatedUser {
-            sub: format!("lund-university:{}", identity.sub),
-            email: None,
-            full_name: None,
-            lth_guild: None,
-            language: None,
-        };
-        if let Err(err) = self.validate_session(&query.state, &user).await {
-            drop(MinilithEndpointError::from(err));
-            return oauth2error_redirect(OAuth2ErrorKind::Internal, "db", &ctx);
-        }
-        let validated = crate::context::ValidatedAuthSession { session, user };
-        let Ok(url) = self
-            .provider_callback_next_url(&query.state, &validated)
-            .await
-        else {
-            return oauth2error_redirect(
-                OAuth2ErrorKind::ServerCallbackFailed,
-                "failed to finish LU login",
-                &ctx,
-            );
-        };
-        Response::new(AuthorizeResponse::redirect())
-            .status(StatusCode::SEE_OTHER)
-            .header("location", url)
     }
 
     /// Our own custom step to confirm datasharing which we are required to do by SWAMID.

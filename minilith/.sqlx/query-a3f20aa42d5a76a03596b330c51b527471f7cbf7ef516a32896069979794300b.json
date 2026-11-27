@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into stock_transaction_records (id, transaction_id, product_id, amount, kind)\n                values (uuidv4(), $1, $2, $3::text::numeric, $4::text::stock_record_kind)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a3f20aa42d5a76a03596b330c51b527471f7cbf7ef516a32896069979794300b"
+}

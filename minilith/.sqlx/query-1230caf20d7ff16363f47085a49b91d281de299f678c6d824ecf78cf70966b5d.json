@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update products set been_purchased = true where id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1230caf20d7ff16363f47085a49b91d281de299f678c6d824ecf78cf70966b5d"
+}

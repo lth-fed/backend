@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select buyer.user_id, users.name as \"name: Vec<u8>\"\n            from product_buyers buyer\n            inner join users on users.id = buyer.user_id\n            where buyer.activity_id = $1 and buyer.product_id = $2\n            order by buyer.user_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "name: Vec<u8>",
+        "type_info": "Bytea"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "87d3b26d29ddd1ea0945ad6b0a71292d66c4e0cfdbd2b185f1c5b5fa0b826544"
+}

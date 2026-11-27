@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into notification_stats\n                (notification_id, n_opened, n_dismissed, n_sent)\n            values ($1, $2, $3, $4)\n            on conflict (notification_id) do update set\n                n_opened = notification_stats.n_opened + excluded.n_opened,\n                n_dismissed = notification_stats.n_dismissed + excluded.n_dismissed,\n                n_sent = notification_stats.n_sent + excluded.n_sent",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "351555644a928d3f81289e94c84a6e61e63e188d54e0fb4686bcd7acb3531024"
+}

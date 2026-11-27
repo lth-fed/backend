@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from push_notifications where id = $1 and sent = false and send_at != $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "238a4bdd3b28f6ff85f4c9420543ad689f18c6bdd22bf8ab540da51e215bebf5"
+}

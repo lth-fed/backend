@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select reservation.id, user_id, product_id, reservation.product_price as \"price!\",\n            (select assignment.activity_id from product_activity_assignments assignment\n                where assignment.product_id = kind.id\n                order by assignment.activity_id limit 1) as \"activity_id?\"\n        from product_reservations reservation\n        inner join products kind on kind.id = reservation.product_id\n        where transaction_id = $1\n        for update of reservation",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "user_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "product_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "price!",
+        "type_info": "Money"
+      },
+      {
+        "ordinal": 4,
+        "name": "activity_id?",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "868819cc4f493a3394c0d4c555b26ac85a5bc620e7300ce359fbafc8f20b055a"
+}

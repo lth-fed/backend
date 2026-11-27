@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select notification.id,\n                notification.title as \"title!: DIS\",\n                notification.content as \"content!: DIS\",\n                notification.send_at\n            from push_notifications notification\n            inner join activity_push_notifications activity_push\n                on activity_push.notification_id = notification.id\n            where activity_push.activity_id = $1\n            and notification.sent\n            order by notification.send_at desc",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "title!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 2,
+        "name": "content!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 3,
+        "name": "send_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "2f2bed79af9e2c4c6db0989ebcf73a67323aa7484023f96d7b1712836cd76fac"
+}

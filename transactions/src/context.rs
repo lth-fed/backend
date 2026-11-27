@@ -13,15 +13,10 @@ use minilith_errors::{
     MinilithResult, configure_alert_email,
 };
 use sqlx::migrate;
-use stripe_checkout::CheckoutSessionStatus;
-use stripe_misc::webhook_endpoint::CreateWebhookEndpointEnabledEvents;
-use tracing::error;
 use uuid::Uuid;
 
-use crate::api::{DOMAIN, STRIPE_WEBHOOK_PATH};
-
 use crate::receipt::OurWonderfulTypstWorldBase;
-use crate::{Provider, swish};
+use crate::{Provider, sumup, swish};
 
 #[derive(Debug)]
 pub(crate) struct CancelTransactionData {
@@ -82,89 +77,64 @@ impl ClientStore<SwishClient> {
         Ok(client.downgrade())
     }
 }
-impl ClientStore<stripe::Client> {
+#[derive(Debug)]
+pub struct SumUpClient {
+    client: ::sumup::Client,
+    pub merchant_code: String,
+}
+impl Deref for SumUpClient {
+    type Target = ::sumup::Client;
+    fn deref(&self) -> &Self::Target {
+        &self.client
+    }
+}
+impl ClientStore<SumUpClient> {
     /// # Errors
     ///
-    /// DB & client creation.
+    /// DB, or the client has no `SumUp` merchant.
     pub async fn get(
         &self,
         db: &PgPool,
         client_id: &str,
-    ) -> MinilithResult<impl Deref<Target = stripe::Client>> {
+        sandbox: bool,
+    ) -> MinilithResult<impl Deref<Target = SumUpClient>> {
         if let Some(client) = self.0.get(client_id) {
             return Ok(client);
         }
-        let client = sqlx::query!("select * from client_ids where client_id = $1", client_id)
-            .fetch_optional(db)
-            .await?
-            .wrap_err_internal("client_id not found")?;
-
-        let Some(stripe_secret) = client.stripe_secret else {
+        let row = sqlx::query!(
+            "select sumup_api_key, sumup_merchant_code from client_ids where client_id = $1",
+            client_id
+        )
+        .fetch_optional(db)
+        .await?
+        .wrap_err_internal("sumup: client_id not found")?;
+        let (Some(api_key), Some(merchant_code)) = (row.sumup_api_key, row.sumup_merchant_code)
+        else {
             return Err(MinilithEndpointError::bad_frontend_code(
-                "your client_id isn't set up for stripe",
+                "your client_id isn't set up for SumUp",
                 "",
             ));
         };
-
-        let client = stripe::ClientBuilder::new(&stripe_secret)
-            .client_id("fed-transactions".into())
-            .build()
-            .wrap_err_internal("l1: stripe: ClientBuilder failed")?;
-
-        let webhook_url = format!("{DOMAIN}/v0{STRIPE_WEBHOOK_PATH}");
-        let webhooks = stripe_misc::webhook_endpoint::ListWebhookEndpoint::new()
-            .limit(100_i64)
-            .send(&client)
-            .await
-            .wrap_err_internal("stripe: list webhooks")?;
-        // we need to recreate it to get the secret
-        for endpoint in webhooks
-            .data
-            .iter()
-            .filter(|webhook| webhook.url == webhook_url)
-        {
-            if let Err(error) =
-                stripe_misc::webhook_endpoint::DeleteWebhookEndpoint::new(&endpoint.id)
-                    .send(&client)
-                    .await
-            {
-                error!(?error, "stripe: Deleting endpoint failed");
-            }
-        }
-        let endpoint = stripe_misc::webhook_endpoint::CreateWebhookEndpoint::new(
-            vec![
-                CreateWebhookEndpointEnabledEvents::CheckoutSessionCompleted,
-                CreateWebhookEndpointEnabledEvents::CheckoutSessionExpired,
-            ],
-            webhook_url,
-        )
-        .send(&client)
-        .await
-        .wrap_err_internal("stripe: add webhook")?;
-
-        sqlx::query!(
-            "update client_ids set stripe_endpoint_secret = $1 where client_id = $2",
-            endpoint.secret,
-            client_id
-        )
-        .execute(db)
-        .await?;
-
-        Ok(self
-            .0
-            .entry(client_id.to_owned())
-            .or_insert(client)
-            .downgrade())
+        let client = self.0.entry(client_id.to_owned()).or_insert(SumUpClient {
+            client: ::sumup::Client::default()
+                .with_authorization(::sumup::Authorization::api_key(&api_key))
+                .with_base_url(if sandbox {
+                    sumup::SANDBOX
+                } else {
+                    sumup::PRODUCTION
+                }),
+            merchant_code,
+        });
+        Ok(client.downgrade())
     }
 }
-
 #[derive(Debug)]
 pub struct Context {
     pub db: PgPool,
     pub debug: DebugConfig,
 
     pub swish_clients: ClientStore<SwishClient>,
-    pub stripe_clients: ClientStore<stripe::Client>,
+    pub sumup_clients: ClientStore<SumUpClient>,
 
     // our api to those using us
     pub client: reqwest::Client,
@@ -229,7 +199,7 @@ impl Context {
             debug,
 
             swish_clients: ClientStore::default(),
-            stripe_clients: ClientStore::default(),
+            sumup_clients: ClientStore::default(),
 
             client,
             jwks,
@@ -246,13 +216,14 @@ impl Context {
     ) -> MinilithResult<impl Deref<Target = SwishClient>> {
         self.swish_clients.get(&self.db, client_id).await
     }
-    pub(crate) async fn get_stripe_client(
+    pub(crate) async fn get_sumup_client(
         &self,
         client_id: &str,
-    ) -> MinilithResult<impl Deref<Target = stripe::Client>> {
-        self.stripe_clients.get(&self.db, client_id).await
+    ) -> MinilithResult<impl Deref<Target = SumUpClient>> {
+        self.sumup_clients
+            .get(&self.db, client_id, self.debug.enabled)
+            .await
     }
-
     async fn cancel_swish_transaction(
         &self,
         transaction: &CancelTransactionData,
@@ -360,57 +331,35 @@ impl Context {
     ) -> MinilithResult<()> {
         match transaction.provider {
             Provider::Swish => self.cancel_swish_transaction(transaction).await,
-            Provider::Stripe => {
-                let client = self.get_stripe_client(&transaction.client_id).await?;
-
-                let session_id = sqlx::query_scalar!(
-                    "select stripe_id from stripe_checkouts where transaction_id = $1",
+            Provider::Stripe => Err(MinilithEndpointError::internal_error(
+                "l2: stripe transactions can no longer be cancelled",
+                "",
+            )),
+            Provider::Sumup => {
+                let checkout_id = sqlx::query_scalar!(
+                    "select sumup_checkout_id from transactions where id = $1",
                     transaction.id,
                 )
                 .fetch_optional(&self.db)
                 .await?
+                .flatten()
                 .wrap_err_internal(
-                    "no stripe_checkouts.stripe_id was associated with a stripe transaction",
+                    "l1: no sumup_checkout_id was associated with a sumup transaction",
                 )?;
-
-                let Err(expire_error) =
-                    stripe_checkout::checkout_session::ExpireCheckoutSession::new(
-                        session_id.as_str(),
-                    )
-                    .send(&*client)
-                    .await
-                else {
+                if sumup::deactivate_checkout(self, &transaction.client_id, &checkout_id).await? {
                     return Ok(());
-                };
-
-                // Stripe deliberately returns an error when an already-expired
-                // Checkout Session is expired again. Reconcile the resource
-                // state instead of matching Stripe's error text, which also
-                // covers a race where Stripe expires it during this request.
-                let session = match stripe_checkout::checkout_session::RetrieveCheckoutSession::new(
-                    session_id,
-                )
-                .send(&*client)
-                .await
-                {
-                    Ok(session) => session,
-                    Err(reconcile_error) => {
-                        // if matches!(&reconcile_error, stripe::StripeError::Stripe(_, 400)) {
-                        //     return Ok(());
-                        // }
-                        tracing::warn!(
-                            ?expire_error,
-                            ?reconcile_error,
-                            "stripe: failed to reconcile checkout after cancel failed"
-                        );
-                        return Err(expire_error).wrap_err_internal("stripe: cancel");
-                    }
-                };
-
-                if session.status == Some(CheckoutSessionStatus::Expired) {
+                }
+                // Not cancellable anymore, so find out what actually happened. `check_timeouts`
+                // reconciles via `fetch_transaction_info` when this returns an error.
+                let checkout =
+                    sumup::get_checkout(self, &transaction.client_id, &checkout_id).await?;
+                if checkout.status == sumup::CheckoutStatus::Expired {
                     Ok(())
                 } else {
-                    Err(expire_error).wrap_err_internal("stripe: cancel")
+                    Err(MinilithEndpointError::bad_frontend_code(
+                        "user in middle of paying",
+                        (transaction.id, checkout.status),
+                    ))
                 }
             }
             Provider::Free => Err(MinilithEndpointError::bad_frontend_code(
@@ -418,47 +367,5 @@ impl Context {
                 "",
             )),
         }
-    }
-
-    /// # Errors
-    ///
-    /// Errors from stripe API.
-    pub async fn stripe_get_fee(
-        &self,
-        client_id: &str,
-        id: impl Into<stripe_checkout::CheckoutSessionId>,
-    ) -> MinilithResult<i64> {
-        let client = self.get_stripe_client(client_id).await?;
-        let data = stripe_checkout::checkout_session::RetrieveCheckoutSession::new(id)
-            // for getting the fee
-            .expand(["payment_intent.latest_charge.balance_transaction"].map(str::to_owned))
-            .send(&*client)
-            .await
-            .wrap_err_internal("l1: stripe: fetch session data failed when paid")?;
-        drop(client);
-
-        // broooo
-        let intent = data
-            .payment_intent
-            .as_ref()
-            .wrap_err_bad_frontend("payment_intent should exist when paid")?;
-        let intent = intent
-            .as_object()
-            .wrap_err_bad_frontend("didn't expand payment_intent")?;
-        let charge = intent
-            .latest_charge
-            .as_ref()
-            .wrap_err_bad_frontend("no charge when paid")?;
-        let charge = charge
-            .as_object()
-            .wrap_err_bad_frontend("didn't expand latest_charge")?;
-        let balance = charge
-            .balance_transaction
-            .as_ref()
-            .wrap_err_bad_frontend("no balance_transaction when paid")?;
-        let balance = balance
-            .as_object()
-            .wrap_err_bad_frontend("didn't expand balance_transaction")?;
-        Ok(balance.fee)
     }
 }

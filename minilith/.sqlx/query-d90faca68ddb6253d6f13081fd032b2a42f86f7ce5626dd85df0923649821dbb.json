@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "with input as (\n            select product_addon_id, idx from\n            unnest($1::uuid[], $2::integer[]) as t(product_addon_id, idx)\n        )\n        select opts.product_addon_id, name as \"name!: DIS\", price as \"price!: i64\"\n        from input\n        inner join product_addon_options opts\n            on (opts.product_addon_id = input.product_addon_id and opts.idx = input.idx)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "product_addon_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 2,
+        "name": "price!: i64",
+        "type_info": "Money"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "UuidArray",
+        "Int4Array"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "d90faca68ddb6253d6f13081fd032b2a42f86f7ce5626dd85df0923649821dbb"
+}

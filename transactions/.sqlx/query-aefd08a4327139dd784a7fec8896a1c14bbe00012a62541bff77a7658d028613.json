@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select payment_reference, callback_url_v1, client_id\n        from transactions\n        where id = $1 and refund_id is not null and refund_at is null",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "payment_reference",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "callback_url_v1",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "client_id",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "aefd08a4327139dd784a7fec8896a1c14bbe00012a62541bff77a7658d028613"
+}

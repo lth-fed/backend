@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select groups.name as \"name!: DIS\", images.url as logo_url\n        from groups inner join images on images.id = groups.logo_id where groups.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 1,
+        "name": "logo_url",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "804654c83b0982d2bdc3a39717d366ffb3e931bd6f7e9e5ef4d494610fdb6f98"
+}

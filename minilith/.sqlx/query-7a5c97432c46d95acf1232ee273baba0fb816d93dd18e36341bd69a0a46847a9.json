@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "delete from activity_opt_out_tags where user_id = $1 and tag_id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7a5c97432c46d95acf1232ee273baba0fb816d93dd18e36341bd69a0a46847a9"
+}

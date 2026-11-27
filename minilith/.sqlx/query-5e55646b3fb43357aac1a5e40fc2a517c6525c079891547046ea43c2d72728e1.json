@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select id, owner_id, resale_buyer_id,\n            resale_buyer_id as \"buyer_id!\",\n            owner_id as \"seller_id!\",\n            for_resale as \"price!: PgMoney\",\n            paid_price as \"paid_price!: PgMoney\"\n        from purchases\n        where resale_transaction_id = $1\n        for update",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "owner_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "resale_buyer_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "buyer_id!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "seller_id!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "price!: PgMoney",
+        "type_info": "Money"
+      },
+      {
+        "ordinal": 6,
+        "name": "paid_price!: PgMoney",
+        "type_info": "Money"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "5e55646b3fb43357aac1a5e40fc2a517c6525c079891547046ea43c2d72728e1"
+}

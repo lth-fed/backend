@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n                record.transaction_id,\n                record.product_id,\n                products.name as \"product_name!: DIS\",\n                record.amount::float8 as \"amount!\",\n                record.kind::text as \"kind!\"\n            from stock_transaction_records record\n            inner join stock_transactions transaction on transaction.id = record.transaction_id\n            inner join products on products.id = record.product_id\n            where transaction.group_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "transaction_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "product_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "product_name!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 3,
+        "name": "amount!",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 4,
+        "name": "kind!",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "4c837a80caf22c98a7cc8bd3ad2989177fc251d82db2be07879f0449174ef516"
+}

@@ -1,0 +1,87 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n                groups.id, groups.path,\n                false as \"limit_membership_visibility!\",\n                groups.stock_tracking as \"stock_tracking!\",\n                groups.parent_members_can_join as \"parent_members_can_join!\",\n                groups.propogate_member_visibility_access as \"propagate_member_visibility_access!\",\n                groups.name as \"name!: DIS\",\n                groups.description as \"description!: DIS\",\n                groups.deleted,\n                logo.id as logo_id,\n                logo.url as logo_url\n            from groups_ask_to_join\n            inner join groups on groups.id = groups_ask_to_join.joiner_id\n            inner join images logo on logo.id = groups.logo_id\n            where groups_ask_to_join.target_id = $1\n            order by groups.path",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "path",
+        "type_info": {
+          "Custom": {
+            "name": "ltree",
+            "kind": "Simple"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "limit_membership_visibility!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 3,
+        "name": "stock_tracking!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 4,
+        "name": "parent_members_can_join!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 5,
+        "name": "propagate_member_visibility_access!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
+        "name": "name!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 7,
+        "name": "description!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 8,
+        "name": "deleted",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 9,
+        "name": "logo_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 10,
+        "name": "logo_url",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "551f5c447190e470b097e3078b671a01e1ab761d276a1210a6f2fbdb3a394062"
+}

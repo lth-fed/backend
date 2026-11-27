@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into vote_registered_clients (client_id, meeting_id)\n                values ($1, $2) on conflict do nothing",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "113e29ec94ca8073f87cd68e20f158a8099d72efaff52e9ec2c85db4a2328c44"
+}

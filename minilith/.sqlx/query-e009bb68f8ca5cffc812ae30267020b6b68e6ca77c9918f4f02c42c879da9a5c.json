@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "with placement as (\n            update product_reservation_placement_tails\n                set placement_tail = placement_tail + 1\n            where product_id = $2\n            returning old.placement_tail\n        )\n        insert into product_reservation_queuers\n            (user_id, product_id, original_product_id, placement)\n        select $1 as user_id, $2 as product_id, $3 as original_product_id,\n            placement.placement_tail as placement\n        from placement",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e009bb68f8ca5cffc812ae30267020b6b68e6ca77c9918f4f02c42c879da9a5c"
+}

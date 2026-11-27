@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select id, title as \"title!: DIS\", open, max_choises\n            from vote_rounds where meeting_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "title!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 2,
+        "name": "open",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 3,
+        "name": "max_choises",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "a31d0ef3149de062dd405644858d77fe5c6a4b5f6688d2316b9274739ce917a5"
+}

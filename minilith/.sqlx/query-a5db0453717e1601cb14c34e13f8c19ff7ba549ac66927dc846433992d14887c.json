@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select exists (\n            select 1\n            from unnest($2::uuid[]) allowed(group_id)\n            inner join groups allowed_group on allowed_group.id = allowed.group_id\n            cross join unnest($3::uuid[]) activity_id\n            inner join activities activity on activity.id = activity_id\n            where activity.base_ticket <> $1\n            and not exists (\n                select 1\n                from product_allowed_groups base_allowed\n                inner join groups base_group on base_group.id = base_allowed.group_id\n                where base_allowed.product_id = activity.base_ticket\n                and base_group.path @> allowed_group.path\n            )\n        ) as \"outside!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "outside!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "UuidArray",
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "a5db0453717e1601cb14c34e13f8c19ff7ba549ac66927dc846433992d14887c"
+}

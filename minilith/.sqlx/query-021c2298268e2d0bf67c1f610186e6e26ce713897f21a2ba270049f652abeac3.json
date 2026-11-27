@@ -1,0 +1,32 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "with due as (\n            select kind.id, kind.sales_start,\n                coalesce((\n                    select activity.base_ticket\n                    from product_activity_assignments assignment\n                    inner join activities activity on activity.id = assignment.activity_id\n                    where assignment.product_id = kind.id\n                    order by activity.id\n                    limit 1\n                ), kind.id) as base_ticket\n            from products kind\n            where kind.sales_start > now() - '5 minutes'::interval\n            and kind.sales_start <= now() + '40 seconds'::interval\n            and kind.tickets_been_released = false\n            and kind.kind = 'ticket'\n        ), chosen as (\n            -- One group at a time: every kind that becomes purchasable at the same moment\n            -- (`sales_start`) of the same activity is drawn together.\n            select due.base_ticket, due.sales_start\n            from due\n            group by due.base_ticket, due.sales_start\n            order by due.sales_start, due.base_ticket\n            limit 1\n        ), guard as (\n            -- The base ticket row is the group's mutex. Only the replica holding it claims the\n            -- group, so a group is never drawn in halves by two replicas.\n            select kind.id\n            from products kind\n            inner join chosen on chosen.base_ticket = kind.id\n            for update of kind skip locked\n        ), claimed as (\n            update products kind\n            set tickets_been_released = true\n            from due\n            inner join chosen\n                on chosen.base_ticket = due.base_ticket\n                and chosen.sales_start = due.sales_start\n            where kind.id = due.id\n            and exists (select 1 from guard)\n            returning kind.id\n        )\n        select claimed.id, due.sales_start, due.base_ticket as \"base_ticket!\"\n        from claimed\n        inner join due on due.id = claimed.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "sales_start",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 2,
+        "name": "base_ticket!",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "021c2298268e2d0bf67c1f610186e6e26ce713897f21a2ba270049f652abeac3"
+}

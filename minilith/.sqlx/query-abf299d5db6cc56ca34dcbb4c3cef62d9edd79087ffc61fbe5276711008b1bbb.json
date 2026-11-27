@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select sets.id as set_id, sets.activity_id, sets.product_id\n            from product_addons addons\n            inner join product_addon_sets sets on sets.id = addons.set_id\n            where addons.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "set_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "activity_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "product_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "abf299d5db6cc56ca34dcbb4c3cef62d9edd79087ffc61fbe5276711008b1bbb"
+}

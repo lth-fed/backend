@@ -1,0 +1,73 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n                products.id,\n                products.name as \"name!: DIS\",\n                products.kind::text as \"kind!\",\n                products.max_uses,\n                count(purchases.id) as \"purchases!\",\n                count(purchases.id) filter (where purchases.refunded_id is null) as \"sold!\",\n                count(purchases.id) filter (where purchases.refunded_id is not null)\n                    as \"refunded!\",\n                coalesce(sum(purchases.paid_price)\n                    filter (where purchases.refunded_id is null), '0.00'::money) as \"revenue!\",\n                coalesce(sum((select count(*) from purchase_uses uses\n                    where uses.purchase_id = purchases.id)), 0)::bigint as \"uses!\"\n            from products\n            left join purchases on purchases.product_id = products.id\n                and ($2::uuid is null or purchases.activity_id = $2)\n                and ($3::timestamptz is null or purchases.purchased_at >= $3)\n                and ($4::timestamptz is null or purchases.purchased_at < $4)\n            where ($1::uuid is null or products.group_id = $1)\n            and ($2::uuid is null or exists (\n                select 1 from product_activity_assignments assignment\n                where assignment.product_id = products.id\n                and assignment.activity_id = $2\n            ))\n            and products.kind <> 'activity_visibility'\n            group by products.id\n            order by products.name->>'en'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 2,
+        "name": "kind!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "max_uses",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 4,
+        "name": "purchases!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "sold!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "refunded!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 7,
+        "name": "revenue!",
+        "type_info": "Money"
+      },
+      {
+        "ordinal": 8,
+        "name": "uses!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      false,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "559a8026a2d4f076100fe046826c6e8dccacfdf2026da79e60a7fb5837c45ef7"
+}

@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n                activity_id,\n                follow\n            from activity_followers\n            join activities on activities.id = activity_id\n            where user_id = $1\n            and activities.time_start > now() - '1 day'::interval\n            order by activities.time_start, activities.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "activity_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "follow",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "cf75e8b843d11a3bb3d0ac39daf6a58cf174aa674c3457556376ddfcca9a3c2d"
+}

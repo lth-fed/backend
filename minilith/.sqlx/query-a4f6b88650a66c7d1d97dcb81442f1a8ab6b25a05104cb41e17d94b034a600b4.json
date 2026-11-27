@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into activity_followers\n                (user_id, activity_id, follow)\n            values ($1, $2, $3)\n            on conflict (user_id, activity_id) do update set\n                follow = excluded.follow",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a4f6b88650a66c7d1d97dcb81442f1a8ab6b25a05104cb41e17d94b034a600b4"
+}

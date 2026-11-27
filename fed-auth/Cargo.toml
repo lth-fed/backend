@@ -9,6 +9,7 @@ name = "fed-auth"
 path = "src/main.rs"
 
 [dependencies]
+argon2.workspace = true
 base64.workspace = true
 bin-common = { version = "0.1.0", path = "../bin-common" }
 color-eyre.workspace = true
@@ -25,7 +26,7 @@ poem-openapi.workspace = true
 rand.workspace = true
 reqwest.workspace = true
 #samael = "0.0.20"
-samael = { git = "https://github.com/njaremko/samael.git", rev = "f879f1942ec1b34b6d3027ce7e4724ad95d15dfa" }
+samael = { git = "https://github.com/njaremko/samael.git", rev = "2d27dfe4930c4632b202f32886a85b2d1f9226c2" }
 serde.workspace = true
 serde_json.workspace = true
 serde_urlencoded = "0.7.1"

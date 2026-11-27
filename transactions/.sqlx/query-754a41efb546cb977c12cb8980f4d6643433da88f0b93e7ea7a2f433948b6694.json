@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select sumup_checkout_id from transactions where id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "sumup_checkout_id",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "754a41efb546cb977c12cb8980f4d6643433da88f0b93e7ea7a2f433948b6694"
+}

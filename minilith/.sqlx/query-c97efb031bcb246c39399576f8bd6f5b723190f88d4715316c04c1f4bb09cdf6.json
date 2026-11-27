@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update news set questionnaire_product = $1 where id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c97efb031bcb246c39399576f8bd6f5b723190f88d4715316c04c1f4bb09cdf6"
+}

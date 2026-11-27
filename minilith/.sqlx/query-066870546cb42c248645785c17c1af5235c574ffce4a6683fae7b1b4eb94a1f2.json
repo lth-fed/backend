@@ -1,0 +1,208 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n            p.id,\n            p.group_id,\n            p.kind::text as \"kind!\",\n            p.image_id,\n            images.url as \"image_url?\",\n            p.name as \"name!: DIS\",\n            p.description as \"description!: DIS\",\n            (select base.price from product_base_prices base\n                where base.product_id = p.id) as \"price!\",\n            (select coalesce(array_agg(bk.category order by bk.id), '{}'::uuid[])\n                from product_base_prices base\n                inner join product_addon_option_bookkeepings bk on bk.option_id = base.option_id\n                where base.product_id = p.id) as \"bookkeeping_tag_ids!: Vec<Uuid>\",\n            (select coalesce(array_agg(bk.price order by bk.id), '{}'::money[])\n                from product_base_prices base\n                inner join product_addon_option_bookkeepings bk on bk.option_id = base.option_id\n                where base.product_id = p.id) as \"bookkeeping_prices!: Vec<i64>\",\n            p.sales_organization,\n            p.sales_stock,\n            p.stock_real,\n            p.stock_unit,\n            p.stock_price::float8 as \"stock_price!\",\n            p.max_uses,\n            p.sales_start,\n            p.sales_stop,\n            p.resale_start,\n            p.resale_stop,\n            p.store_general_sales,\n            p.store_online_self_serve,\n            p.store_internal_id,\n            p.store_alcohol_by_volume,\n            p.tickets_guaranteed,\n            p.tickets_require_other,\n            p.tickets_been_released,\n            p.been_purchased,\n            array(select activity_id from product_activity_assignments\n                where product_id = p.id order by activity_id) as \"activity_ids!: Vec<Uuid>\",\n            array(select group_id from product_transfer_groups\n                where product_id = p.id order by group_id) as \"transfer_group_ids!: Vec<Uuid>\",\n            array(select group_id from product_allowed_groups\n                where product_id = p.id order by group_id) as \"allowed_group_ids!: Vec<Uuid>\",\n            array(select addon_id from product_addon_links\n                where product_id = p.id order by addon_id) as \"addon_ids!: Vec<Uuid>\"\n        from products p\n        left join images on images.id = p.image_id\n        where p.id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "group_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "kind!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "image_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "image_url?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "name!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 6,
+        "name": "description!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 7,
+        "name": "price!",
+        "type_info": "Money"
+      },
+      {
+        "ordinal": 8,
+        "name": "bookkeeping_tag_ids!: Vec<Uuid>",
+        "type_info": "UuidArray"
+      },
+      {
+        "ordinal": 9,
+        "name": "bookkeeping_prices!: Vec<i64>",
+        "type_info": "MoneyArray"
+      },
+      {
+        "ordinal": 10,
+        "name": "sales_organization",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 11,
+        "name": "sales_stock",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 12,
+        "name": "stock_real",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 13,
+        "name": "stock_unit",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 14,
+        "name": "stock_price!",
+        "type_info": "Float8"
+      },
+      {
+        "ordinal": 15,
+        "name": "max_uses",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 16,
+        "name": "sales_start",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 17,
+        "name": "sales_stop",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 18,
+        "name": "resale_start",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 19,
+        "name": "resale_stop",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 20,
+        "name": "store_general_sales",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 21,
+        "name": "store_online_self_serve",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 22,
+        "name": "store_internal_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 23,
+        "name": "store_alcohol_by_volume",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 24,
+        "name": "tickets_guaranteed",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 25,
+        "name": "tickets_require_other",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 26,
+        "name": "tickets_been_released",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 27,
+        "name": "been_purchased",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 28,
+        "name": "activity_ids!: Vec<Uuid>",
+        "type_info": "UuidArray"
+      },
+      {
+        "ordinal": 29,
+        "name": "transfer_group_ids!: Vec<Uuid>",
+        "type_info": "UuidArray"
+      },
+      {
+        "ordinal": 30,
+        "name": "allowed_group_ids!: Vec<Uuid>",
+        "type_info": "UuidArray"
+      },
+      {
+        "ordinal": 31,
+        "name": "addon_ids!: Vec<Uuid>",
+        "type_info": "UuidArray"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      true,
+      false,
+      false,
+      false,
+      null,
+      null,
+      null,
+      false,
+      true,
+      false,
+      false,
+      null,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "066870546cb42c248645785c17c1af5235c574ffce4a6683fae7b1b4eb94a1f2"
+}

@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update product_addon_options set name = $2, price = $3 where id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Jsonb",
+        "Money"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a90a14f48fa4670b2d37e60bb6ad323c07a5bc54c9db64cbd9c72ab5d0912775"
+}

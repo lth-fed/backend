@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into vote_meeting_admins (user_id, meeting_id, readonly)\n            values ($1, $2, $3)\n            on conflict (user_id, meeting_id) do update set readonly = excluded.readonly",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4353f3f1ed506b2bba8b171a4e73f03e843b9a9ddb4e67d7187e4b1767ad7cd5"
+}

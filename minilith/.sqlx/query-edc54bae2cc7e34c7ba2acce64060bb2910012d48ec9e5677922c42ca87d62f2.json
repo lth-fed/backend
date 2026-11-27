@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into product_reservation_queuers\n            (user_id, product_id, placement)\n            values ($1, $2, $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "edc54bae2cc7e34c7ba2acce64060bb2910012d48ec9e5677922c42ca87d62f2"
+}

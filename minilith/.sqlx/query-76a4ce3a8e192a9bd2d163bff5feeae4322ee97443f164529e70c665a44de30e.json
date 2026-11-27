@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into product_reservation_addons\n                (addon_id, reservation_id, selected_options, selected_options_prices, selected_text)\n                values ($1, $2, $3,\n                    (select coalesce(array_agg(coalesce(opt.price, 0::money) order by chosen.ord), '{}'::money[])\n                        from unnest($3::integer[]) with ordinality as chosen(idx, ord)\n                        left join product_addon_options opt\n                            on opt.product_addon_id = $1 and opt.idx = chosen.idx),\n                    $4)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int4Array",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "76a4ce3a8e192a9bd2d163bff5feeae4322ee97443f164529e70c665a44de30e"
+}

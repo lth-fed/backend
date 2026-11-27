@@ -1,21 +1,15 @@
 use std::ops::Deref;
-use std::str::FromStr as _;
 
 use fed_auth_verifier::{User, callbacks::AuthCallbackDataV1};
-use minilith_errors::{MinilithEndpointError, MinilithErrorResultExt as _};
+use minilith_errors::{MinilithEndpointError, MinilithErrorOptionExt as _};
 use poem_openapi::payload::Response;
 use poem_openapi::{Enum, Object, OpenApi, payload::Json};
-use sqlx::postgres::types::PgLTree;
 use sqlx::types::Uuid;
 use sqlx::types::time::OffsetDateTime;
-use tracing::warn;
 
 use crate::context::ContextWrapper;
 use crate::group::Path;
-use crate::{
-    DbInternationalizedString as DIS, InternationalizedString, MinilithErrorOptionExt as _,
-    MinilithResult,
-};
+use crate::{DbInternationalizedString as DIS, InternationalizedString, MinilithResult};
 
 #[derive(Clone, Debug)]
 pub struct Router {
@@ -61,46 +55,22 @@ async fn load_notification_history(
     db: &crate::PgPool,
     user_id: &str,
 ) -> Result<Vec<Notification>, sqlx::Error> {
-    sqlx::query!(
-        r#"select
-            notifications.id,
-            coalesce(
-                (select activity_id from activity_notifications
-                    where notification_id = notifications.id),
-                (select activity_id from activity_buyers_notifications
-                    where notification_id = notifications.id),
-                (select activity_id from purchased_ticket_notifications
-                    where notification_id = notifications.id)
-            ) as "activity_id?",
-            notifications.sender as "sender!: DIS",
-            notifications.title as "title!: DIS",
-            notifications.content as "content!: DIS",
-            notifications.send_at
-        from notification_recipients
-        inner join notifications
-            on notifications.id = notification_recipients.notification_id
-        where notification_recipients.user_id = $1
-        and notification_recipients.visible = true
-        and notifications.sent = true
-        and notifications.send_at >= now() - '6 months'::interval
-        order by notifications.send_at desc, notifications.id"#,
-        user_id,
-    )
-    .map(|row| Notification {
-        id: row.id,
-        activity_id: row.activity_id,
-        sender: row.sender.0,
-        title: row.title.0,
-        content: row.content.0,
-        send_at: row.send_at,
-    })
-    .fetch_all(db)
-    .await
+    let notifications = crate::push_notifications::load_notification_history(db, user_id).await?;
+    Ok(notifications
+        .into_iter()
+        .map(|notification| Notification {
+            id: notification.id,
+            activity_id: notification.activity_id,
+            sender: notification.sender.0,
+            title: notification.title.0,
+            content: notification.content.0,
+            send_at: notification.send_at,
+        })
+        .collect())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Enum, sqlx::Type)]
 #[oai(rename_all = "lowercase")]
-#[sqlx(type_name = "notification_level", rename_all = "lowercase")]
 enum NotificationLevel {
     None,
     All,
@@ -118,7 +88,7 @@ struct ActivitySetting {
     follow: bool,
 }
 
-#[OpenApi(prefix_path = "/user")]
+#[OpenApi(prefix_path = "/v0/user")]
 impl Router {
     /// Lists notifications from the last six months that the user is currently eligible to
     /// receive according to their memberships and notification settings.
@@ -126,7 +96,7 @@ impl Router {
     /// # Errors
     ///
     /// AUTH, DB.
-    #[oai(path = "/notifications", method = "get")]
+    #[oai(path = "/push_notifications", method = "get")]
     async fn notifications(&self, user: User) -> MinilithResult<Json<Vec<Notification>>> {
         let notifications = load_notification_history(&self.db, user.get_id()).await?;
         Ok(Json(notifications))
@@ -219,67 +189,47 @@ impl Router {
         Ok(())
     }
 
-    /// Lists the user's explicit group filter settings. Groups without a row
-    /// inherit from their nearest configured ancestor.
+    /// Deprecated: no-ops kept for older clients. Activity filtering happens on the client.
+    ///
+    /// # Errors
+    ///
+    /// AUTH.
     #[oai(path = "/group-settings", method = "get")]
-    async fn group_settings(&self, user: User) -> MinilithResult<Json<Vec<GroupSetting>>> {
-        let settings = sqlx::query_as!(
-            GroupSetting,
-            r#"select
-                group_id,
-                visible,
-                notification_level as "notification_level!: NotificationLevel"
-            from user_group_settings
-            where user_id = $1
-            order by group_id"#,
-            user.get_id(),
-        )
-        .fetch_all(&self.db)
-        .await?;
-        Ok(Json(settings))
+    #[allow(clippy::unused_async, reason = "kept async for the OpenAPI signature")]
+    async fn group_settings(&self, _user: User) -> MinilithResult<Json<Vec<GroupSetting>>> {
+        Ok(Json(Vec::new()))
     }
 
-    /// Creates or replaces an explicit group filter setting.
+    /// Deprecated: no-op kept for older clients.
+    ///
+    /// # Errors
+    ///
+    /// AUTH.
     #[oai(path = "/group-settings", method = "put")]
-    #[allow(trivial_casts, reason = "sqlx custom enum parameter type override")]
+    #[allow(clippy::unused_async, reason = "kept async for the OpenAPI signature")]
     async fn update_group_setting(
         &self,
-        user: User,
-        Json(body): Json<GroupSetting>,
+        _user: User,
+        Json(_body): Json<GroupSetting>,
     ) -> MinilithResult<()> {
-        sqlx::query!(
-            "insert into user_group_settings
-                (user_id, group_id, visible, notification_level)
-            values ($1, $2, $3, $4)
-            on conflict (group_id, user_id) do update set
-                visible = excluded.visible,
-                notification_level = excluded.notification_level",
-            user.get_id(),
-            body.group_id,
-            body.visible,
-            body.notification_level as NotificationLevel,
-        )
-        .execute(&self.db)
-        .await?;
         Ok(())
     }
-    /// Removes an explicit group settings. Useful for resetting filters.
+
+    /// Deprecated: no-op kept for older clients.
+    ///
+    /// # Errors
+    ///
+    /// AUTH.
     #[oai(path = "/group-settings/:group_id", method = "delete")]
+    #[allow(clippy::unused_async, reason = "kept async for the OpenAPI signature")]
     async fn delete_group_setting(
         &self,
-        user: User,
-        group_id: poem_openapi::param::Path<Uuid>,
+        _user: User,
+        _group_id: poem_openapi::param::Path<Uuid>,
     ) -> MinilithResult<()> {
-        sqlx::query!(
-            "delete from user_group_settings
-            where user_id = $1 and group_id = $2",
-            user.get_id(),
-            group_id.0,
-        )
-        .execute(&self.db)
-        .await?;
         Ok(())
     }
+
     /// Lists the user's explicit group filter settings. Groups without a row
     /// inherit from their nearest configured ancestor.
     #[oai(path = "/activity-settings", method = "get")]
@@ -289,7 +239,7 @@ impl Router {
             r#"select
                 activity_id,
                 follow
-            from activity_notification_overrides
+            from activity_followers
             join activities on activities.id = activity_id
             where user_id = $1
             and activities.time_start > now() - '1 day'::interval
@@ -310,7 +260,7 @@ impl Router {
         Json(body): Json<ActivitySetting>,
     ) -> MinilithResult<()> {
         sqlx::query!(
-            "insert into activity_notification_overrides
+            "insert into activity_followers
                 (user_id, activity_id, follow)
             values ($1, $2, $3)
             on conflict (user_id, activity_id) do update set
@@ -342,48 +292,15 @@ impl Router {
             .execute(&self.db)
             .await?;
 
-            if let Some(guild) = cb_data.lth_guild {
-                let guild_path = PgLTree::from_str(&format!("tlth.{}", guild.to_str()))
-                    .wrap_err_internal("l1: failed to get ltree path from guild")?;
-                // membership
-                let gid = sqlx::query_scalar!(
-                    "insert into group_memberships (user_id, group_id)
-                    select $1 as user_id, id as group_id 
-                    from groups where path = $2
-                    -- so even if it exists we return it
-                    on conflict (user_id, group_id) do update set group_id = excluded.group_id
-                    returning group_id",
-                    cb_data.sub,
-                    guild_path
-                )
-                .fetch_one(&self.db)
-                .await?;
-                // visible + notifications from guild
-                sqlx::query!(
-                    "insert into user_group_settings (user_id, group_id,
-                        visible, notification_level)
-                    values ($1, $2, true, 'all'::notification_level)
-                    on conflict do nothing",
-                    cb_data.sub,
-                    gid
-                )
-                .execute(&self.db)
-                .await?;
-                // visible - notifications from tlth
-                sqlx::query!(
-                    "insert into user_group_settings (user_id, group_id,
-                        visible, notification_level)
-                    select $1 as user_id, id as group_id, true as visible,
-                    'none'::notification_level as notification_level
-                    from groups where path = 'tlth'
-                    on conflict do nothing",
-                    cb_data.sub,
-                )
-                .execute(&self.db)
-                .await?;
-            } else {
-                warn!(user_id = cb_data.sub, "User signed up without guild");
-            }
+            // todo: deleted in favour of tlth
+            sqlx::query!(
+                "insert into group_memberships (user_id, group_id)
+                select $1 as user_id, id as group_id from groups where path = 'tlth'
+                on conflict (user_id, group_id) do nothing",
+                cb_data.sub,
+            )
+            .execute(&self.db)
+            .await?;
 
             Ok(Response::new(()))
         } else {
@@ -436,45 +353,19 @@ mod tests {
             history_ids(&db, "owner-muted").await,
             vec![Uuid::parse_str("30000000-0000-0000-0000-000000000005").unwrap()]
         );
-        assert!(history_ids(&db, "owner-overridden").await.is_empty());
+        assert_eq!(
+            history_ids(&db, "owner-overridden").await,
+            vec![Uuid::parse_str("30000000-0000-0000-0000-000000000005").unwrap()]
+        );
 
-        let rules = sqlx::query!(
-            r#"select user_id as "user_id!",
-                notification_level as "notification_level!: NotificationLevel",
-                visible as "visible!"
+        let rules = sqlx::query_scalar!(
+            r#"select user_id as "user_id!"
             from notification_recipients where notification_id = $1 order by user_id"#,
             Uuid::parse_str("30000000-0000-0000-0000-000000000006").unwrap(),
         )
         .fetch_all(&db)
         .await
         .unwrap();
-        assert_eq!(
-            rules
-                .iter()
-                .map(|rule| (&*rule.user_id, rule.notification_level, rule.visible))
-                .collect::<Vec<_>>(),
-            vec![
-                ("eligible", NotificationLevel::All, true),
-                ("muted", NotificationLevel::None, true),
-                ("no-settings", NotificationLevel::None, false),
-            ]
-        );
-
-        sqlx::query!(
-            "update activities set is_hidden = true
-			where id = '50000000-0000-0000-0000-000000000001'"
-        )
-        .execute(&db)
-        .await
-        .unwrap();
-        assert!(history_ids(&db, "owner-muted").await.is_empty());
-        let hidden_rules = sqlx::query_scalar!(
-            "select user_id from notification_recipients where notification_id = $1",
-            Uuid::parse_str("30000000-0000-0000-0000-000000000006").unwrap(),
-        )
-        .fetch_all(&db)
-        .await
-        .unwrap();
-        assert!(hidden_rules.is_empty());
+        assert_eq!(rules, vec!["owner-muted", "owner-overridden"]);
     }
 }

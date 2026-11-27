@@ -32,10 +32,12 @@ pub struct CreatePaymentRequest {
     pub timeout: String,
     /// The list of items to be bought.
     pub wares: Vec<Ware>,
-    /// Used for tracking cards in e.g. Stripe.
+    /// Used for tracking cards in e.g. `SumUp`.
     pub customer_id: Option<String>,
-    /// Redirected back when user completes transaction.
-    pub stripe_success_url: Option<String>,
+    /// Redirected back when user completes transaction. Required for `SumUp`.
+    pub redirect_url: Option<String>,
+    /// Starts the payment on this `SumUp` reader instead of a hosted checkout.
+    pub reader_id: Option<String>,
 }
 #[derive(Debug, Clone, Deserialize)]
 pub struct CreatePaymentResponseSwish {
@@ -43,9 +45,9 @@ pub struct CreatePaymentResponseSwish {
     pub payment_request_token: String,
 }
 #[derive(Debug, Clone, Deserialize)]
-pub struct CreatePaymentResponseStripe {
-    /// See <https://docs.stripe.com/api/checkout/sessions/object#checkout_session_object-url>.
-    pub redirect_url: String,
+pub struct CreatePaymentResponseSumup {
+    /// `SumUp`-hosted payment page. `null` for physical sales on a reader.
+    pub redirect_url: Option<String>,
 }
 
 #[derive(Serialize, Debug, Clone, Copy)]
@@ -65,13 +67,29 @@ pub struct ReceiptRequest {
 pub struct InfoRequest {
     pub transaction_ids: Vec<Uuid>,
 }
+#[derive(Debug, Deserialize, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+pub enum Provider {
+    Swish,
+    /// Legacy: kept so historical rows still decode.
+    Stripe,
+    Free,
+    Sumup,
+}
 #[derive(Debug, Deserialize, Clone)]
 pub struct SingleInfoResponse {
     pub id: Uuid,
     pub state: TransactionState,
     // customer_id: Option<String>,
-    pub total_fees: i64,
-    // provider: Provider,
+    /// What the provider charged for this payment (in ören); refund fees are separate.
+    pub purchase_fees: i64,
+    /// Sum of the payment's wares (in ören): what the buyer paid.
+    pub total: i64,
+    /// What refunding this transaction costs (in ören): flat on `Swish`, free on `SumUp`.
+    pub refund_fee: i64,
+    /// The provider the transaction was made with.
+    /// `null` when the transaction does not exist.
+    pub provider: Option<Provider>,
     // payment_reference: Option<String>,
     // refund_reference: Option<String>,
 }

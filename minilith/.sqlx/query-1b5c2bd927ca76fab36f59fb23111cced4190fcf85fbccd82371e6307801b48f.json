@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n                purchase.owner_id,\n                (purchase.refunded_id is not null) as \"refunded!\",\n                (purchase.for_resale is not null) as \"for_resale!\",\n                (purchase.resale_transaction_id is not null) as \"resale_in_progress!\",\n                product.max_uses,\n                (select count(*)::int from purchase_uses used\n                    where used.purchase_id = purchase.id) as \"uses_count!\"\n            from purchases purchase\n            inner join products product on product.id = purchase.product_id\n            where purchase.id = $1\n            for update of purchase",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "owner_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "refunded!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 2,
+        "name": "for_resale!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 3,
+        "name": "resale_in_progress!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 4,
+        "name": "max_uses",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "uses_count!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null,
+      null,
+      false,
+      null
+    ]
+  },
+  "hash": "1b5c2bd927ca76fab36f59fb23111cced4190fcf85fbccd82371e6307801b48f"
+}

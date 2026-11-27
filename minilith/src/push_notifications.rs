@@ -18,10 +18,11 @@ use minilith_errors::{
 use poem_openapi::{Enum, Object, OpenApi, payload::Json};
 use sqlx::Type;
 use sqlx::types::Uuid;
+use sqlx::types::time::OffsetDateTime;
 use tracing::{error, info, warn};
 
-use crate::DbInternationalizedString as DIS;
 use crate::context::ContextWrapper;
+use crate::{DbInternationalizedString as DIS, PgPool};
 
 #[derive(Clone)]
 pub(crate) struct PushClients {
@@ -48,6 +49,33 @@ pub enum PushPlatform {
     Android,
 }
 
+#[derive(Enum, Type, Clone, Copy, Debug, Eq, PartialEq)]
+#[oai(rename_all = "snake_case")]
+#[sqlx(rename_all = "snake_case", type_name = "notification_kind")]
+pub enum NotificationKind {
+    Activity,
+    News,
+    TicketRelease,
+    Transfer,
+    Reservation,
+    /// Admins refunded a purchase.
+    Refund,
+}
+
+impl NotificationKind {
+    #[must_use]
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Activity => "activity",
+            Self::News => "news",
+            Self::TicketRelease => "ticket_release",
+            Self::Transfer => "transfer",
+            Self::Reservation => "reservation",
+            Self::Refund => "refund",
+        }
+    }
+}
+
 pub(crate) struct PushDeviceRow {
     pub user_id: String,
     pub device_id: String,
@@ -55,12 +83,105 @@ pub(crate) struct PushDeviceRow {
     pub platform: PushPlatform,
     pub language: Vec<u8>,
 }
+
+/// The provider-agnostic parts of one push message.
+pub(crate) struct PushMessage<'a> {
+    pub id: Uuid,
+    pub kind: NotificationKind,
+    pub activity_id: Option<Uuid>,
+    pub title: &'a str,
+    pub content: &'a str,
+}
 pub(crate) struct NotificationRow {
     pub id: Uuid,
+    pub kind: NotificationKind,
     pub activity_id: Option<Uuid>,
     pub sender: DIS,
     pub title: DIS,
     pub content: DIS,
+}
+
+/// A notification as shown to a client, with its read state.
+pub(crate) struct ClientNotification {
+    pub id: Uuid,
+    pub kind: NotificationKind,
+    /// What the notification points at: activity id, news id or product id.
+    pub target_id: Option<Uuid>,
+    /// Only set for activity notifications; kept for the legacy DTO.
+    pub activity_id: Option<Uuid>,
+    pub sender: DIS,
+    pub title: DIS,
+    pub content: DIS,
+    pub send_at: OffsetDateTime,
+    pub read: bool,
+}
+
+/// Notifications the user is currently eligible for, with read state.
+pub(crate) async fn load_notification_history(
+    db: &PgPool,
+    user_id: &str,
+) -> sqlx::Result<Vec<ClientNotification>> {
+    sqlx::query!(
+        r#"select
+            notification.id,
+            notification.kind as "kind!: NotificationKind",
+            case notification.kind
+                when 'news' then (
+                    select news_id from news_push_notifications
+                    where notification_id = notification.id)
+                when 'ticket_release' then (
+                    select ticket_id from ticket_release_push_notifications
+                    where notification_id = notification.id)
+                else coalesce(
+                    (select activity_id from activity_push_notifications
+                        where notification_id = notification.id),
+                    (select activity_id from purchased_ticket_push_notifications
+                        where notification_id = notification.id))
+            end as "target_id?",
+            coalesce(
+                (select activity_id from activity_push_notifications
+                    where notification_id = notification.id),
+                (select activity_id from purchased_ticket_push_notifications
+                    where notification_id = notification.id)
+            ) as "activity_id?",
+            notification.sender as "sender!: DIS",
+            notification.title as "title!: DIS",
+            notification.content as "content!: DIS",
+            notification.send_at,
+            (
+                exists (
+                    select 1 from notification_reads read
+                    where read.notification_id = notification.id
+                    and read.user_id = $1
+                )
+                or notification.send_at <= coalesce(
+                    state.last_full_read,
+                    (select creation from users where users.id = $1)
+                )
+            ) as "read!"
+        from notification_recipients
+        inner join push_notifications notification
+            on notification.id = notification_recipients.notification_id
+        left join user_notification_state state on state.user_id = $1
+        where notification_recipients.user_id = $1
+        and notification.sent = true
+        and notification.send_at >= now() - '6 months'::interval
+        order by notification.send_at desc, notification.id"#,
+        user_id,
+    )
+    .map(|row| ClientNotification {
+        id: row.id,
+        kind: row.kind,
+        target_id: row.target_id,
+        activity_id: row.activity_id,
+        sender: row.sender,
+        title: row.title,
+        content: row.content,
+        send_at: row.send_at,
+        read: row.read,
+    })
+    .fetch_all(db)
+    .await
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -202,14 +323,18 @@ impl PushClients {
         &self,
         platform: PushPlatform,
         push_token: &str,
-        notification_id: Uuid,
-        activity_id: Option<Uuid>,
-        title: &str,
-        content: &str,
+        message: &PushMessage<'_>,
     ) -> MinilithResult<PushSendResult> {
+        let PushMessage {
+            id,
+            kind,
+            activity_id,
+            title,
+            content,
+        } = *message;
         match platform {
             PushPlatform::Ios => {
-                let apns_id = notification_id.to_string();
+                let apns_id = id.to_string();
                 let mut payload = DefaultNotificationBuilder::new()
                     .set_title(title)
                     .set_body(content)
@@ -223,6 +348,9 @@ impl PushClients {
                             ..NotificationOptions::default()
                         },
                     );
+                payload
+                    .add_custom_data("kind", &kind.as_str())
+                    .wrap_err_internal("failed to add kind to APNs payload")?;
                 if let Some(activity_id) = activity_id {
                     payload
                         .add_custom_data("activity_id", &activity_id.to_string())
@@ -252,12 +380,11 @@ impl PushClients {
 
                 let mut message = FcmMessage::new();
                 message.set_notification(Some(notification));
+                let mut data = HashMap::from([("kind".to_owned(), kind.as_str().to_owned())]);
                 if let Some(activity_id) = activity_id {
-                    message.set_data(Some(HashMap::from([(
-                        "activity_id".to_owned(),
-                        activity_id.to_string(),
-                    )])));
+                    data.insert("activity_id".to_owned(), activity_id.to_string());
                 }
+                message.set_data(Some(data));
                 message.set_target(Target::Token(push_token.to_owned()));
 
                 if let Err(err) = self.fcm.send_notification(message).await {
@@ -341,10 +468,13 @@ pub(crate) async fn send_notifications(
             .send_notification(
                 device.platform,
                 &device.push_token,
-                notification.id,
-                notification.activity_id,
-                &title,
-                content,
+                &PushMessage {
+                    id: notification.id,
+                    kind: notification.kind,
+                    activity_id: notification.activity_id,
+                    title: &title,
+                    content,
+                },
             )
             .await
         {
@@ -404,7 +534,7 @@ struct DeregisterRequest {
     device_id: String,
 }
 
-#[OpenApi(prefix_path = "/push")]
+#[OpenApi(prefix_path = "/v0/push")]
 impl Router {
     /// # Errors
     ///

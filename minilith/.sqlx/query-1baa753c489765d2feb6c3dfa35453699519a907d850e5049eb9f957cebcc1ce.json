@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select flow.user_id, queuer.product_id as \"queued_kind!\"\n        from users_in_purchase_flow flow\n        inner join product_reservation_queuers queuer\n            on queuer.user_id = flow.user_id\n            and queuer.product_id = flow.product_id\n        where flow.reservation_queue = flow.user_id\n        -- queued in this kind (only base tickets are queue kinds) or waiting for it as the\n        -- kind they originally wanted\n        and (queuer.product_id = $1 or queuer.original_product_id = $1)\n        order by queuer.placement asc, flow.user_id\n        limit $2\n        for update of flow skip locked",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "queued_kind!",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "1baa753c489765d2feb6c3dfa35453699519a907d850e5049eb9f957cebcc1ce"
+}
