@@ -60,14 +60,16 @@ pub(super) async fn begin(
     let reservation = sqlx::query!(
         "select product_reservations.id, product_reservations.product_id, timeout, transaction_id,
                 kind.name as \"ticket_kind_name!: DIS\",
-                activities.title as \"activity_title!: DIS\",
-                kind.sales_price as \"price!\", activities.id as activity_id
+                activities.title as \"activity_title?: DIS\",
+                kind.sales_price as \"price!\", activities.id as \"activity_id?\"
             from product_reservations
             inner join products kind on (kind.id = product_reservations.product_id)
-            inner join product_activity_assignments assignment on assignment.product_id = kind.id
-            inner join activities on (activities.id = assignment.activity_id)
+            -- A store product belongs to no activity; one that does is sold only until the
+            -- activity has ended.
+            left join product_activity_assignments assignment on assignment.product_id = kind.id
+            left join activities on (activities.id = assignment.activity_id)
             where user_id = $1
-            and activities.time_end > now()",
+            and (assignment.activity_id is null or activities.time_end > now())",
         user.get_id()
     )
     .fetch_optional(&mut txn.executor())
@@ -178,7 +180,10 @@ pub(super) async fn begin(
     let ticket_kind_name = reservation
         .ticket_kind_name
         .resolve_intl(&lang, "<ticket kind>");
-    let activity_title = reservation.activity_title.resolve_intl(&lang, "<activity>");
+    let activity_title = reservation
+        .activity_title
+        .as_ref()
+        .map(|title| title.resolve_intl(&lang, "<activity>"));
 
     // we don't need to include ticket_kind because the ticket_addon_id is also a UUID so it
     // will never be duplicate!
@@ -192,7 +197,11 @@ pub(super) async fn begin(
     .await?;
 
     let mut transaction_wares = vec![transactions::Ware {
-        name: format!("{activity_title} - {ticket_kind_name}"),
+        // A store product's line is just its name.
+        name: match &activity_title {
+            Some(activity_title) => format!("{activity_title} - {ticket_kind_name}"),
+            None => ticket_kind_name.to_owned(),
+        },
         amount: reservation.price.0,
         tax: 1.0,
         currency: transactions::Currency::Sek,
