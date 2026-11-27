@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into group_memberships (user_id, group_id, specific, until)\n        select $1, group_id, $3, $4 from unnest($2::uuid[]) as group_id\n        on conflict (user_id, group_id) do update set specific = excluded.specific",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "UuidArray",
+        "Bool",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d0b9379a17bd924c7169d3108ae04c68aea0dbe71c98af7b3770271cfc511e29"
+}

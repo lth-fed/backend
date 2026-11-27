@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into physical_sales (transaction_id, sales_device_id, buyer_id, total)\n        values ($1, $2, $3, '0.00'::money)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0c6e957d9a4a66a6e5ee59ce9da21f8b8256fd9d6dbf511e39e1e14b5992bee3"
+}

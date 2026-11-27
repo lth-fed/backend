@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into api_keys (key, user_id, email, client_id)\n            values (uuidv4(), $1, $2, $3) returning key",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "key",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e361b1aa8ed6cbd1288d23e0789a03a6d9d143c76d018d12d1a774e65f282204"
+}

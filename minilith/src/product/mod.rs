@@ -24,7 +24,7 @@ use crate::{ContextWrapper, MinilithEndpointError, MinilithResult};
 mod access;
 mod allocation;
 pub mod app;
-mod catalog;
+pub(crate) mod catalog;
 mod flow;
 mod legacy;
 mod models;
@@ -32,6 +32,7 @@ mod notifications;
 mod purchase;
 mod queue;
 mod release;
+mod sales;
 #[cfg(test)]
 mod tests;
 mod transfer;
@@ -45,7 +46,6 @@ pub use models::{
     Addon, AddonOption, AvailableAddon, Kind, PurchaseProvider, PurchaseStatus, PurchasedAddon,
     TicketBase,
 };
-pub(crate) use purchase::fee_quote;
 
 #[derive(Debug, Clone)]
 pub struct Router {
@@ -60,7 +60,7 @@ impl Deref for Router {
     }
 }
 
-pub(crate) use catalog::load_addons;
+pub(crate) use catalog::{load_addons, load_purchasable_addons};
 pub(crate) use purchase::{callback, refund};
 pub(crate) use release::check_all_tickets;
 

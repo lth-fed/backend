@@ -261,6 +261,7 @@ podman compose up -d                   # local Postgres + observability stack (h
 (written by hand by Erik Davidsson)
 
 - Don't run `cargo sqlx prepare`, the human will do that before committing.
+- cd relatively (e.g. `backend/minilith` or similar, not `/home/xxx/`)
 - use sqlx macros for database queries
 - ask the human to restart minilith or other service when regenerating schema
 - To update the schema: write to files under `schema/xx-<name>.sql` in the

@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select assignment.activity_id as \"activity_id!\",\n            kind.name as \"name!: crate::DbInternationalizedString\"\n        from products kind\n        inner join product_activity_assignments assignment on assignment.product_id = kind.id\n        where kind.id = $1\n        limit 1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "activity_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name!: crate::DbInternationalizedString",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "8d73816e44e819a1b2320c77484562a788cce61c4171cca2e7257aef63a4e144"
+}

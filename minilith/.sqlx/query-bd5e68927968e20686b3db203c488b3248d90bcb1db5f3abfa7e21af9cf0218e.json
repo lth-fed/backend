@@ -20,7 +20,8 @@
                 "news",
                 "ticket_release",
                 "transfer",
-                "reservation"
+                "reservation",
+                "refund"
               ]
             }
           }

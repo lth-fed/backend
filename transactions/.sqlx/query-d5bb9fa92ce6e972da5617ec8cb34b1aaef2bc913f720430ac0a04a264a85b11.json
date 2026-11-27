@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select id, client_id, provider as \"provider: Provider\",\n                sumup_checkout_id, sumup_reader_id\n                from transactions\n                where id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "client_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "provider: Provider",
+        "type_info": {
+          "Custom": {
+            "name": "provider",
+            "kind": {
+              "Enum": [
+                "swish",
+                "stripe",
+                "free",
+                "sumup"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "sumup_checkout_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "sumup_reader_id",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "d5bb9fa92ce6e972da5617ec8cb34b1aaef2bc913f720430ac0a04a264a85b11"
+}

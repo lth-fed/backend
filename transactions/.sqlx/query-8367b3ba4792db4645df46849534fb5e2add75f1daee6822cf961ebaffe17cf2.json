@@ -1,0 +1,88 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select payment_reference as \"payment_reference?\", client_id as \"client_id?\",\n            refund_reference as \"refund_reference?\", refund_at,\n            total_transaction_fee as \"total_transaction_fee?\",\n            customer_id as \"customer_id?\", provider as \"provider?: Provider\",\n            cancelled_at,\n            (select coalesce(sum(amount), '0.00'::money) from transaction_wares\n                where transaction_wares.transaction_id = t.id) as \"total!\",\n            --\n            t.id as \"id!\"\n            from unnest($1::uuid[]) as t(id)\n            left join transactions on transactions.id = t.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "payment_reference?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "client_id?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "refund_reference?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "refund_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 4,
+        "name": "total_transaction_fee?",
+        "type_info": "Money"
+      },
+      {
+        "ordinal": 5,
+        "name": "customer_id?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "provider?: Provider",
+        "type_info": {
+          "Custom": {
+            "name": "provider",
+            "kind": {
+              "Enum": [
+                "swish",
+                "stripe",
+                "free",
+                "sumup"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "cancelled_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 8,
+        "name": "total!",
+        "type_info": "Money"
+      },
+      {
+        "ordinal": 9,
+        "name": "id!",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      null,
+      null
+    ]
+  },
+  "hash": "8367b3ba4792db4645df46849534fb5e2add75f1daee6822cf961ebaffe17cf2"
+}

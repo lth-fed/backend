@@ -1,0 +1,46 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select owner_id, product_id, refunded_id, resale_transaction_id,\n            for_resale as \"for_resale?: PgMoney\"\n        from purchases where id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "owner_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "product_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "refunded_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "resale_transaction_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "for_resale?: PgMoney",
+        "type_info": "Money"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "ab2b1b9b3262f4c8081891e1d4d88028b47a42a588f4f1cab215cff108c8ee5f"
+}

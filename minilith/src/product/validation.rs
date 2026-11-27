@@ -25,8 +25,18 @@ pub struct ValidateActivity {
 /// `<id>.<time>` or JSON.
 #[derive(Object)]
 pub struct ValidateRequest {
-    purchased_ticket_id: Uuid,
-    created_at: OffsetDateTime,
+    /// The id of the `purchase_uses` row encoded in the QR. Old QR codes carried the
+    /// purchase id; the products migration backfills that as a use id.
+    pub purchased_ticket_id: Uuid,
+    pub created_at: OffsetDateTime,
+}
+
+/// Current shape of the validation request (`POST /v1/purchase-uses/validate`).
+#[derive(Object)]
+pub struct ValidateUseRequest {
+    /// The id of the `purchase_uses` row encoded in the QR.
+    pub use_id: Uuid,
+    pub created_at: OffsetDateTime,
 }
 #[derive(Object)]
 pub struct Validation {
@@ -40,7 +50,10 @@ pub struct ValidateResponse {
     owner_name: Option<String>,
     has_been_transfered: bool,
     purchaser_name: Option<String>,
+    /// Scans of this same use (a repeat scan is allowed and shown as a warning).
     previous_verifications: Vec<Validation>,
+    /// When the use was started (when the QR was generated).
+    use_activated_at: Option<OffsetDateTime>,
     purchased_addons: Vec<PurchasedAddon>,
 }
 impl ValidateResponse {
@@ -53,6 +66,7 @@ impl ValidateResponse {
             has_been_transfered: false,
             purchaser_name: None,
             previous_verifications: vec![],
+            use_activated_at: None,
             purchased_addons: vec![],
         }
     }
@@ -91,31 +105,34 @@ pub(super) async fn validatable_activities(
 pub(super) async fn validate(
     ctx: &ContextWrapper,
     auth: User,
-    body: ValidateRequest,
+    use_id: Uuid,
+    created_at: OffsetDateTime,
 ) -> MinilithResult<ValidateResponse> {
     let now = OffsetDateTime::now_utc();
     // TODO(frontend-hack: 25/08/2026): some people are insane and don't have accurate time on their phone, so we have to
     // increase leeway before we implement server side time adjustment
     let leeway = 5 * time::Duration::MINUTE;
-    if body.created_at < now.saturating_sub(leeway) || body.created_at > now.saturating_add(leeway)
-    {
+    if created_at < now.saturating_sub(leeway) || created_at > now.saturating_add(leeway) {
         return Ok(ValidateResponse::not_valid());
     }
     let Some(row) = sqlx::query!(
-        "select owner_id, purchaser_id, owner.name as oname, purchaser.name as pname,
+        "select purchases.id as \"purchase_id!\", purchases.owner_id, purchases.purchaser_id,
+            owner.name as oname, purchaser.name as pname,
             purchases.product_id as \"product_id!\", kind.name as \"ticket_kind_name: DIS\",
+            used.timestamp as \"use_activated_at!\",
             (purchases.refunded_id is not null) as \"refunded!\"
-            from purchases
+            from purchase_uses used
+            inner join purchases on purchases.id = used.purchase_id
             inner join products kind on kind.id = purchases.product_id
             inner join product_activity_assignments assignment
                 on assignment.product_id = purchases.product_id
             inner join activity_verifiers
                 on activity_verifiers.activity_id = assignment.activity_id
-            inner join users owner on owner.id = owner_id
-            inner join users purchaser on purchaser.id = purchaser_id
-            where purchases.id = $1
+            inner join users owner on owner.id = purchases.owner_id
+            inner join users purchaser on purchaser.id = purchases.purchaser_id
+            where used.id = $1
                 and activity_verifiers.user_id = $2",
-        body.purchased_ticket_id,
+        use_id,
         auth.get_id()
     )
     .fetch_optional(&ctx.db)
@@ -130,10 +147,9 @@ pub(super) async fn validate(
     let previous_verifications = sqlx::query!(
         "select validation.timestamp
         from purchase_use_validations validation
-        inner join purchase_uses uses on uses.id = validation.use_id
-        where uses.purchase_id = $1
+        where validation.use_id = $1
         order by validation.timestamp",
-        body.purchased_ticket_id
+        use_id
     )
     .map(|row| Validation { at: row.timestamp })
     .fetch_all(&ctx.db)
@@ -190,7 +206,7 @@ pub(super) async fn validate(
             where purchased_product_addons.purchase_id = $1
             order by product_addons.idx
             "#,
-        body.purchased_ticket_id
+        row.purchase_id
     )
     .map(|row| PurchasedAddon {
         inner: Addon {
@@ -205,13 +221,6 @@ pub(super) async fn validate(
         options: available_options.remove(&row.addon_id).unwrap_or_default(),
     })
     .fetch_all(&ctx.db)
-    .await?;
-    let use_id = sqlx::query_scalar!(
-        "insert into purchase_uses (id, purchase_id) values ($1, $2) returning id",
-        Uuid::new_v4(),
-        body.purchased_ticket_id
-    )
-    .fetch_one(&ctx.db)
     .await?;
     sqlx::query!(
         "insert into purchase_use_validations (id, use_id) values ($1, $2)",
@@ -234,6 +243,7 @@ pub(super) async fn validate(
                 .wrap_err_encryption("validate purchaser name")?,
         ),
         previous_verifications,
+        use_activated_at: Some(row.use_activated_at),
         purchased_addons,
     })
 }

@@ -24,7 +24,8 @@ use std::sync::Arc;
 
 use color_eyre::eyre::WrapErr as _;
 use fed_auth_verifier::EXTERNAL_VALIDATION_USER_ID;
-use minilith::{Context, ContextWrapper};
+use minilith::admin_addons::save_base_price_addon;
+use minilith::{Context, ContextWrapper, InternationalizedString};
 use sqlx::postgres::types::{PgLTree, PgMoney};
 use sqlx::types::Json;
 use sqlx::types::time::OffsetDateTime;
@@ -540,13 +541,14 @@ async fn seed_activities(ctx: &ContextWrapper, namespace: SeedNamespace) -> colo
         let base_ticket_id = Uuid::from_u128(
             activity_id.as_u128() ^ 0x42_41_53_45_54_49_43_4b_45_54_5f_5f_5f_5f_5f_5f,
         );
+        let base_name = serde_json::from_value::<HashMap<String, String>>(title.clone())?;
         sqlx::query!(
             "insert into products
-                (id, group_id, kind, name, description, sales_price, sales_organization,
-                 sales_stock, stock_real, stock_unit, stock_price, bookkeeping_tag, max_uses,
+                (id, group_id, kind, name, description, sales_organization,
+                 sales_stock, stock_real, stock_unit, stock_price, max_uses,
                  sales_start, sales_stop, resale_start, resale_stop)
-             values ($1, $2, 'activity_visibility', $3, $4, 0, $5, 0, 0, 'st', 0, $6, 1,
-                     $7, $8, $8, $8)
+             values ($1, $2, 'activity_visibility', $3, $4, $5, 0, 0, 'st', 0, 1,
+                     $6, $7, $7, $7)
              on conflict (id) do update set
                 name = excluded.name,
                 description = excluded.description,
@@ -557,13 +559,24 @@ async fn seed_activities(ctx: &ContextWrapper, namespace: SeedNamespace) -> colo
             title,
             description,
             sales_target_id,
-            tag_id,
             a.time_start,
             a.time_end,
         )
         .execute(&ctx.db)
         .await
         .wrap_err_with(|| format!("seed base ticket {base_ticket_id}"))?;
+        let mut txn = ctx.db.begin().await?;
+        save_base_price_addon(
+            &mut txn,
+            base_ticket_id,
+            &InternationalizedString(base_name),
+            0,
+            std::slice::from_ref(&tag_id),
+            &[PgMoney(0)],
+        )
+        .await
+        .map_err(|error| color_eyre::eyre::eyre!("seed base price add-on: {error:?}"))?;
+        txn.commit().await?;
         // The `location` composite type doesn't have a clean sqlx
         // mapping for inserts via the macro, so we build it inline with
         // ROW(name, directions, coordinate, url)::location. Upsert
@@ -641,17 +654,17 @@ async fn seed_activities(ctx: &ContextWrapper, namespace: SeedNamespace) -> colo
             // `money` is i64 minor units. PgMoney binds straight to the
             // money column type without any text-format detour.
             let price = PgMoney(k.price_ore);
+            let kind_name = serde_json::from_value::<HashMap<String, String>>(name.clone())?;
             sqlx::query!(
                 "insert into products
-                    (id, group_id, kind, name, description, sales_price, sales_organization,
-                     sales_stock, stock_real, stock_unit, stock_price, bookkeeping_tag, max_uses,
+                    (id, group_id, kind, name, description, sales_organization,
+                     sales_stock, stock_real, stock_unit, stock_price, max_uses,
                      sales_start, sales_stop, resale_start, resale_stop,
                      been_purchased, tickets_been_released)
-                 values ($1, $2, 'ticket', $3, '{}', $4, $5, $8, $8, 'st', 0, $9, 1,
-                     $6, $7, $6, $7, false, ($6 < now() and $7 > now()))
+                 values ($1, $2, 'ticket', $3, '{}', $4, $7, $7, 'st', 0, 1,
+                     $5, $6, $5, $6, false, ($5 < now() and $6 > now()))
                  on conflict (id) do update set
                     name = excluded.name,
-                    sales_price = excluded.sales_price,
                     sales_start = excluded.sales_start,
                     sales_stop = excluded.sales_stop,
                     sales_stock = excluded.sales_stock,
@@ -662,16 +675,26 @@ async fn seed_activities(ctx: &ContextWrapper, namespace: SeedNamespace) -> colo
                 ticket_kind_id,
                 sales_group_id,
                 Json(&name) as _,
-                price,
                 sales_target_id,
                 k.purchasing_start,
                 k.purchasing_stop,
                 k.max_tickets,
-                tag_id,
             )
             .execute(&ctx.db)
             .await
             .wrap_err_with(|| format!("seed ticket kind {ticket_kind_id}"))?;
+            let mut txn = ctx.db.begin().await?;
+            save_base_price_addon(
+                &mut txn,
+                ticket_kind_id,
+                &InternationalizedString(kind_name),
+                price.0,
+                std::slice::from_ref(&tag_id),
+                &[price],
+            )
+            .await
+            .map_err(|error| color_eyre::eyre::eyre!("seed base price add-on: {error:?}"))?;
+            txn.commit().await?;
 
             sqlx::query!(
                 "insert into product_activity_assignments (activity_id, product_id)

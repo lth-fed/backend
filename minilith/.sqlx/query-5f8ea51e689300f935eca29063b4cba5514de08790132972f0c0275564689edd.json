@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update groups set\n                        name = $2,\n                        description = $3,\n                        propogate_member_visibility_access = $4,\n                        parent_members_can_join = $5,\n                        logo_id = $6\n                    where id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Jsonb",
+        "Jsonb",
+        "Bool",
+        "Bool",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5f8ea51e689300f935eca29063b4cba5514de08790132972f0c0275564689edd"
+}

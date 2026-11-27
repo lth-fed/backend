@@ -23,7 +23,8 @@
               "Enum": [
                 "swish",
                 "stripe",
-                "free"
+                "free",
+                "sumup"
               ]
             }
           }

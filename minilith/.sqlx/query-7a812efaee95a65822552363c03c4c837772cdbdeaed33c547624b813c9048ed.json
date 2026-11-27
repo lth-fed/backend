@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n            transaction.buyer_id,\n            buyer.name as \"buyer_name?\",\n            transaction.seller_id,\n            seller.name as \"seller_name?\",\n            transaction.completed_at,\n            transaction.transaction_id\n        from purchase_transactions transaction\n        left join users buyer on buyer.id = transaction.buyer_id\n        left join users seller on seller.id = transaction.seller_id\n        where transaction.purchase_id = $1\n        order by transaction.completed_at, transaction.buyer_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "buyer_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "buyer_name?",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 2,
+        "name": "seller_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "seller_name?",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 4,
+        "name": "completed_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "transaction_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "7a812efaee95a65822552363c03c4c837772cdbdeaed33c547624b813c9048ed"
+}

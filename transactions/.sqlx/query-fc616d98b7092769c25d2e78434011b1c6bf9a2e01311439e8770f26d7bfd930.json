@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update transactions set cancelled_at = now()\n                where id = $1 and cancelled_at is null",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fc616d98b7092769c25d2e78434011b1c6bf9a2e01311439e8770f26d7bfd930"
+}

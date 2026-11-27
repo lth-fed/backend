@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select transaction_id as \"transaction_id!\"\n        from purchase_transactions\n        inner join purchases on purchases.id = purchase_transactions.purchase_id\n        inner join products on products.id = purchases.product_id\n        where transaction_id is not null\n        and ($1::uuid is null or purchases.activity_id = $1)\n        and (case when $2::uuid is null then products.kind = 'ticket' else products.group_id = $2 end)\n        and ($3::timestamptz is null or purchases.purchased_at >= $3)\n        and ($4::timestamptz is null or purchases.purchased_at < $4)\n        and ($5::uuid is null or purchases.product_id = $5)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "transaction_id!",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "742a9a35193c3a83ea7e570201fbd66cc084a4dca2c4250e009e4214201de9f3"
+}

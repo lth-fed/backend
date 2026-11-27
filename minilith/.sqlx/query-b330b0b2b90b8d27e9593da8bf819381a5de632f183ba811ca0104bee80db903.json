@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into group_memberships (user_id, group_id, until)\n            values ($1, $2, $3)\n            on conflict (user_id, group_id) do update set until = excluded.until",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b330b0b2b90b8d27e9593da8bf819381a5de632f183ba811ca0104bee80db903"
+}

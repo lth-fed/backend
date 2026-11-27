@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "with placement as (\n                    update product_reservation_placement_tails\n                        set placement_tail = placement_tail + 1\n                    where product_id = $2\n                    returning old.placement_tail\n                )\n                insert into product_reservation_queuers\n                    (user_id, product_id, original_product_id, placement)\n                select $1, $2, $3, placement.placement_tail\n                from placement\n\n                on conflict (user_id) do update\n                set product_id = excluded.product_id,\n                    original_product_id = excluded.original_product_id,\n                    placement = excluded.placement",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c0a3b10194a4a6d487b184071e0cbd21962b3020e7e7c8d1566a4890166b732f"
+}

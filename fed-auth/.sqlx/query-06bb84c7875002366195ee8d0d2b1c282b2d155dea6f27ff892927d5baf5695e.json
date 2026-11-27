@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select password_salt, password_hash\n            from password_associations\n            where user_id = $1\n            and client_id = (select client_id from sessions where id = $2)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "password_salt",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 1,
+        "name": "password_hash",
+        "type_info": "Bytea"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "06bb84c7875002366195ee8d0d2b1c282b2d155dea6f27ff892927d5baf5695e"
+}

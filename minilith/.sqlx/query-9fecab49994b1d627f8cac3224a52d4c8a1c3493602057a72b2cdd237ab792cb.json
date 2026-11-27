@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select refunded_id, paid_price as \"paid_price!\"\n        from purchases where id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "refunded_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "paid_price!",
+        "type_info": "Money"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      false
+    ]
+  },
+  "hash": "9fecab49994b1d627f8cac3224a52d4c8a1c3493602057a72b2cdd237ab792cb"
+}

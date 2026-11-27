@@ -107,6 +107,10 @@ impl Router {
     /// Try to lock in this reservation by purchasing the ticket.
     /// If a transaction is already underway, it's cancelled.
     ///
+    /// With `reader_id`, the payment starts on that `SumUp` reader and the reservation flow is
+    /// bypassed completely: no reservation is consumed and an existing one is left to time out.
+    /// Do not queue/reserve before paying on a reader.
+    ///
     /// To see when you've gotten the ticket, poll `GET /queue`. When it's gone (404), you should
     /// have a ticket (or the timeout expired). To check which, list the owned tickets (`GET /`), if
     /// one from this activity is there it's purchased.
@@ -151,6 +155,11 @@ impl Router {
             .map(Json)
     }
 
+    /// Validate (scan) a use.
+    ///
+    /// `purchased_ticket_id` is a `purchase_uses.id`; old QR codes carry the purchase id,
+    /// which the products migration backfilled as a use id. A used purchase cannot be
+    /// transferred or resold.
     #[oai(path = "/validate", method = "post")]
     #[allow(
         clippy::too_many_lines,
@@ -161,7 +170,9 @@ impl Router {
         auth: User,
         body: Json<ValidateRequest>,
     ) -> MinilithResult<Json<ValidateResponse>> {
-        validation::validate(self, auth, body.0).await.map(Json)
+        validation::validate(self, auth, body.0.purchased_ticket_id, body.0.created_at)
+            .await
+            .map(Json)
     }
 
     /// `/v0/tickets/callback`

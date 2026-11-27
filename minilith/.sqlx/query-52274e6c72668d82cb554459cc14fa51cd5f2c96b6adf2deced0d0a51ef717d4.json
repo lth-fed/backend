@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update users_in_purchase_flow\n            set product_id = $2\n            where user_id = any($1) and product_id = any($3) and release_queue = user_id",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "Uuid",
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "52274e6c72668d82cb554459cc14fa51cd5f2c96b6adf2deced0d0a51ef717d4"
+}

@@ -1,0 +1,44 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select purchases.id, purchases.product_id as ticket_kind_id,\n            purchases.paid_price as \"paid_price!\",\n            purchases.refunded_id\n        from purchases\n        inner join products on products.id = purchases.product_id\n        where ($1::uuid is null or purchases.activity_id = $1)\n        and (case when $2::uuid is null then products.kind = 'ticket' else products.group_id = $2 end)\n        and ($3::timestamptz is null or purchases.purchased_at >= $3)\n        and ($4::timestamptz is null or purchases.purchased_at < $4)\n        and ($5::uuid is null or purchases.product_id = $5)\n        order by purchases.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "ticket_kind_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "paid_price!",
+        "type_info": "Money"
+      },
+      {
+        "ordinal": 3,
+        "name": "refunded_id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "30448d5bb3a0a77599810ea0d1ee2156239297be226d938f5164c39e74682e6c"
+}

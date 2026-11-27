@@ -30,6 +30,8 @@ create table vote_rounds (
 create table vote_alternatives (
     id uuid primary key,
     round_id uuid not null references vote_rounds(id) on delete cascade,
+    -- display order set by the admin when the round is created; every client sees this order
+    idx integer not null,
     title jsonb not null,
     voted_for integer not null check (voted_for >= 0)
 );

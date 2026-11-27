@@ -904,6 +904,13 @@ insert into purchase_transactions (purchase_id, seller_id, buyer_id, completed_a
 select purchased_tickets.id, null, purchased_tickets.purchaser_id, now(), purchased_tickets.transaction_id
 from purchased_tickets;
 
+-- Old QR codes encode the purchased ticket id, so each migrated purchase gets a
+-- use row with that same id and stays scannable. Old validations are deliberately
+-- not copied: repeat scans of a use are allowed (shown as a warning in the app).
+insert into purchase_uses (id, purchase_id, timestamp)
+select purchases.id, purchases.id, now()
+from purchases;
+
 insert into purchased_product_addons (
     addon_id, purchase_id, selected_options, selected_options_prices, selected_text
 )

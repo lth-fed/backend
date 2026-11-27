@@ -220,7 +220,8 @@ impl Router {
         let kinds = sqlx::query!(
             r#"select kind.id,
             kind.name as "name!: DIS",
-            kind.sales_price as "price!",
+            (select base.price from product_base_prices base
+                where base.product_id = kind.id) as "price!",
             kind.sales_start,
             kind.sales_stop,
             coalesce(kind.sales_stock, 0) as "available_tickets!"

@@ -64,11 +64,14 @@ struct SingleInfoResponse {
     id: Uuid,
     state: TransactionState,
     customer_id: Option<String>,
-    total_fees: i64,
+    /// What the provider charged for this payment (in ören); refund fees are separate.
+    purchase_fees: i64,
     /// `null` when we have no transaction with this id. Cancelling does not clear it.
     provider: Option<Provider>,
     /// Sum of the transaction's wares (in ören), including any fee wares. `0` when unknown.
     total: i64,
+    /// What refunding this transaction costs (in ören): flat on `Swish`, free on `SumUp`.
+    refund_fee: i64,
     payment_reference: Option<String>,
     refund_reference: Option<String>,
     // ALSO UPDATE `minilith/transactions.rs`
@@ -98,28 +101,6 @@ impl CreatePaymentRequest {
     fn total_amount(&self) -> i64 {
         self.wares.iter().map(|ware| ware.amount).sum()
     }
-}
-#[derive(Debug, Enum, Clone, Copy)]
-#[oai(rename_all = "lowercase")]
-enum FeeKind {
-    /// Charging the amount.
-    Payment,
-    /// Refunding the amount.
-    Refund,
-}
-#[derive(Debug, Object)]
-struct FeeQuoteRequest {
-    provider: Provider,
-    /// In ören.
-    amount: i64,
-    /// Physical (reader) sales use the physical `SumUp` fraction.
-    physical: bool,
-    kind: FeeKind,
-}
-#[derive(Debug, Object)]
-struct FeeQuoteResponse {
-    /// In ören.
-    fee: i64,
 }
 #[derive(Debug, Object, Clone)]
 // ALSO UPDATE `minilith/transactions.rs`
@@ -471,6 +452,21 @@ impl Route {
                 check_client_id(&auth, cid)?;
             }
         }
+        // Only `Swish` charges a fee per refund, and it is a flat per-client amount.
+        let client_ids = transactions
+            .iter()
+            .filter_map(|row| row.client_id.clone())
+            .collect::<Vec<_>>();
+        let refund_fees = sqlx::query!(
+            r#"select client_id, swish_refund_fee as "swish_refund_fee!"
+            from client_ids where client_id = any($1)"#,
+            &client_ids,
+        )
+        .fetch_all(&self.db)
+        .await?
+        .into_iter()
+        .map(|row| (row.client_id, row.swish_refund_fee.0))
+        .collect::<std::collections::HashMap<_, _>>();
         let mapped = transactions.into_iter().map(|row| SingleInfoResponse {
             id: row.id,
             state: if row.cancelled_at.is_some() {
@@ -483,8 +479,17 @@ impl Route {
                 TransactionState::Pending
             },
             customer_id: row.customer_id,
-            total_fees: row.total_transaction_fee.map_or(0, |money| money.0),
+            purchase_fees: row.total_transaction_fee.map_or(0, |money| money.0),
             total: row.total.0,
+            refund_fee: match row.provider {
+                Some(Provider::Swish) => row
+                    .client_id
+                    .as_ref()
+                    .and_then(|client_id| refund_fees.get(client_id))
+                    .copied()
+                    .unwrap_or(0),
+                _ => 0,
+            },
             provider: row.provider,
             payment_reference: row.payment_reference,
             refund_reference: row.refund_reference,
@@ -595,103 +600,14 @@ impl Route {
 
         Ok(())
     }
-    /// You WILL get info on the callback (unless your endpoint is unreachable) about either it
-    /// getting cancelled or paid. We will do our best within our control.
-    /// Returns the provider fee (in ören) for an amount with this client's settings.
-    #[oai(path = "/fee-quote", method = "post")]
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_precision_loss,
-        reason = "ören are far below f64's exact integer range"
-    )]
-    async fn fee_quote(
-        &self,
-        auth: ApiAuth,
-        Json(body): Json<FeeQuoteRequest>,
-    ) -> MinilithResult<Json<FeeQuoteResponse>> {
-        if body.amount < 0 {
-            return Err(MinilithEndpointError::bad_user_input(
-                "negative amount",
-                "",
-                "amount cannot be negative",
-                "amount",
-            ));
-        }
-        let fee = match body.provider {
-            Provider::Free => 0,
-            Provider::Stripe => {
-                return Err(MinilithEndpointError::bad_user_input(
-                    "provider not supported",
-                    "",
-                    "Stripe support has been removed",
-                    "provider",
-                ));
-            }
-            // `Swish` charges a flat fee per refund, independent of the amount.
-            Provider::Swish if matches!(body.kind, FeeKind::Refund) => {
-                let fee: PgMoney = sqlx::query_scalar!(
-                    "select swish_refund_fee from client_ids where client_id = $1",
-                    auth.client_id
-                )
-                .fetch_optional(&self.db)
-                .await?
-                .wrap_err_internal("client_id not found")?;
-                fee.0
-            }
-            Provider::Swish => {
-                let fees = sqlx::query!(
-                    "select swish_payment_fee_fixed, swish_payment_fee_fraction,
-                        swish_payment_fee_max
-                    from client_ids where client_id = $1",
-                    auth.client_id
-                )
-                .fetch_optional(&self.db)
-                .await?
-                .wrap_err_internal("client_id not found")?;
-                fees.swish_payment_fee_fixed.0
-                    + (((fees.swish_payment_fee_fraction * body.amount as f64 + 1e-6).floor()
-                        as i64)
-                        .min(fees.swish_payment_fee_max.0))
-            }
-            // `SumUp` refunds are free.
-            Provider::Sumup if matches!(body.kind, FeeKind::Refund) => 0,
-            Provider::Sumup => {
-                let fees = sqlx::query!(
-                    "select sumup_online_fee_fraction, sumup_physical_fee_fraction
-                    from client_ids where client_id = $1",
-                    auth.client_id
-                )
-                .fetch_optional(&self.db)
-                .await?
-                .wrap_err_internal("client_id not found")?;
-                let fraction = if body.physical {
-                    fees.sumup_physical_fee_fraction
-                } else {
-                    fees.sumup_online_fee_fraction
-                };
-                (fraction * body.amount as f64 + 1e-6).floor() as i64
-            }
-        };
-        Ok(Json(FeeQuoteResponse { fee }))
-    }
-
     #[oai(path = "/swish", method = "post")]
     async fn swish_payment(
         &self,
         auth: ApiAuth,
         body: Json<CreatePaymentRequest>,
     ) -> MinilithResult<Json<CreatePaymentResponseSwish>> {
-        let total_amount = body.total_amount();
-        if total_amount < 1090 {
-            return Err(MinilithEndpointError::bad_user_input(
-                "low amount",
-                "",
-                "amount is less than 10SEK!",
-                "amount",
-            ));
-        }
-
         let cb_ident = Uuid::new_v4();
+        let total_amount = body.total_amount();
         let mut amount = total_amount.to_string();
         amount.insert(amount.len() - 2, '.');
         let mut message = body
@@ -811,14 +727,6 @@ impl Route {
         body: Json<CreatePaymentRequest>,
     ) -> MinilithResult<Json<CreatePaymentResponseSumup>> {
         let total_amount = body.total_amount();
-        if total_amount < 1000 {
-            return Err(MinilithEndpointError::bad_user_input(
-                "low amount",
-                "",
-                "amount is less than 10SEK!",
-                "amount",
-            ));
-        }
         // Reject a reused id before charging the customer; the insert after the provider call
         // runs in its own transaction so no connection is held across `SumUp`'s API.
         let mut txn = self.db.begin().await?;
@@ -875,15 +783,19 @@ impl Route {
         let mut txn = self.db.begin().await?;
         ensure_id_unused(body.id, &mut txn).await?;
         sqlx::query!(
+            // `callback_identifier` is unused for `SumUp` (callbacks are verified by re-fetching
+            // the checkout), but the column is NOT NULL.
             "insert into transactions (id, customer_id, client_id, callback_url_v1,
-                timeout, provider, total_transaction_fee, sumup_checkout_id, sumup_reader_id)
-            values ($1, $2, $3, $4, $5, 'sumup'::provider, $6, $7, $8)",
+                timeout, provider, total_transaction_fee, callback_identifier,
+                sumup_checkout_id, sumup_reader_id)
+            values ($1, $2, $3, $4, $5, 'sumup'::provider, $6, $7, $8, $9)",
             body.id,
             body.customer_id,
             auth.client_id,
             auth.callback_url_v1,
             body.timeout,
             fee,
+            Uuid::nil(),
             checkout_id,
             body.reader_id,
         )
@@ -936,6 +848,11 @@ impl Route {
         sumup::update_reader(self, &auth.client_id, &id, body.name.as_deref())
             .await
             .map(Json)
+    }
+    /// Removes a reader from the merchant account.
+    #[oai(path = "/readers/:id", method = "delete")]
+    async fn delete_reader(&self, auth: ApiAuth, Path(id): Path<String>) -> MinilithResult<()> {
+        sumup::delete_reader(self, &auth.client_id, &id).await
     }
     /// Refunds the whole transaction.
     ///

@@ -21,8 +21,8 @@ use super::models::{
     BoughtAddon, BuyTicketRequest, BuyTicketResponse, PurchaseProvider, PurchaseStatus,
     PurchasedAddon, QueueRequest, QueueResponse,
 };
-use super::validation::{ValidateRequest, ValidateResponse};
-use super::{catalog, purchase, queue, transfer, validation};
+use super::validation::{ValidateResponse, ValidateUseRequest};
+use super::{catalog, purchase, queue, sales, transfer, validation};
 use crate::push_notifications::{NotificationKind, load_notification_history};
 use crate::readers;
 use crate::{
@@ -56,7 +56,10 @@ pub struct AppProduct {
     pub name: IS,
     pub description: IS,
     pub image_url: Option<String>,
-    pub price: i64,
+    /// The product's own (base) price.
+    pub price_min: i64,
+    /// Base price plus the most expensive option of every add-on.
+    pub price_max: i64,
     pub max_uses: i32,
     /// `None` when the stock is not managed automatically (physical sales only).
     pub sales_stock: Option<i32>,
@@ -84,7 +87,7 @@ pub struct AppPurchase {
     pub product_name: IS,
     pub kind: ProductKind,
     /// Price actually paid (may differ from the product's current price).
-    pub product_price: i64,
+    pub paid_price: i64,
     pub purchased_at: OffsetDateTime,
     pub activity_id: Option<Uuid>,
     pub activity_title: Option<IS>,
@@ -96,8 +99,11 @@ pub struct AppPurchase {
     pub image_url: Option<String>,
     /// False if the caller transferred it away.
     pub owned_by_me: bool,
+    /// A purchase with any use can no longer be transferred or resold.
     pub uses_left: i32,
     pub max_uses: i32,
+    /// The latest use; its id is what the QR code encodes. `None` until the first use.
+    pub last_use_id: Option<Uuid>,
     /// Non-null when the owner put the purchase up for resale.
     pub for_resale: Option<i64>,
     pub refunded: bool,
@@ -131,6 +137,27 @@ pub struct AppPurchaseRequest {
     pub addons: Vec<AppBoughtAddon>,
     /// Required for `SumUp`; where the hosted checkout returns.
     pub redirect_url: Option<String>,
+    /// Pay on this `SumUp` reader instead of a hosted checkout (skips the reservation flow).
+    pub reader_id: Option<String>,
+}
+
+#[derive(Debug, Object)]
+pub struct AppSaleItem {
+    pub product_id: Uuid,
+    pub addons: Vec<AppBoughtAddon>,
+}
+
+#[derive(Debug, Object)]
+pub struct AppSaleRequest {
+    pub items: Vec<AppSaleItem>,
+    /// Defaults to the anonymous counter-sale user.
+    pub buyer_id: Option<String>,
+    pub reader_id: String,
+}
+
+#[derive(Debug, Clone, Copy, Object)]
+pub struct AppSaleStarted {
+    pub transaction_id: Uuid,
 }
 
 #[derive(Debug, Object)]
@@ -141,6 +168,8 @@ pub struct AppTransferRequest {
 
 #[derive(Debug, Clone, Copy, Object)]
 pub struct AppUseResponse {
+    /// The newly created use. Encode this in the QR code the verifier scans.
+    pub use_id: Uuid,
     pub uses_left: i32,
 }
 
@@ -205,40 +234,246 @@ pub struct AppMarkNotificationsRead {
     pub ids: Vec<Uuid>,
 }
 
-async fn ensure_product_visible(
-    ctx: &crate::context::ContextWrapper,
-    product: &AppProduct,
-    user_id: &str,
-) -> MinilithResult<()> {
-    if product.purchased_by_me {
-        return Ok(());
+/// Who is looking at products: an app user or a registered sales device.
+#[derive(Debug, Clone, Copy)]
+enum ProductAccess<'a> {
+    User(&'a str),
+    Device(sales::DeviceScope),
+}
+
+impl<'a> ProductAccess<'a> {
+    fn user_id(self) -> &'a str {
+        match self {
+            ProductAccess::User(user_id) => user_id,
+            ProductAccess::Device(_) => "",
+        }
     }
-    let visible = sqlx::query_scalar!(
-        r#"select exists (
-            select 1
-            from product_allowed_groups allowed
-            inner join group_memberships membership on membership.user_id = $1
-            inner join groups member_group on member_group.id = membership.group_id
-            inner join groups allowed_group
-                on allowed_group.id = allowed.group_id
-                and allowed_group.path @> member_group.path
-            where allowed.product_id = $2
-            and (not membership.specific or allowed.group_id = membership.group_id)
-        ) or exists (
-            select 1 from product_buyers where user_id = $1 and product_id = $2
-        ) as "exists!""#,
-        user_id,
-        product.id,
-    )
-    .fetch_one(&ctx.db)
-    .await?;
-    if visible {
-        Ok(())
-    } else {
-        Err(MinilithEndpointError::bad_frontend_code(
-            "user not allowed to access this product",
-            "",
+    fn device_group(self) -> Option<Uuid> {
+        match self {
+            ProductAccess::User(_) => None,
+            ProductAccess::Device(device) => device.group_id,
+        }
+    }
+    fn device_activity(self) -> Option<Uuid> {
+        match self {
+            ProductAccess::User(_) => None,
+            ProductAccess::Device(device) => device.activity_id,
+        }
+    }
+}
+
+/// The single product query used by both the app and sales devices. A device only sees products
+/// it is registered to sell (`store_general_sales` within its group/activity).
+#[allow(
+    clippy::too_many_lines,
+    reason = "one query expresses the whole product list with its access rules"
+)]
+async fn load_products(
+    ctx: &crate::context::ContextWrapper,
+    access: ProductAccess<'_>,
+    activity_id: Option<Uuid>,
+    group_id: Option<Uuid>,
+    product_id: Option<Uuid>,
+) -> MinilithResult<Vec<AppProduct>> {
+    let products = sqlx::query!(
+        r#"select
+            product.id,
+            product.group_id,
+            owner.path::text as "group_path!",
+            owner.name as "group_name!: DIS",
+            product.kind as "kind!: ProductKind",
+            product.name as "name!: DIS",
+            product.description as "description!: DIS",
+            image.url as "image_url?",
+            (select range.price_min from product_price_ranges range
+                where range.product_id = product.id) as "price_min!",
+            (select range.price_max from product_price_ranges range
+                where range.product_id = product.id) as "price_max!",
+            product.max_uses,
+            product.sales_stock,
+            product.sales_start,
+            product.sales_stop,
+            product.resale_start,
+            product.resale_stop,
+            product.tickets_been_released,
+            product.store_general_sales,
+            product.store_online_self_serve,
+            coalesce(
+                (select array_agg(assignment.activity_id)
+                    from product_activity_assignments assignment
+                    where assignment.product_id = product.id),
+                '{}'::uuid[]
+            ) as "activity_ids!: Vec<Uuid>",
+            exists (
+                select 1 from purchases owned
+                where owned.product_id = product.id
+                and owned.owner_id = $1
+                and owned.refunded_id is null
+            ) as "purchased_by_me!"
+        from products product
+        inner join groups owner on owner.id = product.group_id
+        left join images image on image.id = product.image_id
+        where product.kind <> 'activity_visibility'
+        and ($2::uuid is null or exists (
+            select 1 from product_activity_assignments assignment
+            where assignment.product_id = product.id
+            and assignment.activity_id = $2
         ))
+        and ($3::uuid is null or product.group_id = $3)
+        and ($6::uuid is null or product.id = $6)
+        and (
+            -- a registered sales device sells what it is registered for
+            (($4::uuid is not null or $5::uuid is not null)
+                and product.store_general_sales
+                and (
+                    ($4::uuid is not null and (
+                        product.group_id = $4
+                        or exists (
+                            select 1
+                            from product_activity_assignments assignment
+                            inner join activity_hosts host
+                                on host.activity_id = assignment.activity_id
+                            where assignment.product_id = product.id
+                            and host.group_id = $4
+                        )
+                    ))
+                    or ($5::uuid is not null and exists (
+                        select 1 from product_activity_assignments assignment
+                        where assignment.product_id = product.id
+                        and assignment.activity_id = $5
+                    ))
+                ))
+            -- app visibility
+            or (($4::uuid is null and $5::uuid is null) and (
+                ($2::uuid is null and $3::uuid is null
+                    and product.store_online_self_serve)
+                or exists (
+                    select 1
+                    from product_allowed_groups allowed
+                    inner join group_memberships membership
+                        on membership.user_id = $1
+                    inner join groups member_group
+                        on member_group.id = membership.group_id
+                    inner join groups allowed_group
+                        on allowed_group.id = allowed.group_id
+                        and allowed_group.path @> member_group.path
+                    where allowed.product_id = product.id
+                    and (
+                        not membership.specific
+                        or allowed.group_id = membership.group_id
+                    )
+                )
+                or exists (
+                    select 1 from product_buyers buyer
+                    where buyer.product_id = product.id and buyer.user_id = $1
+                )
+                or exists (
+                    select 1 from purchases owned
+                    where owned.product_id = product.id
+                    and owned.owner_id = $1
+                )
+            ))
+        )
+        order by product.sales_start, product.name->>'en'"#,
+        access.user_id(),
+        activity_id,
+        group_id,
+        access.device_group(),
+        access.device_activity(),
+        product_id,
+    )
+    .map(|row| AppProduct {
+        id: row.id,
+        group_id: row.group_id,
+        group_path: row.group_path,
+        group_name: row.group_name.0,
+        kind: row.kind,
+        purchased_by_me: row.purchased_by_me,
+        name: row.name.0,
+        description: row.description.0,
+        image_url: row.image_url,
+        price_min: row.price_min.0,
+        price_max: row.price_max.0,
+        max_uses: row.max_uses,
+        sales_stock: row.sales_stock,
+        sales_start: row.sales_start,
+        sales_stop: row.sales_stop,
+        resale_start: row.resale_start,
+        resale_stop: row.resale_stop,
+        tickets_been_released: row.tickets_been_released,
+        store_general_sales: row.store_general_sales,
+        store_online_self_serve: row.store_online_self_serve,
+        activity_ids: row.activity_ids,
+    })
+    .fetch_all(&ctx.db)
+    .await?;
+    Ok(products)
+}
+
+async fn load_product(
+    ctx: &crate::context::ContextWrapper,
+    access: ProductAccess<'_>,
+    id: Uuid,
+) -> MinilithResult<AppProductDetails> {
+    let product = load_products(ctx, access, None, None, Some(id))
+        .await?
+        .into_iter()
+        .next()
+        .wrap_err_not_found()?;
+    let activity_id = access
+        .device_activity()
+        .or(product.activity_ids.first().copied());
+    let mut txn = ctx.db.begin().await?;
+    let available_addons = super::load_purchasable_addons(&mut txn, id, activity_id).await?;
+    Ok(AppProductDetails {
+        product,
+        available_addons,
+    })
+}
+
+/// Reads and validates the `x-sales-device-id` header. The UUID is the device's credential.
+async fn sales_device_from_request(
+    ctx: &crate::context::ContextWrapper,
+    req: &poem::Request,
+) -> MinilithResult<sales::DeviceScope> {
+    let id = req
+        .headers()
+        .get("x-sales-device-id")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| Uuid::parse_str(value).ok())
+        .ok_or_else(|| {
+            MinilithEndpointError::unauthorized("missing or invalid x-sales-device-id", "")
+        })?;
+    sales::load_device(&ctx.db, id).await
+}
+
+/// The ids of the products a registered sales device may sell.
+async fn device_product_ids(
+    ctx: &crate::context::ContextWrapper,
+    device: sales::DeviceScope,
+) -> MinilithResult<Vec<Uuid>> {
+    Ok(
+        load_products(ctx, ProductAccess::Device(device), None, None, None)
+            .await?
+            .into_iter()
+            .map(|product| product.id)
+            .collect(),
+    )
+}
+
+impl AppRouter {
+    /// A purchase's receipt fields, if the purchase is of a product this device may sell.
+    async fn device_receipt_target(
+        &self,
+        device: sales::DeviceScope,
+        purchase_id: Uuid,
+    ) -> MinilithResult<crate::admin_purchases::PurchaseReceiptTarget> {
+        let target = crate::admin_purchases::load_receipt_target(self, purchase_id).await?;
+        let allowed = device_product_ids(self, device).await?;
+        if !allowed.contains(&target.product_id) {
+            return Err(MinilithEndpointError::not_found());
+        }
+        Ok(target)
     }
 }
 
@@ -324,6 +559,188 @@ impl AppRouter {
         }
     }
 
+    /// Products a registered sales device may sell.
+    ///
+    /// The device is identified by the `x-sales-device-id` header (the UUID in its QR code).
+    ///
+    /// # Errors
+    ///
+    /// AUTH, DB.
+    #[oai(path = "/sales-device/products", method = "get")]
+    async fn sales_device_products(
+        &self,
+        req: &poem::Request,
+    ) -> MinilithResult<Json<Vec<AppProduct>>> {
+        let device = sales_device_from_request(self, req).await?;
+        load_products(self, ProductAccess::Device(device), None, None, None)
+            .await
+            .map(Json)
+    }
+
+    /// A product with the add-ons a sales device can select when selling it.
+    ///
+    /// # Errors
+    ///
+    /// AUTH, DB, NOT FOUND.
+    #[oai(path = "/sales-device/products/:id", method = "get")]
+    async fn sales_device_product(
+        &self,
+        req: &poem::Request,
+        Path(id): Path<Uuid>,
+    ) -> MinilithResult<Json<AppProductDetails>> {
+        let device = sales_device_from_request(self, req).await?;
+        load_product(self, ProductAccess::Device(device), id)
+            .await
+            .map(Json)
+    }
+
+    /// Card readers the sales device may charge on.
+    ///
+    /// # Errors
+    ///
+    /// AUTH, DB.
+    #[oai(path = "/sales-device/readers", method = "get")]
+    async fn sales_device_readers(
+        &self,
+        req: &poem::Request,
+    ) -> MinilithResult<Json<Vec<readers::GroupReader>>> {
+        let device = sales_device_from_request(self, req).await?;
+        let mut txn = self.db.begin().await?;
+        let group_ids = sales::reader_group_ids(&mut txn, &device).await?;
+        txn.commit().await?;
+        let readers = if device.activity_id.is_some() {
+            readers::for_activity(&self.db, self, &group_ids).await?
+        } else {
+            readers::for_group(
+                &self.db,
+                self,
+                device.group_id.wrap_err_internal("device has no scope")?,
+            )
+            .await?
+        };
+        Ok(Json(readers))
+    }
+
+    /// Starts one counter sale for all items and pays it on a reader. The sale completes when the
+    /// provider callback arrives; poll `GET /v1/sales-device/sales/{transaction_id}`.
+    ///
+    /// # Errors
+    ///
+    /// AUTH, DB, or the provider rejecting the payment.
+    #[oai(path = "/sales-device/purchases", method = "post")]
+    async fn sales_device_purchase(
+        &self,
+        req: &poem::Request,
+        Json(body): Json<AppSaleRequest>,
+    ) -> MinilithResult<Json<AppSaleStarted>> {
+        let device = sales_device_from_request(self, req).await?;
+        let buyer_id = body
+            .buyer_id
+            .unwrap_or_else(|| sales::ANONYMOUS_BUYER.to_owned());
+        let items = body
+            .items
+            .into_iter()
+            .map(|item| sales::Item {
+                product_id: item.product_id,
+                addons: item
+                    .addons
+                    .into_iter()
+                    .map(|addon| BoughtAddon {
+                        id: addon.addon_id,
+                        selected_options: Some(addon.selected_options),
+                        selected_text: addon.selected_text,
+                    })
+                    .collect(),
+            })
+            .collect();
+        let transaction_id = sales::begin(
+            self,
+            sales::Viewer::Device(&device),
+            &buyer_id,
+            items,
+            Some(&body.reader_id),
+        )
+        .await?;
+        Ok(Json(AppSaleStarted { transaction_id }))
+    }
+
+    /// The state and resulting purchases of a counter sale this device started.
+    ///
+    /// # Errors
+    ///
+    /// AUTH, DB, NOT FOUND.
+    #[oai(path = "/sales-device/sales/:transaction_id", method = "get")]
+    async fn sales_device_sale(
+        &self,
+        req: &poem::Request,
+        Path(transaction_id): Path<Uuid>,
+    ) -> MinilithResult<Json<sales::SaleStatus>> {
+        let device = sales_device_from_request(self, req).await?;
+        sales::status(self, &device, transaction_id).await.map(Json)
+    }
+
+    /// Purchases of the products this device may sell, newest first.
+    ///
+    /// # Errors
+    ///
+    /// AUTH, DB.
+    #[oai(path = "/sales-device/purchases", method = "get")]
+    async fn sales_device_purchases(
+        &self,
+        req: &poem::Request,
+        Query(start): Query<Option<OffsetDateTime>>,
+        Query(end): Query<Option<OffsetDateTime>>,
+    ) -> MinilithResult<Json<Vec<crate::admin_purchases::PurchaseRow>>> {
+        let device = sales_device_from_request(self, req).await?;
+        crate::admin_purchases::load_purchases(
+            self,
+            crate::admin_purchases::PurchaseQuery {
+                product_ids: Some(device_product_ids(self, device).await?),
+                group_id: None,
+                activity_id: None,
+                start,
+                end,
+            },
+        )
+        .await
+        .map(Json)
+    }
+
+    /// Downloads the current owner's receipt for a purchase of a product this device may sell.
+    ///
+    /// # Errors
+    ///
+    /// AUTH, DB, NOT FOUND, BAD REQUEST (transferred purchase, no payment).
+    #[oai(path = "/sales-device/purchases/:id/receipt", method = "get")]
+    async fn sales_device_receipt(
+        &self,
+        req: &poem::Request,
+        Path(id): Path<Uuid>,
+    ) -> MinilithResult<Response<Binary<poem::Body>>> {
+        let device = sales_device_from_request(self, req).await?;
+        let target = self.device_receipt_target(device, id).await?;
+        let pdf = target.receipt(self, id).await?;
+        Ok(Response::new(Binary(pdf.into())).header("content-type", "application/octet-stream"))
+    }
+
+    /// Emails the current owner's receipt for a purchase to an address of the caller's choice.
+    ///
+    /// # Errors
+    ///
+    /// AUTH, DB, NOT FOUND, BAD REQUEST (transferred purchase, no payment, bad address, email
+    /// not configured).
+    #[oai(path = "/sales-device/purchases/:id/receipt", method = "post")]
+    async fn sales_device_email_receipt(
+        &self,
+        req: &poem::Request,
+        Path(id): Path<Uuid>,
+        Json(body): Json<crate::admin_purchases::ReceiptEmailRequest>,
+    ) -> MinilithResult<()> {
+        let device = sales_device_from_request(self, req).await?;
+        let target = self.device_receipt_target(device, id).await?;
+        target.email_receipt(self, id, &body.email).await
+    }
+
     /// Products the caller may buy or already owns.
     ///
     /// Filter by `activity_id` (products assigned to that activity) or
@@ -345,108 +762,15 @@ impl AppRouter {
         activity_id: Query<Option<Uuid>>,
         group_id: Query<Option<Uuid>>,
     ) -> MinilithResult<Json<Vec<AppProduct>>> {
-        let products = sqlx::query!(
-            r#"select
-                product.id,
-                product.group_id,
-                owner.path::text as "group_path!",
-                owner.name as "group_name!: DIS",
-                product.kind as "kind!: ProductKind",
-                product.name as "name!: DIS",
-                product.description as "description!: DIS",
-                image.url as "image_url?",
-                product.sales_price as "price!",
-                product.max_uses,
-                product.sales_stock,
-                product.sales_start,
-                product.sales_stop,
-                product.resale_start,
-                product.resale_stop,
-                product.tickets_been_released,
-                product.store_general_sales,
-                product.store_online_self_serve,
-                coalesce(
-                    (select array_agg(assignment.activity_id)
-                        from product_activity_assignments assignment
-                        where assignment.product_id = product.id),
-                    '{}'::uuid[]
-                ) as "activity_ids!: Vec<Uuid>",
-                exists (
-                    select 1 from purchases owned
-                    where owned.product_id = product.id
-                    and owned.owner_id = $1
-                    and owned.refunded_id is null
-                ) as "purchased_by_me!"
-            from products product
-            inner join groups owner on owner.id = product.group_id
-            left join images image on image.id = product.image_id
-            where product.kind <> 'activity_visibility'
-            and ($2::uuid is null or exists (
-                select 1 from product_activity_assignments assignment
-                where assignment.product_id = product.id
-                and assignment.activity_id = $2
-            ))
-            and ($3::uuid is null or product.group_id = $3)
-            and (
-                ($2::uuid is null and $3::uuid is null
-                    and product.store_online_self_serve)
-                or exists (
-                    select 1
-                    from product_allowed_groups allowed
-                    inner join group_memberships membership
-                        on membership.user_id = $1
-                    inner join groups member_group
-                        on member_group.id = membership.group_id
-                    inner join groups allowed_group
-                        on allowed_group.id = allowed.group_id
-                        and allowed_group.path @> member_group.path
-                    where allowed.product_id = product.id
-                    and (
-                        not membership.specific
-                        or allowed.group_id = membership.group_id
-                    )
-                )
-                or exists (
-                    select 1 from product_buyers buyer
-                    where buyer.product_id = product.id and buyer.user_id = $1
-                )
-                or exists (
-                    select 1 from purchases owned
-                    where owned.product_id = product.id
-                    and owned.owner_id = $1
-                )
-            )
-            order by product.sales_start, product.name->>'en'"#,
-            user.get_id(),
+        load_products(
+            self,
+            ProductAccess::User(user.get_id()),
             activity_id.0,
             group_id.0,
+            None,
         )
-        .map(|row| AppProduct {
-            id: row.id,
-            group_id: row.group_id,
-            group_path: row.group_path,
-            group_name: row.group_name.0,
-            kind: row.kind,
-            purchased_by_me: row.purchased_by_me,
-            name: row.name.0,
-            description: row.description.0,
-            image_url: row.image_url,
-            price: row.price.0,
-            max_uses: row.max_uses,
-            sales_stock: row.sales_stock,
-            sales_start: row.sales_start,
-            sales_stop: row.sales_stop,
-            resale_start: row.resale_start,
-            resale_stop: row.resale_stop,
-            tickets_been_released: row.tickets_been_released,
-            store_general_sales: row.store_general_sales,
-            store_online_self_serve: row.store_online_self_serve,
-            activity_ids: row.activity_ids,
-        })
-        .fetch_all(&self.db)
-        .await?;
-
-        Ok(Json(products))
+        .await
+        .map(Json)
     }
 
     /// A product with the add-ons that can be selected when buying it.
@@ -460,84 +784,9 @@ impl AppRouter {
         user: User,
         Path(id): Path<Uuid>,
     ) -> MinilithResult<Json<AppProductDetails>> {
-        let product = sqlx::query!(
-            r#"select
-                product.id,
-                product.group_id,
-                owner.path::text as "group_path!",
-                owner.name as "group_name!: DIS",
-                product.kind as "kind!: ProductKind",
-                product.name as "name!: DIS",
-                product.description as "description!: DIS",
-                image.url as "image_url?",
-                product.sales_price as "price!",
-                product.max_uses,
-                product.sales_stock,
-                product.sales_start,
-                product.sales_stop,
-                product.resale_start,
-                product.resale_stop,
-                product.tickets_been_released,
-                product.store_general_sales,
-                product.store_online_self_serve,
-                coalesce(
-                    (select array_agg(assignment.activity_id)
-                        from product_activity_assignments assignment
-                        where assignment.product_id = product.id),
-                    '{}'::uuid[]
-                ) as "activity_ids!: Vec<Uuid>",
-                exists (
-                    select 1 from purchases owned
-                    where owned.product_id = product.id
-                    and owned.owner_id = $2
-                    and owned.refunded_id is null
-                ) as "purchased_by_me!"
-            from products product
-            inner join groups owner on owner.id = product.group_id
-            left join images image on image.id = product.image_id
-            where product.id = $1"#,
-            id,
-            user.get_id(),
-        )
-        .fetch_optional(&self.db)
-        .await?
-        .wrap_err_not_found()?;
-        let product = AppProduct {
-            id: product.id,
-            group_id: product.group_id,
-            group_path: product.group_path,
-            group_name: product.group_name.0,
-            kind: product.kind,
-            purchased_by_me: product.purchased_by_me,
-            name: product.name.0,
-            description: product.description.0,
-            image_url: product.image_url,
-            price: product.price.0,
-            max_uses: product.max_uses,
-            sales_stock: product.sales_stock,
-            sales_start: product.sales_start,
-            sales_stop: product.sales_stop,
-            resale_start: product.resale_start,
-            resale_stop: product.resale_stop,
-            tickets_been_released: product.tickets_been_released,
-            store_general_sales: product.store_general_sales,
-            store_online_self_serve: product.store_online_self_serve,
-            activity_ids: product.activity_ids,
-        };
-        ensure_product_visible(self, &product, user.get_id()).await?;
-
-        let mut txn = self.db.begin().await?;
-        let available_addons = super::load_addons(
-            &mut txn,
-            product.activity_ids.first().copied().unwrap_or(id),
-            Some(id),
-        )
-        .await?;
-
-        Ok(Json(AppProductDetails {
-            product,
-            available_addons,
-        }))
+        load_product(self, ProductAccess::User(user.get_id()), id)
+            .await
+            .map(Json)
     }
 
     /// All purchases the caller bought or owns, including transferred ones.
@@ -600,7 +849,7 @@ impl AppRouter {
                 product.id as product_id,
                 product.name as "product_name!: DIS",
                 product.kind as "kind!: ProductKind",
-                purchase.product_price,
+                purchase.paid_price,
                 purchase.purchased_at,
                 purchase.activity_id,
                 activity.title as "activity_title?: DIS",
@@ -614,6 +863,12 @@ impl AppRouter {
                 product.max_uses,
                 (select count(*)::int from purchase_uses used
                     where used.purchase_id = purchase.id) as "uses_count!",
+                case when purchase.owner_id = $1 then
+                    (select used.id from purchase_uses used
+                        where used.purchase_id = purchase.id
+                        order by used.timestamp desc, used.id desc
+                        limit 1)
+                end as "last_use_id?",
                 purchase.for_resale,
                 product.resale_start,
                 product.resale_stop,
@@ -638,7 +893,7 @@ impl AppRouter {
             product_id: row.product_id,
             product_name: row.product_name.0,
             kind: row.kind,
-            product_price: row.product_price.0,
+            paid_price: row.paid_price.0,
             purchased_at: row.purchased_at,
             activity_id: row.activity_id,
             activity_title: row.activity_title.map(|title| title.0),
@@ -651,6 +906,7 @@ impl AppRouter {
             owned_by_me: row.owned_by_me,
             uses_left: row.max_uses - row.uses_count,
             max_uses: row.max_uses,
+            last_use_id: row.last_use_id,
             for_resale: row.for_resale.map(|price| price.0),
             refunded: row.refunded,
             transferable: transfer::is_transferable(
@@ -681,30 +937,47 @@ impl AppRouter {
         catalog::receipt(self, auth, id).await
     }
 
-    /// Take one use out of a purchase (e.g. a clip card or a physical item).
+    /// Start a use of a purchase (e.g. a clip card or a physical item).
+    ///
+    /// Every call inserts a new use and consumes one of `max_uses`. The returned
+    /// `use_id` is the QR payload the verifier scans; `GET /purchases` exposes the
+    /// latest one as `last_use_id` so the app can keep showing the same QR.
+    ///
+    /// **Using a purchase makes it non-transferable and non-resellable** (both
+    /// operations reject purchases with any use, see `POST /purchases/:id/transfer`
+    /// and `POST /purchases/:id/resale`). It also removes an existing resale listing.
+    /// The app must only call this when the user explicitly wants to use the
+    /// purchase, never just to display a ticket.
     ///
     /// # Errors
     ///
-    /// AUTH, DB, NOT FOUND.
-    #[oai(path = "/purchases/:id/uses", method = "post")]
+    /// AUTH, DB, NOT FOUND. The purchase must be owned, unrefunded, have a use
+    /// left and not be in the middle of a resale.
+    #[oai(path = "/purchases/:id/use", method = "post")]
     async fn use_purchase(
         &self,
         user: User,
         Path(id): Path<Uuid>,
     ) -> MinilithResult<Json<AppUseResponse>> {
+        let mut txn = self.db.begin().await?;
+        // Lock the purchase so concurrent `/use` calls cannot both pass the
+        // `max_uses` check.
         let purchase = sqlx::query!(
             r#"select
                 purchase.owner_id,
                 (purchase.refunded_id is not null) as "refunded!",
+                (purchase.for_resale is not null) as "for_resale!",
+                (purchase.resale_transaction_id is not null) as "resale_in_progress!",
                 product.max_uses,
                 (select count(*)::int from purchase_uses used
                     where used.purchase_id = purchase.id) as "uses_count!"
             from purchases purchase
             inner join products product on product.id = purchase.product_id
-            where purchase.id = $1"#,
+            where purchase.id = $1
+            for update of purchase"#,
             id,
         )
-        .fetch_optional(&self.db)
+        .fetch_optional(&mut txn.executor())
         .await?
         .wrap_err_not_found()?;
         if purchase.owner_id != user.get_id() {
@@ -719,6 +992,12 @@ impl AppRouter {
                 "",
             ));
         }
+        if purchase.resale_in_progress {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "purchase is being resold and cannot be used",
+                "",
+            ));
+        }
         let uses_left = purchase.max_uses - purchase.uses_count;
         if uses_left <= 0 {
             return Err(MinilithEndpointError::bad_frontend_code(
@@ -726,13 +1005,20 @@ impl AppRouter {
                 "",
             ));
         }
-        sqlx::query!(
-            "insert into purchase_uses (id, purchase_id) values (uuidv4(), $1)",
+        if purchase.for_resale {
+            sqlx::query!("update purchases set for_resale = null where id = $1", id)
+                .execute(&mut txn.executor())
+                .await?;
+        }
+        let use_id = sqlx::query_scalar!(
+            "insert into purchase_uses (id, purchase_id) values (uuidv4(), $1) returning id",
             id
         )
-        .execute(&self.db)
+        .fetch_one(&mut txn.executor())
         .await?;
+        txn.commit().await?;
         Ok(Json(AppUseResponse {
+            use_id,
             uses_left: uses_left - 1,
         }))
     }
@@ -740,7 +1026,9 @@ impl AppRouter {
     /// Buy a purchase that is listed for resale.
     ///
     /// Charges the resale price plus the seller's refund fee and the new
-    /// transaction fee. Add-ons stay exactly as they were.
+    /// transaction fee. Add-ons stay exactly as they were. A used purchase is
+    /// never offered: using one removes its listing and both listing and buying
+    /// reject purchases with any use.
     ///
     /// # Errors
     ///
@@ -761,7 +1049,7 @@ impl AppRouter {
     ///
     /// Only allowed when every transaction of the purchase is attached to a
     /// transaction id, otherwise a refund cannot be guaranteed to reach the
-    /// right person.
+    /// right person. A used purchase cannot be listed.
     ///
     /// # Errors
     ///
@@ -774,6 +1062,13 @@ impl AppRouter {
         Json(body): Json<AppResaleRequest>,
     ) -> MinilithResult<()> {
         super::ensure_price_is_allowed(body.price)?;
+        let mut txn = self.db.begin().await?;
+        // Serialize with `POST /purchases/{id}/use` (which locks the same row) so a
+        // use that commits concurrently cannot slip past the "unused" check below.
+        sqlx::query_scalar!("select id from purchases where id = $1 for update", id)
+            .fetch_optional(&mut txn.executor())
+            .await?
+            .wrap_err_not_found()?;
         let result = sqlx::query!(
             r#"update purchases purchase
             set for_resale = $3::money
@@ -789,12 +1084,16 @@ impl AppRouter {
                 where transaction.purchase_id = purchase.id
                 and transaction.transaction_id is null
             )
+            and not exists (
+                select 1 from purchase_uses used
+                where used.purchase_id = purchase.id
+            )
             and $3::money <= purchase.paid_price"#,
             id,
             user.get_id(),
             sqlx::postgres::types::PgMoney(body.price),
         )
-        .execute(&self.db)
+        .execute(&mut txn.executor())
         .await?;
         if result.rows_affected() == 0 {
             return Err(MinilithEndpointError::bad_frontend_code(
@@ -802,6 +1101,7 @@ impl AppRouter {
                 "",
             ));
         }
+        txn.commit().await?;
         Ok(())
     }
 
@@ -869,6 +1169,10 @@ impl AppRouter {
 
     /// Buy the reserved product.
     ///
+    /// With `reader_id`, the payment starts on that `SumUp` reader and the reservation flow is
+    /// bypassed completely: no reservation is consumed, and an existing reservation is left to
+    /// time out. Clients that pay on a reader must not queue/reserve first.
+    ///
     /// # Errors
     ///
     /// AUTH, DB.
@@ -895,6 +1199,7 @@ impl AppRouter {
                     })
                     .collect(),
                 redirect_url: body.redirect_url,
+                reader_id: body.reader_id,
             },
         )
         .await
@@ -902,6 +1207,8 @@ impl AppRouter {
     }
 
     /// Transfer an owned purchase to another user.
+    ///
+    /// A used purchase cannot be transferred (see `POST /purchases/{id}/use`).
     ///
     /// # Errors
     ///
@@ -939,18 +1246,25 @@ impl AppRouter {
             .map(Json)
     }
 
-    /// Validate (scan) a purchase and consume one use.
+    /// Validate (scan) a use.
+    ///
+    /// `use_id` is a `purchase_uses.id` from `POST /purchases/{id}/use`. Scanning
+    /// records a `purchase_use_validations` row; it does not consume a use. Repeat
+    /// scans are allowed and returned as `previous_verifications`. A used purchase
+    /// can no longer be transferred or resold.
     ///
     /// # Errors
     ///
     /// AUTH, DB.
-    #[oai(path = "/validate", method = "post")]
+    #[oai(path = "/purchase-uses/validate", method = "post")]
     async fn validate(
         &self,
         auth: User,
-        Json(body): Json<ValidateRequest>,
+        Json(body): Json<ValidateUseRequest>,
     ) -> MinilithResult<Json<ValidateResponse>> {
-        validation::validate(self, auth, body).await.map(Json)
+        validation::validate(self, auth, body.use_id, body.created_at)
+            .await
+            .map(Json)
     }
 
     /// Fetch an activity and record that the user viewed it.

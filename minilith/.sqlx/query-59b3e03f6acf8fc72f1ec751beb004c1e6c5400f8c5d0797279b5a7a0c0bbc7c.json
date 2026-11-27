@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select flow.user_id\n        from users_in_purchase_flow flow\n        inner join product_reservation_queuers queuer\n            on queuer.user_id = flow.user_id\n            and queuer.product_id = flow.product_id\n        inner join products queue_kind on queue_kind.id = queuer.product_id\n        inner join products wanted\n            on wanted.id = coalesce(queuer.original_product_id, queuer.product_id)\n        where flow.reservation_queue = flow.user_id\n        -- neither the kind they are queued in nor the kind they want can free a unit anymore\n        and coalesce(queue_kind.sales_stock, 0) <= 0\n        and not exists (\n            select 1 from product_reservations reservation\n            where reservation.product_id = queue_kind.id\n        )\n        and coalesce(wanted.sales_stock, 0) <= 0\n        and not exists (\n            select 1 from product_reservations reservation\n            where reservation.product_id = wanted.id\n        )\n        order by flow.user_id\n        for update of flow skip locked",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_id",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "59b3e03f6acf8fc72f1ec751beb004c1e6c5400f8c5d0797279b5a7a0c0bbc7c"
+}

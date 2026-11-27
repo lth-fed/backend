@@ -8,7 +8,7 @@ use super::{
         reserve_user_purchase_flow, set_user_purchase_flow_release_queue,
         set_user_purchase_flow_reservation_queue,
     },
-    release::{release, remove_expired_release_queuers},
+    release::{release_group, remove_expired_release_queuers},
 };
 use crate::MinilithResult;
 
@@ -60,15 +60,21 @@ async fn reservation_capacity_comes_from_product_stock(db: sqlx::PgPool) {
 
     let mut txn = db.begin().await.unwrap();
     assert_eq!(
-        reserve_ticket_capacity(&mut txn, first, 2).await.unwrap(),
+        reserve_ticket_capacity(&mut txn, first, 2, true)
+            .await
+            .unwrap(),
         2
     );
     assert_eq!(
-        reserve_ticket_capacity(&mut txn, second, 2).await.unwrap(),
+        reserve_ticket_capacity(&mut txn, second, 2, true)
+            .await
+            .unwrap(),
         2
     );
     assert_eq!(
-        reserve_ticket_capacity(&mut txn, first, 1).await.unwrap(),
+        reserve_ticket_capacity(&mut txn, first, 1, true)
+            .await
+            .unwrap(),
         1
     );
     txn.commit().await.unwrap();
@@ -97,7 +103,7 @@ async fn concurrent_ticket_kinds_cannot_exceed_activity_capacity(db: sqlx::PgPoo
         let db = db.clone();
         async move {
             let mut txn = db.begin().await.unwrap();
-            let granted = reserve_ticket_capacity(&mut txn, ticket_kind, 2)
+            let granted = reserve_ticket_capacity(&mut txn, ticket_kind, 2, true)
                 .await
                 .unwrap();
             txn.commit().await.unwrap();
@@ -167,7 +173,9 @@ async fn release_moves_every_flow_and_removes_release_rows(db: sqlx::PgPool) {
         .unwrap();
 
     let txn = db.begin().await.unwrap();
-    release(None, txn, ticket_kind).await.unwrap();
+    release_group(None, txn, ticket_kind, vec![ticket_kind])
+        .await
+        .unwrap();
 
     let release_count = sqlx::query_scalar!(
         "select count(*) from product_release_queuers where product_id = $1",
@@ -299,8 +307,8 @@ async fn purchase_flow_rejects_second_ticket_for_one_activity(db: sqlx::PgPool) 
     let purchase = Uuid::new_v4();
     sqlx::query!(
         "insert into purchases
-            (id, product_id, product_price, paid_price, purchaser_id, owner_id, purchased_at)
-            values ($1, $2, 0::money, 0::money, $3, $3, now())",
+            (id, product_id, paid_price, purchaser_id, owner_id, purchased_at)
+            values ($1, $2, 0::money, $3, $3, now())",
         purchase,
         first,
         "test:purchase-flow-1",

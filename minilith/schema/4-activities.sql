@@ -35,7 +35,7 @@ create table activities (
     -- they sell out for individual tickets.
     -- Must always exist due to visibility concerns.
     base_ticket uuid not null,
-    max_tickets_per_user integer not null check (max_tickets_per_user >= 1),
+    max_tickets_per_user integer not null default 1 check (max_tickets_per_user >= 1),
 
     -- for sales of stock items either:
     -- - to users in app at this activity 
@@ -48,6 +48,8 @@ create table activities (
 create table activity_tags (
     id uuid primary key,
     creator_id uuid not null references groups(id),
+    -- hide instead of deleting so existing assignments and opt-outs stay valid
+    hidden bool not null default false,
     title jsonb not null
 );
 create table activity_assigned_tags (

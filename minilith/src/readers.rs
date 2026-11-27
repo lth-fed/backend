@@ -246,6 +246,26 @@ pub async fn attach_local(
     Ok(())
 }
 
+/// Removes a reader from the provider's merchant account.
+///
+/// # Errors
+///
+/// Returns an error if the `transactions` service rejects the request.
+pub async fn detach_remote(ctx: &ContextWrapper, id: &str) -> MinilithResult<()> {
+    let response = ctx
+        .transactions_delete(format!("/v0/readers/{id}"))
+        .send()
+        .await
+        .wrap_err_internal("failed to delete reader")?;
+    if !response.status().is_success() {
+        return Err(minilith_errors::MinilithEndpointError::bad_frontend_code(
+            "SumUp rejected the reader deletion",
+            response.text().await.unwrap_or_default(),
+        ));
+    }
+    Ok(())
+}
+
 /// # Errors
 ///
 /// DB errors.

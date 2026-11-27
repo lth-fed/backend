@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select placement, coalesce(original_product_id, product_id) as \"product_id!\"\n                    from product_reservation_queuers\n                    where user_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "placement",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "product_id!",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "f28cf913958d0c333aed7bfc0df3fc1e02e26a19ec2ea785cfe13be6a7dc3905"
+}

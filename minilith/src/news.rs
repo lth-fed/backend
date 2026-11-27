@@ -111,6 +111,24 @@ struct AdminQuestionnaire {
     questions: Vec<AdminQuestion>,
 }
 
+/// The push title starts with the group's name so recipients see who sent it.
+fn title_with_sender(sender: &IS, title: &IS) -> IS {
+    let prefixed = title
+        .0
+        .iter()
+        .map(|(language, text)| {
+            let name = sender.resolve_intl(language, "");
+            let text = if name.is_empty() {
+                text.clone()
+            } else {
+                format!("{name}: {text}")
+            };
+            (language.clone(), text)
+        })
+        .collect();
+    IS(prefixed)
+}
+
 #[derive(Debug, Object)]
 struct AdminNews {
     #[oai(flatten)]
@@ -347,10 +365,16 @@ async fn load_questionnaire(
                     responses: option_counts.get(&idx).copied().unwrap_or(0),
                 })
                 .collect();
+            // A free-text answer may hold several answers, one per line.
             let text_responses = answers
                 .into_iter()
-                .map(|(_, text)| text)
-                .filter(|text| !text.trim().is_empty())
+                .flat_map(|(_, text)| {
+                    text.split('\n')
+                        .map(str::trim)
+                        .filter(|line| !line.is_empty())
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>()
+                })
                 .collect();
             Ok(AdminQuestion {
                 id: addon_id,
@@ -551,7 +575,7 @@ impl AdminRouter {
             where push_notifications.sent = false"#,
             notification_id,
             sender.to_json_value(),
-            body.title.to_json_value(),
+            title_with_sender(&sender, &body.title).to_json_value(),
             body.content.to_json_value(),
             body.published_at,
         )
@@ -649,72 +673,6 @@ impl AdminRouter {
         Ok(Json(visible_tags(&self.db, group_id.0).await?))
     }
 
-    /// Creates or renames a news tag. `creator_id` must be a group the caller directly administers.
-    ///
-    /// # Errors
-    ///
-    /// `AUTH`, `DB`.
-    #[oai(path = "/news-tags/:id", method = "put")]
-    async fn put_news_tag(
-        &self,
-        user: User,
-        Path(id): Path<Uuid>,
-        Json(body): Json<PutNewsTag>,
-    ) -> MinilithResult<Json<AdminNewsTag>> {
-        check_direct_adminship(&self.db, user.get_id(), body.creator_id).await?;
-        sqlx::query!(
-            r#"insert into news_tags (id, creator_id, title) values ($1, $2, $3)
-            on conflict (id) do update set creator_id = excluded.creator_id, title = excluded.title"#,
-            id,
-            body.creator_id,
-            body.title.to_json_value(),
-        )
-        .execute(&self.db)
-        .await?;
-        let path = sqlx::query_scalar!(
-            "select path::text as \"path!\" from groups where id = $1",
-            body.creator_id
-        )
-        .fetch_one(&self.db)
-        .await?;
-        Ok(Json(AdminNewsTag {
-            id,
-            creator_id: body.creator_id,
-            creator_path: path,
-            title: body.title,
-        }))
-    }
-
-    /// Deletes a news tag that is not assigned to any post.
-    ///
-    /// # Errors
-    ///
-    /// `AUTH`, `DB`, `NOT_FOUND`, `BAD_REQUEST`.
-    #[oai(path = "/news-tags/:id", method = "delete")]
-    async fn delete_news_tag(&self, user: User, Path(id): Path<Uuid>) -> MinilithResult<()> {
-        let creator_id = sqlx::query_scalar!("select creator_id from news_tags where id = $1", id)
-            .fetch_optional(&self.db)
-            .await?
-            .wrap_err_not_found()?;
-        check_direct_adminship(&self.db, user.get_id(), creator_id).await?;
-        let is_assigned = sqlx::query_scalar!(
-            r#"select exists (select 1 from news_assigned_tags where tag_id = $1) as "used!""#,
-            id
-        )
-        .fetch_one(&self.db)
-        .await?;
-        if is_assigned {
-            return Err(MinilithEndpointError::bad_frontend_code(
-                "tag is assigned to a post",
-                "remove it from every post first",
-            ));
-        }
-        sqlx::query!("delete from news_tags where id = $1", id)
-            .execute(&self.db)
-            .await?;
-        Ok(())
-    }
-
     /// Creates or replaces the questionnaire attached to a news post.
     ///
     /// # Errors
@@ -751,47 +709,23 @@ impl AdminRouter {
                 "configure a sales target for the group or its guild first",
             )
         })?;
-        let bookkeeping_tag = sqlx::query_scalar!(
-            r#"select tag.id from product_tags tag
-            inner join groups owner on owner.id = tag.group_id
-            inner join groups news_group on news_group.id = $1
-            where news_group.path @> owner.path
-            order by tag.group_id
-            limit 1"#,
-            group_id
-        )
-        .fetch_optional(&mut txn.executor())
-        .await?
-        .ok_or_else(|| {
-            MinilithEndpointError::bad_frontend_code(
-                "the group has no bookkeeping tag for questionnaires",
-                "create a product tag for the guild first",
-            )
-        })?;
-
         // The post id doubles as the questionnaire product id and add-on set id.
         sqlx::query!(
-            r#"insert into products (id, group_id, kind, name, description, sales_price,
-                sales_organization, stock_real, stock_unit, stock_price, bookkeeping_tag,
+            r#"insert into products (id, group_id, kind, name, description,
+                sales_organization, stock_real, stock_unit, stock_price,
                 sales_start, sales_stop, resale_start, resale_stop)
-            values ($1, $2, 'questionnaire', $3, '{}'::jsonb, 0, $4, 1, 'st', 0, $5,
+            values ($1, $2, 'questionnaire', $3, '{}'::jsonb, $4, 1, 'st', 0,
                 now(), now() + interval '100 years', now(), now() + interval '100 years')
             on conflict (id) do update set name = excluded.name"#,
             id,
             group_id,
             body.title.to_json_value(),
             sales_target,
-            bookkeeping_tag,
         )
         .execute(&mut txn.executor())
         .await?;
-        sqlx::query!(
-            r#"insert into product_addon_sets (id, activity_id) values ($1, null)
-            on conflict (id) do nothing"#,
-            id
-        )
-        .execute(&mut txn.executor())
-        .await?;
+        // Free, so the base price books nothing.
+        crate::admin_addons::save_base_price_addon(&mut txn, id, &body.title, 0, &[], &[]).await?;
         sqlx::query!(
             r#"insert into product_allowed_groups (product_id, group_id) values ($1, $2)
             on conflict do nothing"#,
@@ -863,12 +797,6 @@ impl AdminRouter {
         txn.commit().await?;
         Ok(())
     }
-}
-
-#[derive(Debug, Object)]
-struct PutNewsTag {
-    creator_id: Uuid,
-    title: IS,
 }
 
 #[OpenApi(prefix_path = "/v1")]

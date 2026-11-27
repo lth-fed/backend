@@ -14,10 +14,8 @@ use crate::{
 struct PurchasedTicket {
     id: Uuid,
     ticket_kind_id: Uuid,
-    transaction_id: Uuid,
     /// Set by an admin refund of the purchase; resales never set it.
     refunded_id: Option<Uuid>,
-    product_price: PgMoney,
     /// What the current owner paid (ticket + addons; the resale price after a resale).
     paid_price: PgMoney,
 }
@@ -84,6 +82,7 @@ pub(crate) async fn generate_activity_report(
         None,
         None,
         None,
+        None,
         language,
         activity_name,
         activity.creator_name.0,
@@ -106,6 +105,7 @@ pub(crate) async fn generate_group_report(
     start: Option<time::OffsetDateTime>,
     end: Option<time::OffsetDateTime>,
     activity_id: Option<Uuid>,
+    product_id: Option<Uuid>,
     language: report::Language,
 ) -> MinilithResult<GeneratedReport> {
     let group = sqlx::query!(
@@ -123,6 +123,7 @@ pub(crate) async fn generate_group_report(
     generate_report(
         ctx,
         activity_id,
+        product_id,
         Some(group_id),
         start,
         end,
@@ -152,6 +153,7 @@ fn language_code(language: report::Language) -> &'static str {
 async fn generate_report(
     ctx: &ContextWrapper,
     activity_id: Option<Uuid>,
+    product_id: Option<Uuid>,
     group_id: Option<Uuid>,
     start: Option<time::OffsetDateTime>,
     end: Option<time::OffsetDateTime>,
@@ -195,11 +197,7 @@ async fn generate_report(
     let tickets = sqlx::query_as!(
         PurchasedTicket,
         r#"select purchases.id, purchases.product_id as ticket_kind_id,
-            purchases.product_price as "product_price!",
             purchases.paid_price as "paid_price!",
-            (select transaction_id from purchase_transactions
-                where purchase_id = purchases.id and transaction_id is not null
-                order by completed_at limit 1) as "transaction_id!",
             purchases.refunded_id
         from purchases
         inner join products on products.id = purchases.product_id
@@ -207,8 +205,9 @@ async fn generate_report(
         and (case when $2::uuid is null then products.kind = 'ticket' else products.group_id = $2 end)
         and ($3::timestamptz is null or purchases.purchased_at >= $3)
         and ($4::timestamptz is null or purchases.purchased_at < $4)
+        and ($5::uuid is null or purchases.product_id = $5)
         order by purchases.id"#,
-        activity_id, group_id, start, end,
+        activity_id, group_id, start, end, product_id,
     )
     .fetch_all(&ctx.db)
     .await?;
@@ -224,14 +223,15 @@ async fn generate_report(
         )
         .fetch_one(&ctx.db)
         .await?;
-        // A product can have add-ons from multiple sets; load each linked set.
+        // A product can have add-ons from multiple sets; load each linked set, base price included.
         let sets = sqlx::query_scalar!(
             "select distinct addon.set_id from product_addons addon inner join product_addon_links link on link.addon_id = addon.id where link.product_id = $1", id
         ).fetch_all(&ctx.db).await?;
         let mut available = Vec::new();
         for set in sets {
-            available
-                .extend(product::load_addons(&mut ctx.db.begin().await?, set, Some(id)).await?);
+            available.extend(
+                product::load_addons(&mut ctx.db.begin().await?, set, Some(id), true).await?,
+            );
         }
         kinds.insert(
             id,
@@ -253,8 +253,9 @@ async fn generate_report(
         where ($1::uuid is null or purchases.activity_id = $1)
         and (case when $2::uuid is null then products.kind = 'ticket' else products.group_id = $2 end)
         and ($3::timestamptz is null or purchases.purchased_at >= $3)
-        and ($4::timestamptz is null or purchases.purchased_at < $4)"#,
-        activity_id, group_id, start, end,
+        and ($4::timestamptz is null or purchases.purchased_at < $4)
+        and ($5::uuid is null or purchases.product_id = $5)"#,
+        activity_id, group_id, start, end, product_id,
     )
     .map(|row| {
         (
@@ -277,18 +278,28 @@ async fn generate_report(
         },
     );
 
-    // Fees are only ever taken from the purchase's first transaction. For purchases that were
-    // refunded we additionally need the refunded transaction's provider to quote the refund fee.
-    let mut transaction_ids = tickets
-        .iter()
-        .map(|ticket| ticket.transaction_id)
-        .collect::<Vec<_>>();
-    transaction_ids.extend(
-        tickets
-            .iter()
-            .filter(|ticket| ticket.is_refunded())
-            .filter_map(|ticket| ticket.refunded_id),
-    );
+    // Every transaction of a purchase is a fee: the original sale, each resale, and the refunds
+    // they caused (a resale refunds the previous owner). The provider charges those to us, so the
+    // report has to account for all of them.
+    let mut transaction_ids = sqlx::query_scalar!(
+        r#"select transaction_id as "transaction_id!"
+        from purchase_transactions
+        inner join purchases on purchases.id = purchase_transactions.purchase_id
+        inner join products on products.id = purchases.product_id
+        where transaction_id is not null
+        and ($1::uuid is null or purchases.activity_id = $1)
+        and (case when $2::uuid is null then products.kind = 'ticket' else products.group_id = $2 end)
+        and ($3::timestamptz is null or purchases.purchased_at >= $3)
+        and ($4::timestamptz is null or purchases.purchased_at < $4)
+        and ($5::uuid is null or purchases.product_id = $5)"#,
+        activity_id,
+        group_id,
+        start,
+        end,
+        product_id,
+    )
+    .fetch_all(&ctx.db)
+    .await?;
     transaction_ids.sort_unstable();
     transaction_ids.dedup();
     let transaction_info = if transaction_ids.is_empty() {
@@ -308,13 +319,20 @@ async fn generate_report(
             .map(|info| (info.id, info))
             .collect::<HashMap<_, _>>()
     };
-    let fees: i64 = tickets
-        .iter()
-        .filter_map(|ticket| transaction_info.get(&ticket.transaction_id))
-        .map(|info| info.total_fees)
+    let fees: i64 = transaction_info
+        .values()
+        .map(|info| info.purchase_fees)
         .sum();
-    let mut fees_refund: i64 = 0;
-    let mut swish_refund_fee: Option<i64> = None;
+    let fees_refund: i64 = transaction_info
+        .values()
+        .filter(|info| {
+            matches!(
+                info.state,
+                fed_auth_verifier::callbacks::TransactionState::Refunded
+            )
+        })
+        .map(|info| info.refund_fee)
+        .sum();
 
     let mut per_object = BTreeMap::new();
     let mut per_refund = BTreeMap::new();
@@ -324,13 +342,10 @@ async fn generate_report(
             .get(&purchased_ticket.ticket_kind_id)
             .wrap_err_internal("accounting: purchased ticket kind is missing")?;
         let kind_name = kind.name.resolve_intl(lang, "");
-        // The price actually paid is snapshotted on the purchase; the product's price may have
-        // changed since (or been discounted), so only the snapshot counts as income.
-        let ticket_price = purchased_ticket.product_price.0;
-        *per_object
-            .entry((report::Kind::Ticket, kind_name.to_owned(), ticket_price))
-            .or_insert(0) += 1;
-        let mut contributions = vec![("null".to_owned(), ticket_price)];
+        // The price actually paid is snapshotted in the purchase's add-ons (the product's own price
+        // is its base-price add-on); the catalogue price may have changed since, so only the
+        // snapshot counts as income.
+        let mut contributions = Vec::new();
 
         for addon in addons.get(&purchased_ticket.id).into_iter().flatten() {
             let addon_data = kind
@@ -354,9 +369,7 @@ async fn generate_report(
                     addon_data.inner.name.resolve_intl(lang, ""),
                     option.name.resolve_intl(lang, "")
                 );
-                *per_object
-                    .entry((report::Kind::Option, name, price))
-                    .or_insert(0) += 1;
+                *per_object.entry((name, price)).or_insert(0) += 1;
                 contributions.extend(allocate_across_categories(
                     price,
                     &option.bookkeeping_price_categories,
@@ -366,21 +379,10 @@ async fn generate_report(
         }
 
         if purchased_ticket.is_refunded() {
-            let refunded = purchased_ticket
-                .refunded_id
-                .and_then(|id| transaction_info.get(&id));
             // A resold purchase is refunded at what its owner paid, not at the original price.
             let refunded_amount = purchased_ticket.paid_price.0;
-            let provider = refunded.and_then(|info| info.provider);
-            fees_refund +=
-                refund_fee(ctx, provider, refunded_amount, &mut swish_refund_fee).await?;
-            // A resale's transaction also contains fee wares (the refund fee for the previous
-            // owner and its own payment fee). A full refund returns those to the buyer, but the
-            // provider kept its cut and the earlier refund fee is spent, so they are a cost of
-            // this refund rather than product income.
-            fees_refund += refunded.map_or(0, |info| (info.total - refunded_amount).max(0));
             *per_refund
-                .entry((report::Kind::Refund, kind_name.to_owned(), refunded_amount))
+                .entry((kind_name.to_owned(), refunded_amount))
                 .or_insert(0) += 1;
             for (category, amount) in contributions {
                 *per_alcohol_category.entry(category).or_insert(0) -= amount;
@@ -393,11 +395,9 @@ async fn generate_report(
     }
     let total_sales = per_object
         .iter()
-        .fold(0, |acc, ((_, _, price), number)| acc + price * number);
+        .fold(0, |acc, ((_, price), number)| acc + price * number);
     for (category, total) in external_sales {
-        *per_object
-            .entry((report::Kind::External, category.clone(), total))
-            .or_insert(0) += 1;
+        *per_object.entry((category.clone(), total)).or_insert(0) += 1;
         *per_alcohol_category.entry(category).or_insert(0) += total;
     }
 
@@ -413,18 +413,16 @@ async fn generate_report(
         fees_refund,
         per_object: per_object
             .into_iter()
-            .map(|((kind, name, price), number)| report::Object {
+            .map(|((name, price), number)| report::Object {
                 name,
-                kind,
                 price,
                 number,
             })
             .collect(),
         per_refund: per_refund
             .into_iter()
-            .map(|((kind, name, price), number)| report::Object {
+            .map(|((name, price), number)| report::Object {
                 name,
-                kind,
                 price,
                 number,
             })
@@ -474,36 +472,4 @@ fn allocate_across_categories(
         *first += price - allocated;
     }
     shares
-}
-
-/// Quotes the provider's refund fee. `Swish` charges a flat fee per refund and everything else is
-/// free, so a single quote per report is cached.
-async fn refund_fee(
-    ctx: &ContextWrapper,
-    provider: Option<transactions::Provider>,
-    amount: i64,
-    cached: &mut Option<i64>,
-) -> MinilithResult<i64> {
-    match provider {
-        Some(transactions::Provider::Swish) => {
-            if let Some(fee) = *cached {
-                return Ok(fee);
-            }
-            let fee = product::fee_quote(
-                ctx,
-                product::PurchaseProvider::Swish,
-                amount,
-                transactions::FeeKind::Refund,
-            )
-            .await?;
-            *cached = Some(fee);
-            Ok(fee)
-        }
-        Some(
-            transactions::Provider::Sumup
-            | transactions::Provider::Free
-            | transactions::Provider::Stripe,
-        )
-        | None => Ok(0),
-    }
 }

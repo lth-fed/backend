@@ -47,23 +47,37 @@ pub(super) async fn reserve_user_purchase_flow(
         .zip(skip_activity_check.iter().copied())
         .filter(|(_, skip)| !skip)
     {
-        let has_purchased_ticket_for_activity = sqlx::query_scalar!(
-            "select exists (
+        // Only ticket products are limited: buying a drink at the activity must neither use up nor
+        // be blocked by the activity's ticket allowance, and a transferred ticket counts for its
+        // new owner.
+        let activity_is_full = sqlx::query_scalar!(
+            r#"select exists (
                 select 1
                 from product_activity_assignments target
-                inner join product_activity_assignments other
-                    on other.activity_id = target.activity_id
-                inner join purchases pt on pt.product_id = other.product_id
-                where target.product_id = $2 and pt.owner_id = $1
-            ) as \"exists!\"",
+                inner join activities activity on activity.id = target.activity_id
+                inner join products purchased on purchased.id = target.product_id
+                where target.product_id = $2
+                and purchased.kind = 'ticket'
+                and (
+                    select count(*)
+                    from purchases owned
+                    inner join products owned_kind on owned_kind.id = owned.product_id
+                    inner join product_activity_assignments owned_assignment
+                        on owned_assignment.product_id = owned.product_id
+                        and owned_assignment.activity_id = target.activity_id
+                    where owned.owner_id = $1
+                    and owned_kind.kind = 'ticket'
+                    and owned.refunded_id is null
+                ) >= activity.max_tickets_per_user
+            ) as "exists!""#,
             user_id,
             ticket_kind
         )
         .fetch_one(&mut db.executor())
         .await?;
-        if has_purchased_ticket_for_activity {
+        if activity_is_full {
             return Err(MinilithEndpointError::bad_frontend_code(
-                "cannot own two tickets to an activity!",
+                "cannot own more tickets to an activity than it allows per person!",
                 "",
             ));
         }

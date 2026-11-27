@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into vote_alternatives (id, round_id, idx, title, voted_for)\n                values (uuidv4(), $1, $2, $3, 0)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Int4",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4724f4342f7b707e6607cdddc2b4fc39c78f9180ca578cdac6e2fd96929f28ef"
+}

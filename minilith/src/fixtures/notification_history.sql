@@ -36,14 +36,13 @@ from sales_targets target where target.id = '20000000-0000-0000-0000-00000000000
 and not exists (select 1 from product_tags where group_id = target.group_id);
 
 insert into products (
-    id, group_id, kind, name, description, sales_price, sales_organization,
-    sales_stock, stock_real, stock_unit, stock_price, bookkeeping_tag, max_uses,
+    id, group_id, kind, name, description, sales_organization,
+    sales_stock, stock_real, stock_unit, stock_price, max_uses,
     sales_start, sales_stop, resale_start, resale_stop
 )
 select
     '50000000-0000-0000-0000-000000000007'::uuid, target.group_id, 'activity_visibility', '{}'::jsonb, '{}'::jsonb,
-    0::money, target.id, 0, 0, 'st', 0,
-    (select id from product_tags where group_id = target.group_id order by id limit 1),
+    target.id, 0, 0, 'st', 0,
     1, now(), now() + interval '1 hour', now() + interval '1 hour', now() + interval '1 hour'
 from sales_targets target where target.id = '20000000-0000-0000-0000-000000000005'::uuid;
 
@@ -63,13 +62,13 @@ insert into activity_hosts (activity_id, group_id) values
     ('50000000-0000-0000-0000-000000000001', '20000000-0000-0000-0000-000000000003');
 
 insert into products (
-    id, group_id, kind, name, description, sales_price, sales_organization,
-    sales_stock, stock_real, stock_unit, stock_price, bookkeeping_tag, max_uses,
+    id, group_id, kind, name, description, sales_organization,
+    sales_stock, stock_real, stock_unit, stock_price, max_uses,
     sales_start, sales_stop, resale_start, resale_stop, been_purchased
 ) values (
     '50000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000002',
-    'ticket', '{}', '{}', 0::money, '20000000-0000-0000-0000-000000000005',
-    100, 100, 'st', 0, '20000000-0000-0000-0000-000000000006', 1,
+    'ticket', '{}', '{}', '20000000-0000-0000-0000-000000000005',
+    100, 100, 'st', 0, 1,
     now(), now() + interval '1 hour', now(), now() + interval '1 hour', true
 );
 
@@ -80,12 +79,12 @@ insert into product_activity_assignments (activity_id, product_id) values
 insert into product_allowed_groups (product_id, group_id) values
     ('50000000-0000-0000-0000-000000000002', '20000000-0000-0000-0000-000000000002');
 
-insert into purchases (id, product_id, product_price, paid_price, activity_id, purchaser_id, owner_id, purchased_at) values
+insert into purchases (id, product_id, paid_price, activity_id, purchaser_id, owner_id, purchased_at) values
     ('50000000-0000-0000-0000-000000000003', '50000000-0000-0000-0000-000000000002',
-     0::money, 0::money,
+     0::money,
      '50000000-0000-0000-0000-000000000001', 'owner-muted', 'owner-muted', now()),
     ('50000000-0000-0000-0000-000000000004', '50000000-0000-0000-0000-000000000002',
-     0::money, 0::money,
+     0::money,
      '50000000-0000-0000-0000-000000000001', 'owner-overridden', 'owner-overridden', now());
 
 insert into purchase_transactions (purchase_id, seller_id, buyer_id, completed_at, transaction_id) values
@@ -118,3 +117,27 @@ insert into purchased_ticket_push_notifications (id, activity_id, notification_i
 
 insert into activity_followers (user_id, activity_id, follow) values
     ('owner-overridden', '50000000-0000-0000-0000-000000000001', false);
+
+
+-- Every product's price is its base-price add-on (see `product_base_prices`).
+insert into product_addon_sets (id, product_id) select id, id from products;
+insert into product_addons (id, set_id, idx, name, multiple_alternatives, has_text_field, required, is_base_price)
+select uuidv4(), products.id, -1, '{"en":"Price","sv":"Pris"}'::jsonb, false, false, true, true
+from products;
+insert into product_addon_links (product_id, addon_id)
+select products.id, addon.id from products
+inner join product_addons addon on addon.set_id = products.id and addon.is_base_price;
+insert into product_addon_options (id, product_addon_id, idx, name, price)
+select uuidv4(), addon.id, 0, products.name, 0::money
+from products
+inner join product_addons addon on addon.set_id = products.id and addon.is_base_price;
+insert into product_addon_option_bookkeepings (id, option_id, price, category)
+select uuidv4(), options.id, options.price,
+    (select tag.id from product_tags tag where tag.group_id = products.group_id order by tag.id limit 1)
+from products
+inner join product_addons addon on addon.set_id = products.id and addon.is_base_price
+inner join product_addon_options options on options.product_addon_id = addon.id;
+insert into purchased_product_addons (addon_id, purchase_id, selected_options, selected_options_prices, selected_text)
+select addon.id, purchases.id, '{0}'::integer[], array[0::money], ''
+from purchases
+inner join product_addons addon on addon.set_id = purchases.product_id and addon.is_base_price;

@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select client_id from admin_tokens where key = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "client_id",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "9b687b8f63d8c839ecc7c3cc5dd8b8b9ba8607ad74e5c257993143b064079fcd"
+}

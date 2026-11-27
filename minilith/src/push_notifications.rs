@@ -58,6 +58,8 @@ pub enum NotificationKind {
     TicketRelease,
     Transfer,
     Reservation,
+    /// Admins refunded a purchase.
+    Refund,
 }
 
 impl NotificationKind {
@@ -69,6 +71,7 @@ impl NotificationKind {
             Self::TicketRelease => "ticket_release",
             Self::Transfer => "transfer",
             Self::Reservation => "reservation",
+            Self::Refund => "refund",
         }
     }
 }

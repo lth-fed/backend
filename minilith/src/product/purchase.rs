@@ -17,6 +17,8 @@ use super::{
         wait_for_user_purchase_flow_on_transaction_id,
     },
     models::{BoughtAddon, BuyTicketRequest, BuyTicketResponse, PurchaseProvider},
+    notifications::{TicketNotification, notify_ticket_users},
+    sales::{self, Item, Viewer},
 };
 use crate::{
     ContextWrapper, DbInternationalizedString as DIS, MinilithEndpointError, MinilithResult,
@@ -32,6 +34,31 @@ pub(super) async fn begin(
     user: User,
     mut body: BuyTicketRequest,
 ) -> MinilithResult<BuyTicketResponse> {
+    if let Some(reader_id) = body.reader_id.clone() {
+        if body.provider != PurchaseProvider::Sumup {
+            return Err(MinilithEndpointError::bad_frontend_code(
+                "a reader payment must use the sumup provider",
+                "",
+            ));
+        }
+        // Reader sales bypass the reservation flow: the customer is at the counter and the
+        // payment is started immediately.
+        sales::begin(
+            ctx,
+            Viewer::User(user.get_id()),
+            user.get_id(),
+            vec![Item {
+                product_id: body.ticket_kind,
+                addons: body.addons,
+            }],
+            Some(&reader_id),
+        )
+        .await?;
+        return Ok(BuyTicketResponse {
+            payment_request_token: None,
+            redirect_url: None,
+        });
+    }
     if body.provider == PurchaseProvider::Sumup && body.redirect_url.is_none() {
         return Err(MinilithEndpointError::bad_frontend_code(
             "redirect_url has to be non-null when provider is sumup!",
@@ -61,7 +88,7 @@ pub(super) async fn begin(
         "select product_reservations.id, product_reservations.product_id, timeout, transaction_id,
                 kind.name as \"ticket_kind_name!: DIS\",
                 activities.title as \"activity_title!: DIS\",
-                kind.sales_price as \"price!\", activities.id as activity_id
+                product_reservations.product_price as \"price!\", activities.id as activity_id
             from product_reservations
             inner join products kind on (kind.id = product_reservations.product_id)
             inner join product_activity_assignments assignment on assignment.product_id = kind.id
@@ -274,12 +301,13 @@ pub(super) async fn begin(
         timeout,
         wares: transaction_wares,
         redirect_url: body.redirect_url,
+        reader_id: None,
     };
     send_payment(ctx, provider, payment_req).await
 }
 
 /// Sends a prepared payment to the transactions API and normalizes its response.
-async fn send_payment(
+pub(super) async fn send_payment(
     ctx: &ContextWrapper,
     provider: PurchaseProvider,
     payment_req: transactions::CreatePaymentRequest,
@@ -333,53 +361,22 @@ async fn send_payment(
     }
 }
 
-/// Asks the transactions service what its fee would be for this provider, amount & kind.
-pub(crate) async fn fee_quote(
-    ctx: &ContextWrapper,
-    provider: PurchaseProvider,
-    amount: i64,
-    kind: transactions::FeeKind,
-) -> MinilithResult<i64> {
-    let provider = match provider {
-        PurchaseProvider::Swish => transactions::FeeProvider::Swish,
-        PurchaseProvider::Sumup => transactions::FeeProvider::Sumup,
-        PurchaseProvider::Free => return Ok(0),
-    };
-    let resp = ctx
-        .transactions_post("/v0/fee-quote")
-        .json(&transactions::FeeQuoteRequest {
-            provider,
-            amount,
-            physical: false,
-            kind,
-        })
-        .send()
-        .await
-        .wrap_err_internal("fee quote transport failed")?;
-    if !resp.status().is_success() {
-        return Err(MinilithEndpointError::internal_error(
-            "fee quote failed",
-            (resp.status(), resp.text().await),
-        ));
-    }
-    Ok(resp
-        .json::<transactions::FeeQuoteResponse>()
-        .await
-        .wrap_err_internal("fee quote parse failed")?
-        .fee)
-}
-
 /// Refunds a purchase in full through the payment provider and invalidates it.
 ///
 /// Ownership is left unchanged; `refunded_id` marks the purchase as refunded, which use,
-/// transfer and resale reject. The caller must have established product adminship.
+/// transfer and resale reject. The owner is notified with `message` (if any) once the refund has
+/// been accepted. The caller must have established product adminship.
 #[allow(
     clippy::too_many_lines,
     reason = "keeps the refund claim and provider sequence visible in one place"
 )]
-pub(crate) async fn refund(ctx: &ContextWrapper, purchase_id: Uuid) -> MinilithResult<()> {
+pub(crate) async fn refund(
+    ctx: &ContextWrapper,
+    purchase_id: Uuid,
+    message: Option<String>,
+) -> MinilithResult<()> {
     let purchase = sqlx::query!(
-        "select owner_id, refunded_id, resale_transaction_id,
+        "select owner_id, product_id, refunded_id, resale_transaction_id,
             for_resale as \"for_resale?: PgMoney\"
         from purchases where id = $1",
         purchase_id
@@ -468,6 +465,12 @@ pub(crate) async fn refund(ctx: &ContextWrapper, purchase_id: Uuid) -> MinilithR
     if matches!(info.state, TransactionState::Refunded)
         || matches!(info.provider, Some(transactions::Provider::Free))
     {
+        notify_ticket_users(
+            ctx,
+            purchase.product_id,
+            vec![purchase.owner_id.clone()],
+            TicketNotification::Refund { message },
+        );
         return Ok(());
     }
 
@@ -507,6 +510,12 @@ pub(crate) async fn refund(ctx: &ContextWrapper, purchase_id: Uuid) -> MinilithR
             (status, body),
         ));
     }
+    notify_ticket_users(
+        ctx,
+        purchase.product_id,
+        vec![purchase.owner_id],
+        TicketNotification::Refund { message },
+    );
     Ok(())
 }
 
@@ -528,7 +537,9 @@ pub(super) async fn begin_resale(
             (now() between product.resale_start and product.resale_stop)
                 as "within_resale_window!",
             purchase.resale_transaction_id,
-            (purchase.refunded_id is not null) as "refunded!"
+            (purchase.refunded_id is not null) as "refunded!",
+            exists (select 1 from purchase_uses used
+                where used.purchase_id = purchase.id) as "used!"
         from purchases purchase
         inner join products product on product.id = purchase.product_id
         where purchase.id = $1"#,
@@ -546,6 +557,12 @@ pub(super) async fn begin_resale(
     if purchase.refunded {
         return Err(MinilithEndpointError::bad_frontend_code(
             "this purchase has been refunded",
+            "",
+        ));
+    }
+    if purchase.used {
+        return Err(MinilithEndpointError::bad_frontend_code(
+            "this purchase has been used",
             "",
         ));
     }
@@ -570,75 +587,9 @@ pub(super) async fn begin_resale(
     super::access::ensure_user_may_purchase_ticket(&ctx.db, user.get_id(), purchase.product_id)
         .await?;
 
-    // The transaction the seller originally paid with is the one that gets refunded.
-    let seller_transaction_id = sqlx::query_scalar!(
-        "select transaction_id from purchase_transactions
-        where purchase_id = $1
-        and buyer_id = $2
-        and transaction_id is not null
-        order by completed_at desc
-        limit 1",
-        purchase_id,
-        &purchase.owner_id,
-    )
-    .fetch_optional(&ctx.db)
-    .await?
-    .flatten()
-    .ok_or_else(|| {
-        MinilithEndpointError::bad_frontend_code(
-            "l1: the seller has no paid transaction to refund",
-            "",
-        )
-    })?;
-
-    // A free resale moves the purchase without money changing hands, so no fees are charged.
-    // Only the costs this resale creates are charged to the buyer: the refund of the seller's
-    // transaction and the new payment. The seller's original payment fee was already kept on the
-    // original sale (`complete_resale` refunds the resale price, not their whole payment), so
-    // charging it again would collect it once per resale.
-    let (refund_fee, new_fee) = if price.0 == 0 {
-        (0, 0)
-    } else {
-        let info = ctx
-            .transactions_post("/v0/info")
-            .json(&transactions::InfoRequest {
-                transaction_ids: vec![seller_transaction_id],
-            })
-            .send()
-            .await
-            .wrap_err_internal("failed to read the seller's transaction")?
-            .error_for_status()
-            .wrap_err_internal("failed to read the seller's transaction")?
-            .json::<Vec<transactions::SingleInfoResponse>>()
-            .await
-            .wrap_err_internal("failed to parse the seller's transaction")?;
-        // Refunding costs us a fee on the seller's provider (flat on `Swish`, free on `SumUp`).
-        let refund_fee = match info.first().and_then(|info| info.provider) {
-            Some(transactions::Provider::Swish) => {
-                fee_quote(
-                    ctx,
-                    PurchaseProvider::Swish,
-                    price.0,
-                    transactions::FeeKind::Refund,
-                )
-                .await?
-            }
-            Some(transactions::Provider::Sumup) => {
-                fee_quote(
-                    ctx,
-                    PurchaseProvider::Sumup,
-                    price.0,
-                    transactions::FeeKind::Refund,
-                )
-                .await?
-            }
-            Some(transactions::Provider::Free | transactions::Provider::Stripe) | None => 0,
-        };
-        let new_fee = fee_quote(ctx, provider, price.0, transactions::FeeKind::Payment).await?;
-        (refund_fee, new_fee)
-    };
-    let total_fees = refund_fee + new_fee;
-    let total = price.0 + total_fees;
+    // A resale charges the buyer the listed price only. The refund and payment fees it causes are
+    // a cost of the group, so neither person pays them.
+    let total = price.0;
     let provider = if total == 0 {
         PurchaseProvider::Free
     } else {
@@ -659,20 +610,12 @@ pub(super) async fn begin_resale(
         .wrap_err_encryption("failed to decrypt user language")?;
     let product_name = purchase.product_name.resolve_intl(&lang, "<product>");
 
-    let mut wares = vec![transactions::Ware {
+    let wares = vec![transactions::Ware {
         name: format!("{product_name} (resale)"),
         amount: price.0,
         tax: 1.0,
         currency: transactions::Currency::Sek,
     }];
-    if total_fees > 0 {
-        wares.push(transactions::Ware {
-            name: "Resale transaction fee".to_owned(),
-            amount: total_fees,
-            tax: 1.0,
-            currency: transactions::Currency::Sek,
-        });
-    }
 
     let transaction_id = Uuid::new_v4();
     let reserved = sqlx::query!(
@@ -707,6 +650,7 @@ pub(super) async fn begin_resale(
             timeout,
             wares,
             redirect_url,
+            reader_id: None,
         },
     )
     .await;
@@ -799,8 +743,8 @@ async fn complete_resale(
     .await?;
     Ok(Some(CompletedResale {
         seller_transaction_id,
-        // A listing from before `paid_price` existed (or a chain that resold above cost) could
-        // exceed what the seller actually paid; never ask the provider for more than was captured.
+        // The seller gets the whole listed price back: the fees of this resale are the group's
+        // cost, not theirs. Never ask the provider for more than the seller was captured for.
         refund_amount: pending.price.0.min(pending.paid_price.0),
     }))
 }
@@ -818,10 +762,14 @@ pub(crate) async fn callback(
             TransactionState::Pending => {}
             TransactionState::Paid => {
                 let mut txn = ctx.db.begin().await?;
-                if pay_for_reservation(&mut txn, data.transaction_id)
-                    .await?
-                    .is_some()
-                {
+                let handled = if sales::complete(&mut txn, data.transaction_id).await? {
+                    true
+                } else {
+                    pay_for_reservation(&mut txn, data.transaction_id)
+                        .await?
+                        .is_some()
+                };
+                if handled {
                     txn.commit().await?;
                 } else if let Some(resale) = complete_resale(&mut txn, data.transaction_id).await? {
                     txn.commit().await?;
@@ -881,6 +829,10 @@ pub(crate) async fn callback(
             }
             TransactionState::Cancelled => {
                 let mut txn = ctx.db.begin().await?;
+                if sales::cancel(&mut txn, data.transaction_id).await? {
+                    txn.commit().await?;
+                    continue;
+                }
                 let cleared = sqlx::query!(
                     "update purchases
                     set resale_transaction_id = null, resale_buyer_id = null
@@ -993,7 +945,7 @@ async fn pay_for_reservation(
     }
 
     let row = sqlx::query!(
-        "select reservation.id, user_id, product_id, kind.sales_price as \"price!\",
+        "select reservation.id, user_id, product_id, reservation.product_price as \"price!\",
             (select assignment.activity_id from product_activity_assignments assignment
                 where assignment.product_id = kind.id
                 order by assignment.activity_id limit 1) as \"activity_id?\"
@@ -1022,9 +974,8 @@ async fn pay_for_reservation(
 
     let purchased_id = sqlx::query_scalar!(
         "insert into purchases
-        (id, purchaser_id, owner_id, product_id, product_price, paid_price, activity_id,
-            purchased_at)
-        values ($1, $2, $2, $3, $4,
+        (id, purchaser_id, owner_id, product_id, paid_price, activity_id, purchased_at)
+        values ($1, $2, $2, $3,
             $4 + coalesce((
                 select sum(option_price)
                 from product_reservation_addons addon
@@ -1040,6 +991,19 @@ async fn pay_for_reservation(
         row.activity_id
     )
     .fetch_one(&mut txn.executor())
+    .await?;
+    // The base price is one of the add-ons, so it belongs to the purchase's add-on snapshot.
+    sqlx::query!(
+        r#"insert into purchased_product_addons
+        (addon_id, purchase_id, selected_options, selected_options_prices, selected_text)
+        select addon.id, $1, '{0}'::integer[], array[$2::money], ''
+        from product_addons addon
+        where addon.set_id = $3 and addon.is_base_price"#,
+        row.id,
+        row.price,
+        row.product_id,
+    )
+    .execute(&mut txn.executor())
     .await?;
     sqlx::query!(
         "insert into purchase_transactions
@@ -1094,7 +1058,7 @@ async fn pay_for_reservation(
     Ok(Some(row.id))
 }
 
-struct ReturnedAddonOption {
+pub(super) struct ReturnedAddonOption {
     product_addon_id: Uuid,
     name: DIS,
     price: i64,
@@ -1106,7 +1070,7 @@ struct ReturnedAddonOption {
     clippy::too_many_lines,
     reason = "it's quite linear and does a single function"
 )]
-async fn validate_addons(
+pub(super) async fn validate_addons(
     txn: &mut Transaction<'_>,
     addons: &mut [BoughtAddon],
     ticket_kind: Uuid,
@@ -1134,6 +1098,7 @@ async fn validate_addons(
         inner join product_addons on product_addons.id = t.id
         inner join product_addon_links links on links.addon_id = t.id
             and links.product_id = $2
+        where not product_addons.is_base_price
         order by t.id",
         &addon_ids,
         ticket_kind

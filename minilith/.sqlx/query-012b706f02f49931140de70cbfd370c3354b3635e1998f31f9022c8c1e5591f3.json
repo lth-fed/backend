@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select coalesce(count(*), 0)::int as \"count!\"\n        from product_buyers buyer\n        where buyer.product_id = $1\n        and buyer.guaranteed\n        and not exists (\n            select 1 from purchases purchase\n            where purchase.product_id = $1\n            and purchase.owner_id = buyer.user_id\n            and purchase.refunded_id is null\n        )\n        and not exists (\n            select 1 from product_reservations reservation\n            where reservation.product_id = $1\n            and reservation.user_id = buyer.user_id\n        )",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "012b706f02f49931140de70cbfd370c3354b3635e1998f31f9022c8c1e5591f3"
+}

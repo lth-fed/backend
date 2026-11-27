@@ -376,6 +376,14 @@ impl Context {
                 format!("Bearer {}", self.transactions_token),
             )
     }
+    pub fn transactions_delete(&self, endpoint: impl AsRef<str>) -> reqwest::RequestBuilder {
+        self.transactions_client
+            .delete(format!("{}{}", self.transactions_api, endpoint.as_ref()))
+            .header(
+                "authorization",
+                format!("Bearer {}", self.transactions_token),
+            )
+    }
     pub fn transactions_post(&self, endpoint: impl AsRef<str>) -> reqwest::RequestBuilder {
         self.transactions_client
             .post(format!("{}{}", self.transactions_api, endpoint.as_ref()))

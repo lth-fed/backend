@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into product_reservation_queuers\n                (user_id, product_id, original_product_id, placement)\n            select user_id, $2 as product_id, $3 as original_product_id, placement\n            from unnest($1::text[], $4::integer[]) as t(user_id, placement)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "Uuid",
+        "Uuid",
+        "Int4Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d9375539b5e3ad0fb2ff4a22b329f1a9711e6f1fbdf41ce5cd7260f611d6c953"
+}

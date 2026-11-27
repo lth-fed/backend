@@ -267,7 +267,8 @@ impl Router {
         let alternatives = sqlx::query!(
             r#"select id, title as "title!: DIS", voted_for
             from vote_alternatives
-            where round_id = $1"#,
+            where round_id = $1
+            order by idx"#,
             round.id,
         )
         .map(|row| VoteAlternative {
@@ -617,7 +618,7 @@ impl AdminRouter {
         for round in rounds {
             let alternatives = sqlx::query!(
                 r#"select id, title as "title!: DIS", voted_for
-                from vote_alternatives where round_id = $1"#,
+                from vote_alternatives where round_id = $1 order by idx"#,
                 round.id,
             )
             .map(|row| VoteAlternative {
@@ -731,11 +732,12 @@ impl AdminRouter {
         )
         .execute(&mut txn.executor())
         .await?;
-        for alternative in body.alternatives {
+        for (idx, alternative) in body.alternatives.into_iter().enumerate() {
             sqlx::query!(
-                "insert into vote_alternatives (id, round_id, title, voted_for)
-                values (uuidv4(), $1, $2, 0)",
+                "insert into vote_alternatives (id, round_id, idx, title, voted_for)
+                values (uuidv4(), $1, $2, $3, 0)",
                 round_id,
+                i32::try_from(idx).unwrap_or(i32::MAX),
                 alternative.to_json_value(),
             )
             .execute(&mut txn.executor())

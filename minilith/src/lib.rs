@@ -12,7 +12,8 @@ use poem_openapi::OpenApiService;
 mod accounting;
 pub mod activities;
 pub mod admin;
-mod admin_addons;
+pub mod admin_addons;
+pub mod admin_purchases;
 mod api;
 pub mod context;
 pub mod group;
@@ -23,6 +24,7 @@ pub mod push_notifications;
 pub mod readers;
 mod report;
 mod runtime;
+mod stock_report;
 pub mod tags;
 mod transactions;
 pub mod user;
@@ -123,6 +125,9 @@ pub async fn get_endpoint(
             admin::Router {
                 context: Arc::clone(&context),
             },
+            admin_purchases::Router {
+                context: Arc::clone(&context),
+            },
             activities::Router {
                 context: Arc::clone(&context),
             },
@@ -145,6 +150,9 @@ pub async fn get_endpoint(
                 context: Arc::clone(&context),
             },
             tags::Router {
+                context: Arc::clone(&context),
+            },
+            tags::AdminRouter {
                 context: Arc::clone(&context),
             },
             user::Router {

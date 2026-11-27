@@ -112,3 +112,6 @@ unimplemented = "deny"
 unused_result_ok = "deny"
 unused_trait_names = "warn"
 unwrap_used = "deny"
+
+[profile.dev.package."*"]
+debug = false

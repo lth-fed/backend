@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into product_addon_option_bookkeepings (id, option_id, price, category)\n            values (uuidv4(), $1, $2, $3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Money",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "31767082261f15afc7b5f782c58f74697ca0a655946828d9bec187f996ddb392"
+}

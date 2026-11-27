@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select coalesce(original_product_id, product_id) as \"wanted!\"\n                from product_reservation_queuers where user_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "wanted!",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "d95841dd664c0197b7d70615039e1c8ab2aee2c85a2de624a8efd111cdefafd6"
+}

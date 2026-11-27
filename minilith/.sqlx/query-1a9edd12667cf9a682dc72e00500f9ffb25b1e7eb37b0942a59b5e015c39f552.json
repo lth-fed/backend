@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into products\n                (id, group_id, kind, name, description, sales_organization,\n                 sales_stock, stock_real, stock_unit, stock_price, max_uses,\n                 sales_start, sales_stop, resale_start, resale_stop)\n             values ($1, $2, 'activity_visibility', $3, $4, $5, 0, 0, 'st', 0, 1,\n                     $6, $7, $7, $7)\n             on conflict (id) do update set\n                name = excluded.name,\n                description = excluded.description,\n                sales_start = excluded.sales_start,\n                sales_stop = excluded.sales_stop",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Jsonb",
+        "Jsonb",
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1a9edd12667cf9a682dc72e00500f9ffb25b1e7eb37b0942a59b5e015c39f552"
+}

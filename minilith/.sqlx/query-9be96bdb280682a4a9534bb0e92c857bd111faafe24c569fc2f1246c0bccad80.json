@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select (\n                    select count(user_id) from product_reservation_queuers\n                    where product_id = $1 or original_product_id = $1\n                ) as \"count!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "9be96bdb280682a4a9534bb0e92c857bd111faafe24c569fc2f1246c0bccad80"
+}

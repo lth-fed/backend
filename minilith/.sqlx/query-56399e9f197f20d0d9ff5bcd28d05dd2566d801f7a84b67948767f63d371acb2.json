@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into product_addon_sets (id, activity_id) values ($1, $1)\n                    on conflict (id) do nothing",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "56399e9f197f20d0d9ff5bcd28d05dd2566d801f7a84b67948767f63d371acb2"
+}

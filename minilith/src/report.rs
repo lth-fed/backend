@@ -1,9 +1,8 @@
 use std::fmt::Debug;
 
-use minilith_errors::{AlertLevel, MinilithErrorResultExt as _, MinilithResult, alert};
+use minilith_errors::{MinilithErrorResultExt as _, MinilithResult};
 use poem_openapi::Enum;
 use serde::Serialize;
-use tracing::error;
 use tracing::{info_span, warn};
 use typst::diag::{FileError, FileResult, PackageError};
 use typst::foundations::Bytes;
@@ -14,6 +13,8 @@ use typst::{Library, LibraryExt as _};
 use typst_layout::PagedDocument;
 
 const TYPST_DOC: &str = include_str!("./report.typ");
+/// Shared helpers imported by every template (e.g. currency formatting).
+const TYPST_FORMAT: &str = include_str!("./format.typ");
 
 #[derive(Serialize, Debug, Clone, Copy, Enum)]
 pub enum Language {
@@ -23,15 +24,6 @@ pub enum Language {
     #[serde(rename = "en")]
     #[oai(rename = "en")]
     English,
-}
-#[derive(Serialize, Debug, Clone, Copy, Enum, PartialEq, Eq, PartialOrd, Ord)]
-#[oai(rename_all = "lowercase")]
-#[serde(rename_all = "lowercase")]
-pub enum Kind {
-    Ticket,
-    Option,
-    External,
-    Refund,
 }
 #[derive(Serialize, Debug, Clone, Copy, Enum)]
 #[oai(rename_all = "lowercase")]
@@ -47,7 +39,6 @@ pub enum ImageKind {
 #[derive(Serialize, Debug, Clone)]
 pub struct Object {
     pub name: String,
-    pub kind: Kind,
     pub price: i64,
     pub number: i64,
 }
@@ -98,11 +89,19 @@ impl Default for OurWonderfulTypstWorldBase {
         }
     }
 }
+/// A typst document plus the JSON it reads from `data.json` (and optionally `image`).
+pub struct Template {
+    pub source: &'static str,
+    pub data_json: String,
+    /// Bytes served as the `image` file, e.g. a creator logo.
+    pub image: Option<bytes::Bytes>,
+}
+
 struct OurWonderfulTypstWorld<'a> {
     inner: &'a OurWonderfulTypstWorldBase,
     now: typst_kit::datetime::Time,
 
-    data: &'a Data,
+    template: &'a Template,
 }
 impl typst::World for OurWonderfulTypstWorld<'_> {
     fn library(&self) -> &LazyHash<Library> {
@@ -132,7 +131,8 @@ impl typst::World for OurWonderfulTypstWorld<'_> {
             return Err(FileError::Package(PackageError::Other(None)));
         }
         let data = match id.vpath().get_without_slash() {
-            "report.typ" => Source::new(id, TYPST_DOC.to_owned()),
+            "report.typ" => Source::new(id, self.template.source.to_owned()),
+            "format.typ" => Source::new(id, TYPST_FORMAT.to_owned()),
             "data.json" | "image" => return Err(FileError::NotSource),
             _ => return Err(FileError::NotFound(id.vpath().get_without_slash().into())),
         };
@@ -146,13 +146,10 @@ impl typst::World for OurWonderfulTypstWorld<'_> {
 
         let path = id.vpath().get_without_slash();
         let data = match path {
-            "report.typ" => Bytes::new(TYPST_DOC),
-            "data.json" => Bytes::new(serde_json::to_string(&self.data).map_err(|error| {
-                alert(AlertLevel::L2, "Failed to serialize data.json for report.");
-                error!(?error, "Failed to serialize data.json for report.");
-                FileError::Other(None)
-            })?),
-            "image" if let Some(data) = &self.data.creator_logo_data => {
+            "report.typ" => Bytes::new(self.template.source),
+            "format.typ" => Bytes::new(TYPST_FORMAT),
+            "data.json" => Bytes::new(self.template.data_json.clone()),
+            "image" if let Some(data) = &self.template.image => {
                 Bytes::new(bytes::Bytes::clone(data))
             }
             _ => return Err(FileError::NotFound(path.into())),
@@ -179,12 +176,26 @@ impl typst::World for OurWonderfulTypstWorld<'_> {
 /// Errors if the typst compilation fails (which should never happen; we control the typst
 /// document). Though could happen if image is shit.
 pub fn compile(world: &OurWonderfulTypstWorldBase, data: &Data) -> MinilithResult<Vec<u8>> {
+    let template = Template {
+        source: TYPST_DOC,
+        data_json: serde_json::to_string(data).wrap_err_internal("report: serialize data.json")?,
+        image: data.creator_logo_data.clone(),
+    };
+    compile_template(world, &template)
+}
+
+/// Compiles any typst template with its data. Used by every PDF export so the world, fonts and
+/// PDF options are shared.
+pub fn compile_template(
+    world: &OurWonderfulTypstWorldBase,
+    template: &Template,
+) -> MinilithResult<Vec<u8>> {
     let _span = info_span!("typst report compilation").entered();
 
     let world = OurWonderfulTypstWorld {
         inner: world,
         now: typst_kit::datetime::Time::system(),
-        data,
+        template,
     };
 
     let output = typst::compile::<PagedDocument>(&world);
@@ -235,7 +246,6 @@ mod tests {
             // Exercises the refunds section and the conditional summary rows.
             report.per_refund.push(super::Object {
                 name: "Testbiljett".to_owned(),
-                kind: super::Kind::Refund,
                 price: 10_000,
                 number: 1,
             });

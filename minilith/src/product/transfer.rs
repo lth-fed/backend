@@ -143,6 +143,18 @@ pub(super) async fn transfer(
         1,
         "purchased ticket disappeared while transferring",
     )?;
+    // The receiver never paid, so the row has no transaction: receipts and the "was this ticket
+    // transferred here?" check (`transaction_id is null`) rely on it.
+    sqlx::query!(
+        "insert into purchase_transactions
+        (purchase_id, seller_id, buyer_id, completed_at, transaction_id)
+        values ($1, $2, $3, now(), null)",
+        body.purchased_ticket_id,
+        auth.get_id(),
+        to_user,
+    )
+    .execute(&mut txn.executor())
+    .await?;
 
     unlist_user_purchase_flow(&mut txn, auth.get_id()).await?;
     unlist_user_purchase_flow(&mut txn, &to_user).await?;

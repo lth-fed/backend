@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select validation.timestamp\n        from purchase_use_validations validation\n        where validation.use_id = $1\n        order by validation.timestamp",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "timestamp",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "2afdd305213fd368d652cf2b71592e1f9d1e7d0678a81d115154289a55fefb8b"
+}

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update purchases set for_resale = null where id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "77236fcb088b731edc96f4f7590970cdeae57525aa1a7cee3d40e962a5f17e1c"
+}

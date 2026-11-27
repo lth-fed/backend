@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select swish_number from client_ids where client_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "swish_number",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e40ed0fe7f12cd0501cf7855106860e46fa063c72ac25bee219f42488da479d0"
+}

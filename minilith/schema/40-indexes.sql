@@ -33,10 +33,17 @@ create index purchased_product_addons_by_purchase on purchased_product_addons (p
 
 -- purchase queue & reservations
 create index product_queuer_placement on product_reservation_queuers using btree (placement);
+create index product_queuer_original_product on product_reservation_queuers using btree (original_product_id);
 create index product_queuer_timeout on product_release_queuers using btree (started_queueing);
 create index product_reservation_timeout on product_reservations using btree (timeout);
 create index product_reserved_transaction on product_reservations using hash (transaction_id);
 create index product_release_queuers_by_ticket on product_release_queuers using hash (product_id);
+
+-- add-on sets: one per activity, one per product, and one base-price add-on per set
+create unique index product_addon_sets_by_activity on product_addon_sets (activity_id);
+create unique index product_addon_sets_by_product on product_addon_sets (product_id);
+create unique index product_addons_one_base_per_set on product_addons (set_id)
+    where is_base_price;
 
 -- stock
 create index stock_transactions_by_group on stock_transactions using hash (group_id);

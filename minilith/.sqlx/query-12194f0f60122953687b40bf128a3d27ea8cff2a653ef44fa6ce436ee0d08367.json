@@ -1,0 +1,116 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n            purchases.id,\n            purchases.product_id,\n            products.name as \"product_name!: DIS\",\n            products.kind::text as \"kind!\",\n            products.max_uses,\n            purchases.activity_id,\n            purchases.purchased_at,\n            purchases.purchaser_id,\n            purchaser.name as \"purchaser_name?\",\n            purchases.owner_id,\n            owner.name as \"owner_name?\",\n            purchases.paid_price as \"paid_price!\",\n            purchases.for_resale as \"for_resale?\",\n            (purchases.refunded_id is not null) as \"refunded!\",\n            (select count(*) from purchase_uses uses\n                where uses.purchase_id = purchases.id) as \"uses!\",\n            exists (select 1 from purchase_transactions payment\n                where payment.purchase_id = purchases.id\n                and payment.buyer_id = purchases.owner_id\n                and payment.transaction_id is not null) as \"has_receipt!\"\n        from purchases\n        inner join products on products.id = purchases.product_id\n        left join users purchaser on purchaser.id = purchases.purchaser_id\n        left join users owner on owner.id = purchases.owner_id\n        where ($1::uuid[] is null or products.id = any($1))\n        and ($2::uuid is null or products.group_id = $2)\n        and ($3::uuid is null or purchases.activity_id = $3)\n        and ($4::timestamptz is null or purchases.purchased_at >= $4)\n        and ($5::timestamptz is null or purchases.purchased_at < $5)\n        order by purchases.purchased_at desc, purchases.id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "product_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "product_name!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 3,
+        "name": "kind!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "max_uses",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "activity_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 6,
+        "name": "purchased_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "purchaser_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "purchaser_name?",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 9,
+        "name": "owner_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "owner_name?",
+        "type_info": "Bytea"
+      },
+      {
+        "ordinal": 11,
+        "name": "paid_price!",
+        "type_info": "Money"
+      },
+      {
+        "ordinal": 12,
+        "name": "for_resale?",
+        "type_info": "Money"
+      },
+      {
+        "ordinal": 13,
+        "name": "refunded!",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 14,
+        "name": "uses!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 15,
+        "name": "has_receipt!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "UuidArray",
+        "Uuid",
+        "Uuid",
+        "Timestamptz",
+        "Timestamptz"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "12194f0f60122953687b40bf128a3d27ea8cff2a653ef44fa6ce436ee0d08367"
+}

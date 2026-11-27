@@ -13,7 +13,7 @@ use sumup::resources::transactions::GetParams;
 use crate::context::Context;
 
 pub(crate) const PRODUCTION: &str = "https://api.sumup.com";
-pub(crate) const SANDBOX: &str = "https://api.sandbox.sumup.com";
+pub(crate) const SANDBOX: &str = "https://api.sumup.com";
 
 fn map_err<E: std::fmt::Debug>(error: &sumup::SdkError<E>) -> MinilithEndpointError {
     let status = error.status();
@@ -291,6 +291,28 @@ pub(crate) async fn update_reader(
         .await
         .map_err(|error| map_err(&error))?;
     Ok(map_reader(reader))
+}
+
+/// Deletes a reader from the merchant account. A reader that is already gone counts as deleted.
+///
+/// # Errors
+///
+/// `SumUp` API errors other than `404`.
+pub(crate) async fn delete_reader(
+    ctx: &Context,
+    client_id: &str,
+    reader_id: &str,
+) -> MinilithResult<()> {
+    let client = ctx.get_sumup_client(client_id).await?;
+    match client
+        .readers()
+        .delete(&client.merchant_code, reader_id)
+        .await
+    {
+        Ok(()) => Ok(()),
+        Err(error) if error.status() == Some(reqwest::StatusCode::NOT_FOUND) => Ok(()),
+        Err(error) => Err(map_err(&error)),
+    }
 }
 
 /// Starts a payment on a physical reader. Returns `(checkout_id, client_transaction_id)`.

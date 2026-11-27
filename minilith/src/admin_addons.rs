@@ -7,6 +7,115 @@ use crate::{
     product::{self, AvailableAddon},
 };
 
+/// Writes a product's mandatory base-price add-on: a hidden, required add-on with one option named
+/// after the product, priced at `price`, whose bookkeeping split is `prices` over `bookkeeping_tags`
+/// (both may be empty, which books nothing).
+///
+/// Purchases snapshot their prices, so this stays editable after the first sale.
+///
+/// # Errors
+///
+/// `DB` if the set, add-on, option or bookkeeping rows cannot be written.
+pub async fn save_base_price_addon(
+    txn: &mut Transaction<'_>,
+    product_id: Uuid,
+    product_name: &crate::InternationalizedString,
+    price: i64,
+    bookkeeping_tags: &[Uuid],
+    prices: &[PgMoney],
+) -> MinilithResult<()> {
+    if bookkeeping_tags.len() != prices.len() {
+        return Err(MinilithEndpointError::bad_frontend_code(
+            "bookkeeping tags and prices must have the same length",
+            "bookkeeping_tag_ids",
+        ));
+    }
+    sqlx::query!(
+        r#"insert into product_addon_sets (id, product_id) values ($1, $1)
+        on conflict (id) do nothing"#,
+        product_id
+    )
+    .execute(&mut txn.executor())
+    .await?;
+    let addon_id = match sqlx::query_scalar!(
+        "select id from product_addons where set_id = $1 and is_base_price",
+        product_id
+    )
+    .fetch_optional(&mut txn.executor())
+    .await?
+    {
+        Some(addon_id) => addon_id,
+        None => {
+            sqlx::query_scalar!(
+                r#"insert into product_addons
+            (id, set_id, idx, name, multiple_alternatives, has_text_field, required, is_base_price)
+            values (uuidv4(), $1, -1, '{"en":"Price","sv":"Pris"}'::jsonb, false, false, true, true)
+            returning id"#,
+                product_id
+            )
+            .fetch_one(&mut txn.executor())
+            .await?
+        }
+    };
+    sqlx::query!(
+        "insert into product_addon_links (product_id, addon_id) values ($1, $2)
+        on conflict do nothing",
+        product_id,
+        addon_id
+    )
+    .execute(&mut txn.executor())
+    .await?;
+    let option_id = match sqlx::query_scalar!(
+        "select id from product_addon_options where product_addon_id = $1 and idx = 0",
+        addon_id
+    )
+    .fetch_optional(&mut txn.executor())
+    .await?
+    {
+        Some(option_id) => {
+            sqlx::query!(
+                "update product_addon_options set name = $2, price = $3 where id = $1",
+                option_id,
+                product_name.to_json_value(),
+                PgMoney(price),
+            )
+            .execute(&mut txn.executor())
+            .await?;
+            option_id
+        }
+        None => {
+            sqlx::query_scalar!(
+                "insert into product_addon_options (id, product_addon_id, idx, name, price)
+            values (uuidv4(), $1, 0, $2, $3)
+            returning id",
+                addon_id,
+                product_name.to_json_value(),
+                PgMoney(price),
+            )
+            .fetch_one(&mut txn.executor())
+            .await?
+        }
+    };
+    sqlx::query!(
+        "delete from product_addon_option_bookkeepings where option_id = $1",
+        option_id
+    )
+    .execute(&mut txn.executor())
+    .await?;
+    for (tag_id, price) in bookkeeping_tags.iter().zip(prices) {
+        sqlx::query!(
+            r#"insert into product_addon_option_bookkeepings (id, option_id, price, category)
+            values (uuidv4(), $1, $2, $3)"#,
+            option_id,
+            price,
+            tag_id
+        )
+        .execute(&mut txn.executor())
+        .await?;
+    }
+    Ok(())
+}
+
 /// Callers hold the activity lock, also used by purchasing and ticket editing.
 pub(crate) async fn save_addon(
     txn: &mut Transaction<'_>,
@@ -36,7 +145,7 @@ pub(crate) async fn save_addon(
     .fetch_one(&mut txn.executor())
     .await?;
     if has_purchases {
-        let existing = product::load_addons(txn, set_id, None).await?;
+        let existing = product::load_addons(txn, set_id, None, false).await?;
         let unchanged_structure = existing
             .iter()
             .find(|old| old.inner.id == addon.inner.id)

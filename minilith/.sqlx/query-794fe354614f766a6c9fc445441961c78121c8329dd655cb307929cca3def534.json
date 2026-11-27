@@ -1,0 +1,159 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select\n            product.id,\n            product.group_id,\n            owner.path::text as \"group_path!\",\n            owner.name as \"group_name!: DIS\",\n            product.kind as \"kind!: ProductKind\",\n            product.name as \"name!: DIS\",\n            product.description as \"description!: DIS\",\n            image.url as \"image_url?\",\n            (select range.price_min from product_price_ranges range\n                where range.product_id = product.id) as \"price_min!\",\n            (select range.price_max from product_price_ranges range\n                where range.product_id = product.id) as \"price_max!\",\n            product.max_uses,\n            product.sales_stock,\n            product.sales_start,\n            product.sales_stop,\n            product.resale_start,\n            product.resale_stop,\n            product.tickets_been_released,\n            product.store_general_sales,\n            product.store_online_self_serve,\n            coalesce(\n                (select array_agg(assignment.activity_id)\n                    from product_activity_assignments assignment\n                    where assignment.product_id = product.id),\n                '{}'::uuid[]\n            ) as \"activity_ids!: Vec<Uuid>\",\n            exists (\n                select 1 from purchases owned\n                where owned.product_id = product.id\n                and owned.owner_id = $1\n                and owned.refunded_id is null\n            ) as \"purchased_by_me!\"\n        from products product\n        inner join groups owner on owner.id = product.group_id\n        left join images image on image.id = product.image_id\n        where product.kind <> 'activity_visibility'\n        and ($2::uuid is null or exists (\n            select 1 from product_activity_assignments assignment\n            where assignment.product_id = product.id\n            and assignment.activity_id = $2\n        ))\n        and ($3::uuid is null or product.group_id = $3)\n        and ($6::uuid is null or product.id = $6)\n        and (\n            -- a registered sales device sells what it is registered for\n            (($4::uuid is not null or $5::uuid is not null)\n                and product.store_general_sales\n                and (\n                    ($4::uuid is not null and (\n                        product.group_id = $4\n                        or exists (\n                            select 1\n                            from product_activity_assignments assignment\n                            inner join activity_hosts host\n                                on host.activity_id = assignment.activity_id\n                            where assignment.product_id = product.id\n                            and host.group_id = $4\n                        )\n                    ))\n                    or ($5::uuid is not null and exists (\n                        select 1 from product_activity_assignments assignment\n                        where assignment.product_id = product.id\n                        and assignment.activity_id = $5\n                    ))\n                ))\n            -- app visibility\n            or (($4::uuid is null and $5::uuid is null) and (\n                ($2::uuid is null and $3::uuid is null\n                    and product.store_online_self_serve)\n                or exists (\n                    select 1\n                    from product_allowed_groups allowed\n                    inner join group_memberships membership\n                        on membership.user_id = $1\n                    inner join groups member_group\n                        on member_group.id = membership.group_id\n                    inner join groups allowed_group\n                        on allowed_group.id = allowed.group_id\n                        and allowed_group.path @> member_group.path\n                    where allowed.product_id = product.id\n                    and (\n                        not membership.specific\n                        or allowed.group_id = membership.group_id\n                    )\n                )\n                or exists (\n                    select 1 from product_buyers buyer\n                    where buyer.product_id = product.id and buyer.user_id = $1\n                )\n                or exists (\n                    select 1 from purchases owned\n                    where owned.product_id = product.id\n                    and owned.owner_id = $1\n                )\n            ))\n        )\n        order by product.sales_start, product.name->>'en'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "group_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "group_path!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "group_name!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 4,
+        "name": "kind!: ProductKind",
+        "type_info": {
+          "Custom": {
+            "name": "product_kind",
+            "kind": {
+              "Enum": [
+                "ticket",
+                "normal",
+                "questionnaire",
+                "activity_visibility"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "name!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 6,
+        "name": "description!: DIS",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 7,
+        "name": "image_url?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "price_min!",
+        "type_info": "Money"
+      },
+      {
+        "ordinal": 9,
+        "name": "price_max!",
+        "type_info": "Money"
+      },
+      {
+        "ordinal": 10,
+        "name": "max_uses",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 11,
+        "name": "sales_stock",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 12,
+        "name": "sales_start",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 13,
+        "name": "sales_stop",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 14,
+        "name": "resale_start",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 15,
+        "name": "resale_stop",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 16,
+        "name": "tickets_been_released",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 17,
+        "name": "store_general_sales",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 18,
+        "name": "store_online_self_serve",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 19,
+        "name": "activity_ids!: Vec<Uuid>",
+        "type_info": "UuidArray"
+      },
+      {
+        "ordinal": 20,
+        "name": "purchased_by_me!",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "794fe354614f766a6c9fc445441961c78121c8329dd655cb307929cca3def534"
+}

@@ -52,6 +52,8 @@ pub struct Group {
     pub limit_membership_visibility: bool,
     pub stock_tracking: bool,
     pub propagate_member_visibility_access: bool,
+    /// Direct members of the parent group may join this one without a request.
+    pub parent_members_can_join: bool,
     pub name: IS,
     pub description: IS,
     pub deleted: bool,
@@ -67,6 +69,8 @@ pub struct FatGroup {
     pub limit_membership_visibility: bool,
     pub stock_tracking: bool,
     pub propagate_member_visibility_access: bool,
+    /// Direct members of the parent group may join this one without a request.
+    pub parent_members_can_join: bool,
     pub name: IS,
     pub description: IS,
     pub deleted: bool,
@@ -112,6 +116,7 @@ impl Router {
                 pg.path,
                 false as "limit_membership_visibility!",
                 pg.stock_tracking as "stock_tracking!",
+                pg.parent_members_can_join as "parent_members_can_join!",
                 pg.propogate_member_visibility_access as "propagate_member_visibility_access!",
                 pg.name as "name!: DIS",
                 pg.description as "description!: DIS",
@@ -163,6 +168,7 @@ impl Router {
                 target.path as "path!: Path",
                 false as "limit_membership_visibility!",
                 target.stock_tracking as "stock_tracking!",
+                target.parent_members_can_join as "parent_members_can_join!",
                 target.propogate_member_visibility_access as "propagate_member_visibility_access!",
                 target.name as "name!: DIS",
                 target.description as "description!: DIS",
@@ -170,15 +176,31 @@ impl Router {
                 (request.member_id is not null) as "requested!",
                 logo.id as logo_id,
                 logo.url as logo_url
-            from groups_ask_to_join allowed
-            inner join group_memberships membership
-                on membership.group_id = allowed.joiner_id
-                and membership.user_id = $1
-            inner join groups target on target.id = allowed.target_id
+            from groups target
             inner join images logo on logo.id = target.logo_id
             left join group_member_requests request
                 on request.group_id = target.id and request.member_id = $1
             where target.deleted = false
+            and (
+                exists (
+                    select 1
+                    from groups_ask_to_join allowed
+                    inner join group_memberships membership
+                        on membership.group_id = allowed.joiner_id
+                        and membership.user_id = $1
+                    where allowed.target_id = target.id
+                )
+                or exists (
+                    select 1
+                    from groups parent
+                    inner join group_memberships membership
+                        on membership.group_id = parent.id
+                    where parent.path @> target.path
+                    and nlevel(parent.path) = nlevel(target.path) - 1
+                    and parent.parent_members_can_join
+                    and membership.user_id = $1
+                )
+            )
             order by target.path"#,
             user.get_id(),
         )
@@ -189,6 +211,7 @@ impl Router {
                 limit_membership_visibility: row.limit_membership_visibility,
                 stock_tracking: row.stock_tracking,
                 propagate_member_visibility_access: row.propagate_member_visibility_access,
+                parent_members_can_join: row.parent_members_can_join,
                 name: row.name.0,
                 description: row.description.0,
                 deleted: row.deleted,
@@ -202,29 +225,52 @@ impl Router {
         Ok(Json(groups))
     }
 
-    /// Requests direct membership in a group. Eligibility comes only from a
-    /// direct membership in one of its configured joiner groups.
+    /// Requests direct membership in a group, or joins it immediately when direct members of the
+    /// parent group may join (`groups.parent_members_can_join`). Otherwise eligibility comes only
+    /// from a direct membership in one of the group's configured joiner groups.
     #[oai(path = "/:group_id/member-request", method = "put")]
     async fn request_membership(
         &self,
         user: User,
         param::Path(group_id): param::Path<Uuid>,
     ) -> MinilithResult<()> {
-        let allowed = sqlx::query_scalar!(
-            r#"select exists (
-                select 1
-                from groups_ask_to_join
-                inner join group_memberships
-                    on group_memberships.group_id = groups_ask_to_join.joiner_id
-                where groups_ask_to_join.target_id = $2
-                and group_memberships.user_id = $1
-            ) as "exists!""#,
+        let eligibility = sqlx::query!(
+            r#"select
+                exists (
+                    select 1
+                    from groups_ask_to_join
+                    inner join group_memberships
+                        on group_memberships.group_id = groups_ask_to_join.joiner_id
+                    where groups_ask_to_join.target_id = $2
+                    and group_memberships.user_id = $1
+                ) as "may_request!",
+                exists (
+                    select 1
+                    from groups target
+                    inner join groups parent on parent.path = target.parent_path
+                    inner join group_memberships membership
+                        on membership.group_id = parent.id
+                    where target.id = $2
+                    and parent.parent_members_can_join
+                    and membership.user_id = $1
+                ) as "may_join!""#,
             user.get_id(),
             group_id,
         )
         .fetch_one(&self.db)
         .await?;
-        if !allowed {
+        if eligibility.may_join {
+            sqlx::query!(
+                r#"insert into group_memberships (user_id, group_id)
+                values ($1, $2) on conflict (user_id, group_id) do nothing"#,
+                user.get_id(),
+                group_id,
+            )
+            .execute(&self.db)
+            .await?;
+            return Ok(());
+        }
+        if !eligibility.may_request {
             return Err(MinilithEndpointError::bad_frontend_code(
                 "not allowed to request membership in this group",
                 "",

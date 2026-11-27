@@ -36,33 +36,8 @@ pub struct CreatePaymentRequest {
     pub customer_id: Option<String>,
     /// Redirected back when user completes transaction. Required for `SumUp`.
     pub redirect_url: Option<String>,
-}
-#[derive(Debug, Clone, Copy, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum FeeProvider {
-    Swish,
-    Sumup,
-}
-#[derive(Debug, Clone, Copy, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum FeeKind {
-    /// Charging the amount.
-    Payment,
-    /// Refunding the amount.
-    Refund,
-}
-#[derive(Debug, Clone, Serialize)]
-pub struct FeeQuoteRequest {
-    pub provider: FeeProvider,
-    /// In ören.
-    pub amount: i64,
-    pub physical: bool,
-    pub kind: FeeKind,
-}
-#[derive(Debug, Clone, Deserialize)]
-pub struct FeeQuoteResponse {
-    /// In ören.
-    pub fee: i64,
+    /// Starts the payment on this `SumUp` reader instead of a hosted checkout.
+    pub reader_id: Option<String>,
 }
 #[derive(Debug, Clone, Deserialize)]
 pub struct CreatePaymentResponseSwish {
@@ -106,10 +81,13 @@ pub struct SingleInfoResponse {
     pub id: Uuid,
     pub state: TransactionState,
     // customer_id: Option<String>,
-    pub total_fees: i64,
-    /// Sum of the transaction's wares (in ören), including any fee wares. `0` when unknown.
+    /// What the provider charged for this payment (in ören); refund fees are separate.
+    pub purchase_fees: i64,
+    /// Sum of the payment's wares (in ören): what the buyer paid.
     pub total: i64,
-    /// The provider the transaction was made with, e.g. to quote the fee for refunding it.
+    /// What refunding this transaction costs (in ören): flat on `Swish`, free on `SumUp`.
+    pub refund_fee: i64,
+    /// The provider the transaction was made with.
     /// `null` when the transaction does not exist.
     pub provider: Option<Provider>,
     // payment_reference: Option<String>,

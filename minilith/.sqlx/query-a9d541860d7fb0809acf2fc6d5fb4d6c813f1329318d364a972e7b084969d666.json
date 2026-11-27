@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "select coalesce((\n            select activity.base_ticket\n            from products product\n            inner join product_activity_assignments assignment\n                on assignment.product_id = product.id\n            inner join activities activity on activity.id = assignment.activity_id\n            where product.id = $1 and product.kind = 'ticket'\n            order by activity.id\n            limit 1\n        ), $1) as \"base!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "base!",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "a9d541860d7fb0809acf2fc6d5fb4d6c813f1329318d364a972e7b084969d666"
+}

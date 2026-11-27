@@ -13,25 +13,7 @@
   stroke: none,
 )
 
-#let format_currency(number) = {
-  let precision = 2
-  assert(precision > 0)
-  let s = str(calc.round(number / 100, digits: precision))
-  let after_dot = s.find(regex("\..*"))
-  if after_dot == none {
-    s = s + "."
-    after_dot = "."
-  }
-  for i in range(precision - after_dot.len() + 1) {
-    s = s + "0"
-  }
-
-  if sv {
-    s = s.replace(".", ",")
-  }
-
-  [#s SEK]
-}
+#import "format.typ": format_currency
 
 #if data.creator_logo_format != none [#place(right)[
   #image(
@@ -77,11 +59,9 @@
 
 == #if sv [Försäljning per objekt] else [Sales per item]
 #table(
-  columns: (auto, auto, auto, auto, auto),
-  align: (left, left, right, right, right),
+  columns: (auto, auto, auto, auto),
+  align: (left, right, right, right),
   table.header(
-    if sv [Typ] else [Kind],
-    table.vline(),
     if sv [Namn] else [Name],
     table.vline(),
     if sv [Antal] else [Number sold],
@@ -94,8 +74,6 @@
   ..data
     .per_object
     .map(obj => (
-      if obj.kind == "ticket" [#if sv [Biljett] else [Ticket]] else if obj.kind
-        == "option" [#if sv [Tillval] else [Addon]] else [#if sv [Extern] else [External]],
       [#obj.name],
       str(obj.number),
       format_currency(obj.price),
@@ -103,7 +81,7 @@
     ))
     .flatten(),
   table.hline(),
-  total, [], [], [], format_currency(data.per_object.map(obj => obj.price * obj.number).sum(default: 0)),
+  total, [], [], format_currency(data.per_object.map(obj => obj.price * obj.number).sum(default: 0)),
 )
 
 #if data.per_refund.len() > 0 [

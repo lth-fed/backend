@@ -29,8 +29,10 @@ pub struct BuyTicketRequest {
     /// Doesn't matter for free tickets.
     pub(super) provider: PurchaseProvider,
     pub(super) addons: Vec<BoughtAddon>,
-    /// Required for `SumUp`.
+    /// Required for `SumUp` unless a reader is used.
     pub(super) redirect_url: Option<String>,
+    /// Pay on this `SumUp` reader instead of a hosted checkout. Skips the reservation flow.
+    pub(super) reader_id: Option<String>,
 }
 #[derive(Debug, Clone, Object)]
 pub struct BuyTicketResponse {
@@ -129,6 +131,8 @@ pub(super) struct PurchasedTicket {
     pub(super) time_start: OffsetDateTime,
     pub(super) time_end: OffsetDateTime,
     pub(super) purchased_addons: Vec<PurchasedAddon>,
+    /// The latest use; its id is the QR payload. `None` until the first use.
+    pub(super) last_use_id: Option<Uuid>,
     /// False if we have transferred it.
     pub(super) owned_by_me: bool,
 }

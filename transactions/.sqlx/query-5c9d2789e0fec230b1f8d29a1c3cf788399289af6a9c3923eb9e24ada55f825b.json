@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "update transactions\n                set refund_reference = $2, refund_at = now(), refund_id = null\n                where id = $1 and refund_at is null",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5c9d2789e0fec230b1f8d29a1c3cf788399289af6a9c3923eb9e24ada55f825b"
+}

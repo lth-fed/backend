@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "insert into product_reservations\n                        (user_id, product_id, product_price, transaction_id, timeout)\n                        select $1, $2, base.price, null, now() + $3\n                        from products kind\n                        inner join product_base_prices base on base.product_id = kind.id\n                        where kind.id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Interval"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7942dadbeb8e46a53e257cf342fdb3ab93fdde2129fa74b2ae176dd91eec2411"
+}

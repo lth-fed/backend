@@ -1,6 +1,6 @@
 create type push_platform as enum ('ios', 'android');
 -- what a push refers to; also sent to clients in the push payload and notification API
-create type notification_kind as enum ('activity', 'news', 'ticket_release', 'transfer', 'reservation');
+create type notification_kind as enum ('activity', 'news', 'ticket_release', 'transfer', 'reservation', 'refund');
 
 create table push_devices (
     device_id text primary key,
@@ -25,6 +25,8 @@ create table news (
 create table news_tags (
     id uuid primary key,
     creator_id uuid not null references groups(id),
+    -- hide instead of deleting so existing assignments stay valid
+    hidden bool not null default false,
     title jsonb not null
 );
 create table news_assigned_tags (

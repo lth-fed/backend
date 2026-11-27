@@ -26,7 +26,9 @@ pub(crate) async fn load_ticket_kind_unchecked(
 ) -> MinilithResult<Kind> {
     let mut ticket_kind = sqlx::query!(
         "select
-            name as \"name!: DIS\", sales_price as \"price!\",
+            name as \"name!: DIS\",
+            (select base.price from product_base_prices base
+                where base.product_id = products.id) as \"price!\",
             sales_start,
             sales_stop,
             coalesce(sales_stock, 0) as \"available!\",
@@ -86,16 +88,21 @@ pub(crate) async fn load_ticket_kind_unchecked(
         &mut ctx.db.begin().await?,
         ticket_kind.activity_id(),
         Some(id),
+        false,
     )
     .await?;
 
     Ok(ticket_kind)
 }
 
+/// Loads the add-ons of one set, optionally filtered to those linked to `ticket_kind_id`.
+/// `include_base` chooses whether the automatic base-price add-on is part of the result: only
+/// bookkeeping needs it, customers pick from the rest.
 pub(crate) async fn load_addons(
     db: &mut bin_common::Transaction<'_>,
     set_id: Uuid,
     ticket_kind_id: Option<Uuid>,
+    include_base: bool,
 ) -> MinilithResult<Vec<AvailableAddon>> {
     let options: HashMap<Uuid, Vec<AddonOption>> = sqlx::query!(
         "select distinct product_addon_options.id, product_addon_id, product_addon_options.idx,
@@ -139,10 +146,13 @@ pub(crate) async fn load_addons(
         "select id, name as \"name: DIS\",
         multiple_alternatives, has_text_field, required
         from product_addons
-        where set_id = $1 and ($2::uuid is null or id in (select addon_id from product_addon_links where product_id = $2))
+        where set_id = $1
+        and ($2::uuid is null or id in (select addon_id from product_addon_links where product_id = $2))
+        and ($3 or not is_base_price)
         order by product_addons.idx",
         set_id,
-        ticket_kind_id
+        ticket_kind_id,
+        include_base
     )
     .map(|row| AvailableAddon {
         inner: Addon {
@@ -157,6 +167,26 @@ pub(crate) async fn load_addons(
     .fetch_all(&mut db.executor())
     .await?;
 
+    Ok(addons)
+}
+
+/// The add-ons a customer may choose for a product: its activity's set (if it has one) plus its own
+/// set. The base-price add-on is implicit and never offered.
+pub(crate) async fn load_purchasable_addons(
+    txn: &mut bin_common::Transaction<'_>,
+    product_id: Uuid,
+    activity_id: Option<Uuid>,
+) -> MinilithResult<Vec<AvailableAddon>> {
+    let mut addons = load_addons(
+        txn,
+        activity_id.unwrap_or(product_id),
+        Some(product_id),
+        false,
+    )
+    .await?;
+    if activity_id.is_some() {
+        addons.extend(load_addons(txn, product_id, Some(product_id), false).await?);
+    }
     Ok(addons)
 }
 
@@ -286,7 +316,13 @@ pub(super) async fn my_tickets(
             activities.location as "location!: Location",
             activities.time_start as "time_start",
             activities.time_end as "time_end",
-            (owner_id = $1) as "owned_by_me!"
+            (owner_id = $1) as "owned_by_me!",
+            case when purchases.owner_id = $1 then
+                (select used.id from purchase_uses used
+                    where used.purchase_id = purchases.id
+                    order by used.timestamp desc, used.id desc
+                    limit 1)
+            end as "last_use_id?"
         from purchases
         inner join products on products.id = purchases.product_id
         inner join product_activity_assignments assignment on assignment.product_id = products.id
@@ -315,6 +351,7 @@ pub(super) async fn my_tickets(
         time_start: ticket.time_start,
         time_end: ticket.time_end,
         purchased_addons: addons.remove(&ticket.id).unwrap_or_default(),
+        last_use_id: ticket.last_use_id,
         owned_by_me: ticket.owned_by_me,
     })
     .fetch_all(&ctx.db)
@@ -386,17 +423,53 @@ pub(super) async fn receipt(
     let lang = ctx
         .decrypt_string(user.language)
         .wrap_err_encryption("user.language")?;
-    let receipt_lang = match lang.get(..2) {
-        Some("sv") => transactions::Language::Swedish,
-        _ => transactions::Language::English,
-    };
     let name = ctx
         .decrypt_string(user.name)
         .wrap_err_encryption("user.name")?;
 
+    let pdf = receipt_pdf(ctx, transaction_id, receipt_language(&lang), &name).await?;
+    Ok(Response::new(Binary(pdf.into())).header("content-type", "application/octet-stream"))
+}
+
+/// The receipt's language: a user's language tag, Swedish for `sv` and English otherwise.
+pub(crate) fn receipt_language(language: &str) -> transactions::Language {
+    match language.get(..2) {
+        Some("sv") => transactions::Language::Swedish,
+        _ => transactions::Language::English,
+    }
+}
+
+/// The transaction the current owner paid with, i.e. the one whose receipt they can get. `None`
+/// when the owner never paid (the purchase was transferred to them).
+pub(crate) async fn owner_transaction(
+    ctx: &ContextWrapper,
+    purchase_id: Uuid,
+) -> MinilithResult<Option<Uuid>> {
+    Ok(sqlx::query_scalar!(
+        r#"select transaction_id
+        from purchase_transactions
+        where purchase_id = $1
+        and transaction_id is not null
+        and buyer_id = (select owner_id from purchases where id = $1)
+        order by completed_at desc
+        limit 1"#,
+        purchase_id,
+    )
+    .fetch_optional(&ctx.db)
+    .await?
+    .flatten())
+}
+
+/// Renders the provider's receipt PDF for one transaction.
+pub(crate) async fn receipt_pdf(
+    ctx: &ContextWrapper,
+    transaction_id: Uuid,
+    language: transactions::Language,
+    customer_name: &str,
+) -> MinilithResult<Vec<u8>> {
     let data = transactions::ReceiptRequest {
-        language: receipt_lang,
-        customer_name: name.clone(),
+        language,
+        customer_name: customer_name.to_owned(),
     };
     let resp = ctx
         .transactions_post(format!("/v0/{transaction_id}/receipt"))
@@ -409,5 +482,5 @@ pub(super) async fn receipt(
         .bytes()
         .await
         .wrap_err_internal("receipt read body")?;
-    Ok(Response::new(Binary(resp.into())).header("content-type", "application/octet-stream"))
+    Ok(resp.to_vec())
 }
